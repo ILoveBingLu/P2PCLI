@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   LoaderCircle,
@@ -8,7 +14,8 @@ import {
   Unplug,
   X,
 } from "lucide-react";
-import { toast, Toaster } from "sonner";
+import { Tabs } from "@heroui/react";
+import { toast, Toaster } from "@/components/ui/toast";
 import {
   api,
   pathLabel,
@@ -43,7 +50,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 interface Tab {
@@ -55,9 +61,8 @@ interface Tab {
   note: string | null;
 }
 
-let tabSeq = 1;
-
 export default function App() {
+  const tabSeq = useRef(1);
   const [ov, setOv] = useState<Overview | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeKey, setActiveKey] = useState<number | null>(null);
@@ -128,7 +133,7 @@ export default function App() {
   }, [activeTab?.connId, activeTab?.state]);
 
   const addTab = (connId: number, info: RemoteInfo, code: string | null) => {
-    const key = tabSeq++;
+    const key = tabSeq.current++;
     setTabs((ts) => [
       ...ts,
       { key, connId, info, code, state: "opening", note: null },
@@ -251,43 +256,59 @@ export default function App() {
 
         {tabs.length > 0 ? (
           <Tabs
-            value={String(activeKey)}
-            onValueChange={(key) => setActiveKey(Number(key))}
+            selectedKey={String(activeKey)}
+            onSelectionChange={(key) => setActiveKey(Number(key))}
             className="terminal-workspace"
           >
             <div className="terminal-toolbar">
-              <TabsList variant="terminal" aria-label="远程终端标签">
-                {tabs.map((t) => (
-                  <div
-                    className={cn(
-                      "terminal-tab",
-                      t.key === activeKey && "is-active",
-                    )}
-                    key={t.key}
-                  >
-                    <TabsTrigger variant="terminal" value={String(t.key)}>
-                      <span
-                        className="status-dot"
-                        data-kind={
-                          t.state === "open" || t.state === "opening"
-                            ? (paths[t.connId]?.kind ?? "unknown")
-                            : "off"
-                        }
-                      />
-                      <span className="truncate">{t.info.name}</span>
-                    </TabsTrigger>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={"关闭终端 " + t.info.name + " #" + t.key}
-                      title="关闭终端"
-                      onClick={() => closeTab(t.key)}
+              <Tabs.ListContainer className="terminal-list-container">
+                <Tabs.List
+                  aria-label="远程终端标签"
+                  className="terminal-tab-list"
+                >
+                  {tabs.map((t) => (
+                    <Tabs.Tab
+                      id={String(t.key)}
+                      aria-label={t.info.name}
+                      className="terminal-tab-trigger"
+                      key={t.key}
+                      render={(domProps) => (
+                        <div
+                          className={cn(
+                            "terminal-tab",
+                            t.key === activeKey && "is-active",
+                          )}
+                        >
+                          <div {...(domProps as ComponentProps<"div">)} />
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={
+                              "关闭终端 " + t.info.name + " #" + t.key
+                            }
+                            title="关闭终端"
+                            onPress={() => closeTab(t.key)}
+                          >
+                            <X />
+                          </Button>
+                        </div>
+                      )}
                     >
-                      <X />
-                    </Button>
-                  </div>
-                ))}
-              </TabsList>
+                      <span className="terminal-tab-label">
+                        <span
+                          className="status-dot"
+                          data-kind={
+                            t.state === "open" || t.state === "opening"
+                              ? (paths[t.connId]?.kind ?? "unknown")
+                              : "off"
+                          }
+                        />
+                        <span className="truncate">{t.info.name}</span>
+                      </span>
+                    </Tabs.Tab>
+                  ))}
+                </Tabs.List>
+              </Tabs.ListContainer>
               {activeTab && activeTab.state !== "closed" && (
                 <Button
                   variant="ghost"
@@ -304,10 +325,10 @@ export default function App() {
             </div>
             <div className="terminals">
               {tabs.map((t) => (
-                <TabsContent
-                  forceMount
+                <Tabs.Panel
+                  shouldForceMount
                   key={t.key}
-                  value={String(t.key)}
+                  id={String(t.key)}
                   className="terminal-panel"
                   hidden={t.key !== activeKey}
                 >
@@ -363,7 +384,7 @@ export default function App() {
                       </Card>
                     </div>
                   )}
-                </TabsContent>
+                </Tabs.Panel>
               ))}
             </div>
           </Tabs>
@@ -419,7 +440,7 @@ export default function App() {
           onRespond={respond}
         />
       )}
-      <Toaster theme="dark" position="bottom-right" closeButton richColors />
+      <Toaster />
     </div>
   );
 }

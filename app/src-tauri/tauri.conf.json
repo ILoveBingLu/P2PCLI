@@ -14,7 +14,7 @@
       {
         "label": "main",
         "title": "P2PCLI",
-        "decorations": false,
+        "decorations": true,
         "width": 1180,
         "height": 760,
         "minWidth": 860,

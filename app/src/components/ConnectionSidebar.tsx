@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/toast";
 import {
   api,
   formatCode,
@@ -68,11 +68,7 @@ interface Props {
   onRefresh: () => void;
 }
 
-export function ConnectionSidebar({
-  ov,
-  onConnected,
-  onRefresh,
-}: Props) {
+export function ConnectionSidebar({ ov, onConnected, onRefresh }: Props) {
   const [target, setTarget] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);

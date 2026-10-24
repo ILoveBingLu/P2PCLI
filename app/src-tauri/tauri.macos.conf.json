@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "P2PCLI",
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 15 },
+        "width": 1180,
+        "height": 760,
+        "minWidth": 860,
+        "minHeight": 520
+      }
+    ]
+  }
+}

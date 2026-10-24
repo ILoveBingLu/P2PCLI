@@ -1,5 +1,5 @@
 @import "tailwindcss" source(".");
-@import "tw-animate-css";
+@import "@heroui/styles";
 @source "../*.html";
 
 @custom-variant dark (&:is(.dark *));
@@ -16,6 +16,7 @@
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
+  --color-muted-surface: var(--muted-surface);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
@@ -49,9 +50,10 @@
   --primary-foreground: #fff;
   --secondary: #292930;
   --secondary-foreground: #e0dfe8;
-  --muted: #232329;
+  --muted-surface: #232329;
+  --muted: #96969f;
   --muted-foreground: #96969f;
-  --accent: #292930;
+  --accent: #7762dc;
   --accent-foreground: #f3f2f8;
   --destructive: #f0848b;
   --border: #2b2b33;
@@ -64,6 +66,26 @@
   --sidebar: #18181c;
   --terminal: #111114;
   --radius: 0.625rem;
+  --surface: var(--card);
+  --surface-foreground: var(--foreground);
+  --surface-secondary: var(--secondary);
+  --overlay: var(--card);
+  --overlay-foreground: var(--foreground);
+  --default: var(--secondary);
+  --default-foreground: var(--foreground);
+  --field-background: #232329;
+  --field-foreground: var(--foreground);
+  --field-placeholder: var(--muted-foreground);
+  --field-border: var(--input);
+  --field-border-width: 1px;
+  --field-border-focus: var(--input);
+  --field-focus: var(--field-background);
+  --field-shadow: none;
+  --segment: var(--secondary);
+  --segment-foreground: var(--foreground);
+  --separator: var(--border);
+  --danger: var(--destructive);
+  --focus: transparent;
 }
 
 @layer base {
@@ -110,7 +132,9 @@
 /* Keep focus behavior without browser outlines or Tailwind focus rings.
    Unlayered rules also cover portalled dialogs and newly added controls. */
 :focus,
-:focus-visible {
+:focus-visible,
+[data-focus-visible="true"],
+[data-focused="true"] {
   outline: none !important;
   --tw-ring-shadow: 0 0 #0000 !important;
   --tw-ring-offset-shadow: 0 0 #0000 !important;
@@ -119,7 +143,7 @@
 
 /*
   ┌───────────────┬─────────────────────────────┐
-  │ 品牌 / 工作区 / 当前设备 / 窗口控制            │
+  │ 品牌 / 工作区 / 当前设备 / 设置诊断            │
   ├───────────────┬─────────────────────────────┤
   │ 本机信息       │                           │
   │ 连接表单       ├─────────────────────────────┤
@@ -173,7 +197,15 @@
   font-weight: 650;
   letter-spacing: -0.3px;
 }
-.titlebar-brand [data-slot="badge"] {
+/* macOS 的原生红黄绿按钮由系统绘制，内容从按钮右侧开始。 */
+.titlebar-macos .titlebar-brand {
+  padding-left: 88px;
+}
+/* 插件按钮宽 46 × 3 逻辑像素；额外留 2px 容纳非整数 DPI 舍入。 */
+.titlebar-windows {
+  padding-right: 140px;
+}
+.titlebar-brand [data-slot="chip"] {
   margin-left: auto;
   font-size: 9px;
 }
@@ -207,26 +239,6 @@
   padding-right: 12px;
   flex: none;
 }
-.window-controls {
-  display: flex;
-  height: 100%;
-  flex: none;
-}
-.window-control {
-  width: 46px;
-  height: 100%;
-  padding: 0;
-  border-radius: 0;
-  color: var(--muted-foreground);
-}
-.window-control svg {
-  width: 14px;
-  height: 14px;
-}
-.window-close:hover {
-  background: #c42b37;
-  color: white;
-}
 .brand-symbol {
   width: 25px;
   height: 25px;
@@ -255,6 +267,7 @@
 }
 .device-card [data-slot="card-header"] {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -696,6 +709,8 @@
 }
 
 .terminal-workspace {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   gap: 0;
@@ -713,11 +728,43 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 1px;
-  padding-right: 7px;
+  gap: 8px;
+  padding: 0 7px 0 12px;
+  height: 42px;
+  border-radius: 0;
   max-width: 240px;
   border-right: 1px solid var(--border);
   border-top: 2px solid transparent;
+}
+.terminal-tab-list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  justify-content: flex-start;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  gap: 0;
+}
+.terminal-list-container {
+  flex: 1;
+  min-width: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.terminal-tab-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.terminal-tab-trigger {
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border-radius: 0;
 }
 .terminal-tab.is-active {
   background: var(--terminal);
@@ -774,10 +821,19 @@
   width: min(560px, calc(100vw - 32px));
   max-width: 560px;
 }
-[data-slot="dialog-content"],
-[data-slot="alert-dialog-content"] {
+[data-slot="modal-dialog"],
+[data-slot="alert-dialog-dialog"] {
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
+}
+[data-slot="modal-header"],
+[data-slot="alert-dialog-header"] {
+  gap: 8px;
+}
+[data-slot="tabs-tab"] > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
 }
 .dialog-symbol {
   width: 36px;
@@ -817,10 +873,10 @@
   align-items: center;
   gap: 12px;
   padding: 14px;
-  background: var(--muted);
+  background: var(--muted-surface);
   border-radius: var(--radius);
 }
-.request-device > [data-slot="badge"] {
+.request-device > [data-slot="chip"] {
   margin-left: auto;
 }
 .request-device strong,

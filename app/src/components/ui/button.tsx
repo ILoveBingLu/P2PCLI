@@ -1,63 +1,61 @@
-import * as React from "react";
-import { cva, type VariantProps } from "class-variance-authority";
+import {
+  Button as HeroButton,
+  type ButtonProps as HeroButtonProps,
+} from "@heroui/react";
 import { cn } from "@/lib/utils";
-import { Slot } from "radix-ui";
 
-const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all outline-none disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-  {
-    variants: {
-      variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        destructive:
-          "border border-destructive/20 bg-destructive/10 text-destructive hover:bg-destructive/20 ",
-        outline:
-          "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
-        secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost:
-          "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
-        link: "text-primary underline-offset-4 hover:underline",
-      },
-      size: {
-        default: "h-9 px-4 py-2 has-[>svg]:px-3",
-        xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5",
-        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
-        icon: "size-9",
-        "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
-        "icon-sm": "size-8",
-        "icon-lg": "size-10",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-      size: "default",
-    },
-  },
-);
+type Props = Omit<HeroButtonProps, "variant" | "size" | "className"> & {
+  variant?:
+    "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
+  size?:
+    "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "icon-sm" | "icon-lg";
+  disabled?: boolean;
+  className?: string;
+  title?: string;
+};
+const variants = {
+  default: "primary",
+  destructive: "danger-soft",
+  outline: "outline",
+  secondary: "secondary",
+  ghost: "ghost",
+  link: "ghost",
+} as const;
 
-function Button({
-  className,
+export function Button({
   variant = "default",
   size = "default",
-  asChild = false,
+  disabled,
+  className,
+  title,
   ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean;
-  }) {
-  const Comp = asChild ? Slot.Root : "button";
-
+}: Props) {
   return (
-    <Comp
-      data-slot="button"
-      data-variant={variant}
-      data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
+    <HeroButton
       {...props}
+      data-slot="button"
+      variant={variants[variant]}
+      render={(domProps) => <button {...domProps} title={title} />}
+      size={
+        size === "lg" || size === "icon-lg"
+          ? "lg"
+          : size === "default" || size === "icon"
+            ? "md"
+            : "sm"
+      }
+      isIconOnly={size.startsWith("icon")}
+      isDisabled={disabled ?? props.isDisabled}
+      className={cn(
+        "shrink-0 gap-2 rounded-md text-sm [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+        size === "default" && "h-9 px-4",
+        size === "xs" && "h-6 px-2 text-xs",
+        size === "sm" && "h-8 px-3 text-xs",
+        size === "icon-xs" && "size-6 min-w-0 p-0",
+        size === "icon-sm" && "size-8 min-w-0 p-0",
+        size === "icon" && "size-9 min-w-0 p-0",
+        variant === "link" && "text-primary underline-offset-4 hover:underline",
+        className,
+      )}
     />
   );
 }
-
-export { Button, buttonVariants };

@@ -542,7 +542,11 @@ fn init_logging(dir: &Path) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_window_controls::init());
+
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
@@ -598,6 +602,24 @@ pub fn run() {
                 terms: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
             });
+
+            // Windows 必须通过插件的 builder 创建窗口；平台配置禁用了自动创建。
+            #[cfg(target_os = "windows")]
+            {
+                use tauri_plugin_window_controls::WindowControlsBuilderExt;
+
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|window| window.label == "main")
+                    .ok_or_else(|| anyhow::anyhow!("缺少主窗口配置"))?;
+                tauri::WebviewWindowBuilder::from_config(app, config)?
+                    // 与 styles.css 的标题栏高度一致，控件由 Win32 层承载。
+                    .window_controls_height(44)
+                    .build()?;
+            }
 
             let show = MenuItem::with_id(app, "show", "显示 P2PCLI", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;

@@ -1,69 +1,48 @@
-import * as React from "react";
-import { cva, type VariantProps } from "class-variance-authority";
+import { Alert as HeroAlert } from "@heroui/react";
+import { Children, isValidElement, type ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
-const alertVariants = cva(
-  "relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
-  {
-    variants: {
-      variant: {
-        default: "bg-card text-card-foreground",
-        success:
-          "border-success/20 bg-success-soft text-success *:data-[slot=alert-description]:text-success/90",
-        warning:
-          "border-warning/20 bg-warning-soft text-warning *:data-[slot=alert-description]:text-warning/90",
-        destructive:
-          "bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  },
-);
-
-function Alert({
+export function Alert({
+  variant = "default",
+  children,
   className,
-  variant,
   ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
+}: ComponentProps<"div"> & {
+  variant?: "default" | "success" | "warning" | "destructive";
+}) {
+  const items = Children.toArray(children);
+  const indicator = items.find(
+    (child) =>
+      isValidElement(child) &&
+      child.type !== AlertTitle &&
+      child.type !== AlertDescription,
+  );
   return (
-    <div
-      data-slot="alert"
+    <HeroAlert
+      {...props}
+      status={variant === "destructive" ? "danger" : variant}
       role="alert"
-      className={cn(alertVariants({ variant }), className)}
-      {...props}
-    />
+      className={cn("w-full text-sm [&_svg]:size-4", className)}
+    >
+      {indicator && <HeroAlert.Indicator>{indicator}</HeroAlert.Indicator>}
+      <HeroAlert.Content>
+        {items.filter((child) => child !== indicator)}
+      </HeroAlert.Content>
+    </HeroAlert>
   );
 }
-
-function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-title"
-      className={cn(
-        "col-start-2 line-clamp-1 min-h-4 font-medium tracking-tight",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AlertDescription({
+export const AlertTitle = HeroAlert.Title;
+export function AlertDescription({
   className,
   ...props
-}: React.ComponentProps<"div">) {
+}: ComponentProps<typeof HeroAlert.Description>) {
   return (
-    <div
-      data-slot="alert-description"
+    <HeroAlert.Description
+      {...props}
       className={cn(
-        "col-start-2 grid justify-items-start gap-1 text-sm text-muted-foreground [&_p]:leading-relaxed",
+        "grid justify-items-start gap-2 text-xs leading-relaxed",
         className,
       )}
-      {...props}
     />
   );
 }
-
-export { Alert, AlertTitle, AlertDescription };

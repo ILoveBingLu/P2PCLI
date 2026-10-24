@@ -12,7 +12,8 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { Tabs, Checkbox, Description } from "@heroui/react";
+import { toast } from "@/components/ui/toast";
 import {
   api,
   platformLabel,
@@ -32,7 +33,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -56,7 +56,6 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function ApproveDialog({
   req,
@@ -112,7 +111,7 @@ export function ApproveDialog({
 
   return (
     <AlertDialog open>
-      <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
+      <AlertDialogContent>
         <AlertDialogHeader>
           <div className="dialog-symbol">
             <ShieldCheck />
@@ -144,20 +143,25 @@ export function ApproveDialog({
           </AlertDescription>
         </Alert>
         <FieldGroup>
-          <Field orientation="horizontal">
+          <div>
             <Checkbox
-              id="trust-device"
-              checked={trust}
-              onCheckedChange={(v) => setTrust(v === true)}
-              disabled={busy || left === 0}
-            />
-            <div className="flex flex-col gap-1">
-              <FieldLabel htmlFor="trust-device">信任这台设备</FieldLabel>
-              <FieldDescription>
+              isSelected={trust}
+              onChange={setTrust}
+              isDisabled={busy || left === 0}
+            >
+              <Checkbox.Content className="gap-3 text-sm">
+                <Checkbox.Control>
+                  <Checkbox.Indicator>
+                    <Check className="size-3" />
+                  </Checkbox.Indicator>
+                </Checkbox.Control>
+                信任这台设备
+              </Checkbox.Content>
+              <Description className="pl-7 text-xs text-muted-foreground">
                 以后连接免密码、免确认。仅建议用于自己的设备。
-              </FieldDescription>
-            </div>
-          </Field>
+              </Description>
+            </Checkbox>
+          </div>
         </FieldGroup>
         {error && (
           <Alert variant="destructive">
@@ -382,19 +386,21 @@ export function SettingsDialog({
             管理本机信息、连接服务器和受信设备。
           </DialogDescription>
         </DialogHeader>
-        <Tabs defaultValue="general">
-          <TabsList className="w-full">
-            <TabsTrigger value="general">
+        <Tabs defaultSelectedKey="general">
+          <Tabs.List aria-label="设置分类" className="w-full">
+            <Tabs.Tab id="general">
               <Globe2 />
               连接设置
-            </TabsTrigger>
-            <TabsTrigger value="trusted">
+              <Tabs.Indicator />
+            </Tabs.Tab>
+            <Tabs.Tab id="trusted">
               <ShieldCheck />
               受信设备（{ov.trusted.length}）
-            </TabsTrigger>
-          </TabsList>
+              <Tabs.Indicator />
+            </Tabs.Tab>
+          </Tabs.List>
           <div className="dialog-scroll">
-            <TabsContent value="general" className="pt-5">
+            <Tabs.Panel id="general" className="pt-5">
               {loading ? (
                 <div className="loading-state" role="status">
                   <LoaderCircle className="animate-spin" />
@@ -425,14 +431,16 @@ export function SettingsDialog({
                       id="server-address"
                       value={server}
                       placeholder={
-                        settings.effective_server ?? "公钥@IP:端口 或 wss://域名"
+                        settings.effective_server ??
+                        "公钥@IP:端口 或 wss://域名"
                       }
                       onChange={(e) => setServer(e.target.value)}
                       spellCheck={false}
                       disabled={saving}
                     />
                     <FieldDescription>
-                      公钥@IP:端口 走 UDP，wss://域名 走 WebSocket。留空使用默认配置。
+                      公钥@IP:端口 走 UDP，wss://域名 走
+                      WebSocket。留空使用默认配置。
                     </FieldDescription>
                   </Field>
                   <Field data-disabled={saving}>
@@ -460,8 +468,8 @@ export function SettingsDialog({
                   </div>
                 </FieldGroup>
               )}
-            </TabsContent>
-            <TabsContent value="trusted" className="pt-5">
+            </Tabs.Panel>
+            <Tabs.Panel id="trusted" className="pt-5">
               <p className="detail-note mb-4">
                 受信设备连接本机时无需密码和确认。移除后，再次连接需要重新授权。
               </p>
@@ -510,7 +518,7 @@ export function SettingsDialog({
                   ))}
                 </div>
               )}
-            </TabsContent>
+            </Tabs.Panel>
           </div>
         </Tabs>
         {error && (

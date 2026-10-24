@@ -1,48 +1,30 @@
-import * as React from "react";
-import { cva, type VariantProps } from "class-variance-authority";
+import { Chip } from "@heroui/react";
+import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
-import { Slot } from "radix-ui";
-
-const badgeVariants = cva(
-  "inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-[color,box-shadow] aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3",
-  {
-    variants: {
-      variant: {
-        default: "bg-primary text-primary-foreground [a&]:hover:bg-primary/90",
-        secondary:
-          "bg-secondary text-secondary-foreground [a&]:hover:bg-secondary/90",
-        destructive: "border-destructive/20 bg-destructive/10 text-destructive",
-        success: "border-success/20 bg-success-soft text-success",
-        warning: "border-warning/20 bg-warning-soft text-warning",
-        outline:
-          "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
-        ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 [a&]:hover:underline",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  },
-);
-
-function Badge({
-  className,
-  variant = "default",
-  asChild = false,
-  ...props
-}: React.ComponentProps<"span"> &
-  VariantProps<typeof badgeVariants> & { asChild?: boolean }) {
-  const Comp = asChild ? Slot.Root : "span";
-
+type Props = ComponentProps<"span"> & {
+  children: React.ReactNode;
+  variant?:
+    "default" | "secondary" | "outline" | "success" | "warning" | "destructive";
+};
+export function Badge({ variant = "default", className, ...props }: Props) {
+  const color =
+    variant === "destructive"
+      ? "danger"
+      : variant === "success" || variant === "warning"
+        ? variant
+        : "default";
   return (
-    <Comp
-      data-slot="badge"
-      data-variant={variant}
-      className={cn(badgeVariants({ variant }), className)}
+    <Chip
       {...props}
+      color={color}
+      size="sm"
+      variant={variant === "outline" ? "tertiary" : "soft"}
+      className={cn(
+        "h-auto min-h-5 gap-1 rounded-full px-2 py-0.5 text-[10px] [&_svg]:size-3",
+        variant === "outline" &&
+          "border border-border bg-transparent text-muted-foreground",
+        className,
+      )}
     />
   );
 }
-
-export { Badge, badgeVariants };
