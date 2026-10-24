@@ -23,6 +23,14 @@ const ov: Overview = {
   trusted: [{ endpoint_id: "f9bb5fbc3f", name: "工作室 Mac mini", platform: "macos", added_at: 0 }],
 };
 
+if (s === "unconfigured") {
+  ov.server = { state: "none" };
+  ov.code = null;
+  ov.recent = [];
+}
+if (s === "offline") ov.server = { state: "offline", error: "无法连接牵线服务器" };
+let termSeq = 0;
+
 const sample = [
   "\x1b[1;32mme@studio\x1b[0m \x1b[1;34m~\x1b[0m % claude\r\n",
   "\x1b[38;5;208m╭──────────────────────────────────────────────╮\x1b[0m\r\n",
@@ -42,6 +50,7 @@ mockIPC(
       case "overview":
         return ov;
       case "connect":
+        if (s === "error") return Promise.reject({ reject: "bad_password", message: "临时密码不正确，请向对方获取最新密码。" });
         return new Promise((r) =>
           setTimeout(
             () =>
@@ -57,7 +66,19 @@ mockIPC(
       case "open_terminal":
         ((window as any).__outs ??= []).push(args.output);
         setTimeout(() => args.output.onmessage(new TextEncoder().encode(sample).buffer), 100);
-        return 7;
+        return ++termSeq;
+      case "refresh_password":
+        ov.password = ov.password === "ankab7" ? "h9km2p" : "ankab7";
+        return ov.password;
+      case "forget_recent":
+        ov.recent = ov.recent.filter((device) => device.code !== args.code);
+        return null;
+      case "remove_trusted":
+        ov.trusted = ov.trusted.filter((device) => device.endpoint_id !== args.endpointId);
+        return null;
+      case "kick":
+        ov.sessions = ov.sessions.filter((session) => session.session !== args.session);
+        return true;
       case "path_info":
         return { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" };
       case "get_settings":
@@ -65,6 +86,7 @@ mockIPC(
       case "selftest_config":
         return null;
       case "diagnose":
+        if (s === "error") return Promise.reject("网络检测暂时不可用，请稍后重试。");
         return new Promise((r) =>
           setTimeout(
             () =>

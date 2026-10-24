@@ -19,7 +19,7 @@
 - macOS：打开时提示无法验证开发者，到 系统设置 → 隐私与安全性，点 仍要打开
 - Windows：提示 Windows 已保护你的电脑，点 更多信息 → 仍要运行
 
-还需要一个牵线服务器（自建或部署到 Cloudflare，见下文），在软件左下角 设置 里填写，或打包时编进默认值。
+还需要一个牵线服务器（自建或部署到 Cloudflare，见下文），在软件标题栏的设置里填写，或打包时编进默认值。
 
 ## 怎么用
 
@@ -111,6 +111,10 @@ pnpm run build --bundles nsis       # Windows 正式包
 
 界面预览：在根目录执行 `pnpm run dev:web`，然后打开 `http://localhost:1420/preview.html?s=empty`（s 还可以是 request、busy、relay），用假数据渲染界面。仅构建前端可执行 `pnpm run build:web`。
 
+界面使用 shadcn/ui（Radix）、Tailwind CSS 和 Lucide 图标，采用深色桌面工作区布局。基础组件位于 `app/src/components/ui`，主题与布局样式位于 `app/src/styles.css`，`components.json` 配置组件生成路径。
+
+`pnpm run check` 只做 TypeScript 类型检查，不生成构建产物。预览页额外支持 `s=unconfigured`（未配置服务器）、`s=offline`（离线）、`s=error`（连接与诊断失败），用于检查异常状态。
+
 新增、移除应用依赖同样直接在根目录执行：
 
 ```sh
@@ -120,6 +124,8 @@ pnpm remove <包名>    # 移除依赖
 ```
 
 根目录的 `package.json` 保存应用脚本和依赖，`pnpm-lock.yaml` 锁定依赖版本；界面和 Tauri 源码仍放在 `app` 目录。
+
+桌面端使用自定义标题栏，整合品牌、当前设备、终端数量和窗口控制。拖动标题栏空白或文字区域可移动窗口，双击可最大化 / 还原；关闭按钮隐藏到托盘，退出应用仍使用托盘菜单。修改窗口配置或权限后需要重新启动开发进程；纯浏览器预览中窗口控制按钮禁用。
 
 环境变量：
 

@@ -11,10 +11,10 @@ import type { TermStatus } from "./api";
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
 const theme = {
-  background: "#0f1115",
+  background: "#111114",
   foreground: "#e6e8ee",
   cursor: "#e6e8ee",
-  selectionBackground: "#3b4252aa",
+  selectionBackground: "#8b7cf84d",
   black: "#1b1f2a",
   red: "#f87171",
   green: "#34d399",
