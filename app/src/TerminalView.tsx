@@ -79,6 +79,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
 
     let termId: number | null = null;
     let disposed = false;
+    let resizeTimer: number | undefined;
     const send = (data: string, binary = false) => {
       if (termId != null) invoke("term_input", { termId, data, binary });
     };
@@ -128,7 +129,11 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
       term.onData((d) => send(d)),
       term.onBinary((d) => send(d, true)),
       term.onResize(({ cols, rows }) => {
-        if (termId != null) invoke("term_resize", { termId, cols, rows });
+        // 拖窗口、收展侧边栏时尺寸连着变，停下来再告诉对面，免得远程程序跟着每帧重画
+        window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => {
+          if (termId != null) invoke("term_resize", { termId, cols, rows });
+        }, 120);
       }),
     ];
     const ro = new ResizeObserver(() => {
@@ -138,6 +143,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
 
     return () => {
       disposed = true;
+      window.clearTimeout(resizeTimer);
       ro.disconnect();
       subs.forEach((s) => s.dispose());
       if (termId != null) invoke("term_close", { termId });

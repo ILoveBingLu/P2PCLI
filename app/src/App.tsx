@@ -31,6 +31,7 @@ import { selftestSawOverview } from "./selftest";
 import { ConnectionPopover } from "./components/ConnectionPopover";
 import { ConnectionSidebar } from "./components/ConnectionSidebar";
 import { useConnection } from "./components/useConnection";
+import { useSidebar } from "./components/useSidebar";
 import {
   ApproveDialog,
   DiagDialog,
@@ -169,6 +170,7 @@ export default function App() {
   };
 
   const connection = useConnection({ onConnected, onOpenChange: setShowConnect });
+  const sidebar = useSidebar();
 
   const closeTab = (key: number) => {
     const tab = tabs.find((t) => t.key === key);
@@ -216,6 +218,8 @@ export default function App() {
         onDiag={() => setShowDiag(true)}
         onSettings={() => setShowSettings(true)}
         settingsEnabled={!!ov}
+        sidebarOpen={sidebar.open}
+        onToggleSidebar={sidebar.toggle}
         connectionAction={
           <ConnectionPopover
             connection={connection}
@@ -227,6 +231,7 @@ export default function App() {
       <ConnectionSidebar
         ov={ov}
         busy={connection.busy}
+        open={sidebar.open}
         onConnect={(code) => void connection.doConnect(code, connection.password)}
         onRefresh={refresh}
       />
