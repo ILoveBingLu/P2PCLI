@@ -129,6 +129,11 @@ pnpm remove <包名>    # 移除依赖
 
 桌面端使用自定义标题栏，整合品牌、当前设备、终端数量和窗口控制。拖动标题栏空白或文字区域可移动窗口，双击可最大化 / 还原；关闭按钮隐藏到托盘，退出应用仍使用托盘菜单。修改窗口配置或权限后需要重新启动开发进程；纯浏览器预览中窗口控制按钮禁用。
 
+图标：
+
+- macOS：源文件是 `app/src-tauri/icons/AppIcon.icon`（Icon Composer 的分层液态玻璃图标，可以直接用 Icon Composer 打开改）。改完在 `app/src-tauri/icons` 里运行 `./build-macos-icons.sh`，生成 `Assets.car`（macOS 26 起用，跟着浅色、深色、着色、透明外观变）和 `icon.icns`（老系统和开发模式的 Dock 图标），两份都提交，打包时不需要 Xcode。脚本需要 Xcode 26 以上。
+- Windows 和界面里的 PNG：源文件是 `app/icon-source.svg`，用 `pnpm exec tauri icon app/icon-source.svg -o app/src-tauri/icons` 生成，生成后把 `icon.icns` 换回上面脚本生成的那份。
+
 环境变量：
 
 | 变量 | 作用 |
