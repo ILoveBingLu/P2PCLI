@@ -3,6 +3,7 @@ import {
   type ButtonProps as HeroButtonProps,
 } from "@heroui/react";
 import { cn } from "@/lib/utils";
+import { Tooltip } from "./tooltip";
 
 type Props = Omit<HeroButtonProps, "variant" | "size" | "className"> & {
   variant?:
@@ -30,12 +31,12 @@ export function Button({
   title,
   ...props
 }: Props) {
-  return (
+  const isDisabled = disabled ?? props.isDisabled;
+  const button = (
     <HeroButton
       {...props}
       data-slot="button"
       variant={variants[variant]}
-      render={(domProps) => <button {...domProps} title={title} />}
       size={
         size === "lg" || size === "icon-lg"
           ? "lg"
@@ -44,7 +45,7 @@ export function Button({
             : "sm"
       }
       isIconOnly={size.startsWith("icon")}
-      isDisabled={disabled ?? props.isDisabled}
+      isDisabled={isDisabled}
       className={cn(
         "shrink-0",
         variant === "link" && "underline-offset-4 hover:underline",
@@ -52,4 +53,8 @@ export function Button({
       )}
     />
   );
+
+  if (!title) return button;
+
+  return <Tooltip content={title}>{button}</Tooltip>;
 }

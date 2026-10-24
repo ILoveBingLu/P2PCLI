@@ -10,7 +10,6 @@ import {
   LoaderCircle,
   Plus,
   Radio,
-  ShieldCheck,
   Unplug,
   X,
 } from "lucide-react";
@@ -18,7 +17,6 @@ import { Tabs } from "@heroui/react";
 import { toast, Toaster } from "@/components/ui/toast";
 import {
   api,
-  pathLabel,
   platformLabel,
   type HostEvent,
   type IncomingRequest,
@@ -29,10 +27,9 @@ import {
 } from "./api";
 import { TerminalView } from "./TerminalView";
 import { selftestSawOverview } from "./selftest";
-import {
-  ConnectionSidebar,
-  ServerStatus,
-} from "./components/ConnectionSidebar";
+import { ConnectionPopover } from "./components/ConnectionPopover";
+import { ConnectionSidebar } from "./components/ConnectionSidebar";
+import { useConnection } from "./components/useConnection";
 import {
   ApproveDialog,
   DiagDialog,
@@ -41,7 +38,6 @@ import {
 import { Welcome } from "./components/Welcome";
 import { Titlebar } from "./components/Titlebar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -70,6 +66,7 @@ export default function App() {
   const [requests, setRequests] = useState<IncomingRequest[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
+  const [showConnect, setShowConnect] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -118,7 +115,6 @@ export default function App() {
   }, [refresh]);
 
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
-  const activePath = activeTab ? paths[activeTab.connId] : undefined;
   useEffect(() => {
     if (!activeTab || activeTab.state === "closed") return;
     const connId = activeTab.connId;
@@ -152,6 +148,8 @@ export default function App() {
     refresh();
     toast.success("已连接 " + info.name);
   };
+
+  const connection = useConnection({ onConnected, onOpenChange: setShowConnect });
 
   const closeTab = (key: number) => {
     const tab = tabs.find((t) => t.key === key);
@@ -193,15 +191,24 @@ export default function App() {
   return (
     <div className="app-shell">
       <Titlebar
-        deviceName={activeTab?.info.name}
+        ov={ov}
+        onRefresh={refresh}
         terminalCount={tabs.length}
         onDiag={() => setShowDiag(true)}
         onSettings={() => setShowSettings(true)}
         settingsEnabled={!!ov}
+        connectionAction={
+          <ConnectionPopover
+            connection={connection}
+            open={showConnect}
+            onOpenChange={setShowConnect}
+          />
+        }
       />
       <ConnectionSidebar
         ov={ov}
-        onConnected={onConnected}
+        busy={connection.busy}
+        onConnect={(code) => void connection.doConnect(code, connection.password)}
         onRefresh={refresh}
       />
       <main className="workspace">
@@ -389,41 +396,13 @@ export default function App() {
             </div>
           </Tabs>
         ) : (
-          <Welcome ov={ov} onSettings={() => setShowSettings(true)} />
+          <Welcome
+            ov={ov}
+            onSettings={() => setShowSettings(true)}
+            onConnect={() => setShowConnect(true)}
+          />
         )}
 
-        <footer className="workspace-statusbar">
-          <div className="flex min-w-0 items-center gap-4">
-            <ServerStatus ov={ov} />
-            <span className="statusbar-device truncate">
-              {activeTab
-                ? activeTab.info.user + "@" + activeTab.info.name
-                : "等待远程连接"}
-            </span>
-          </div>
-          {activeTab ? (
-            <Badge
-              variant={
-                activeTab.state === "closed"
-                  ? "destructive"
-                  : activePath?.kind === "relay"
-                    ? "warning"
-                    : activePath?.kind === "ipv6" || activePath?.kind === "ipv4"
-                      ? "success"
-                      : "secondary"
-              }
-              title={activePath?.remote ?? undefined}
-            >
-              {activeTab.state === "closed" ? <Unplug /> : <Radio />}
-              {activeTab.state === "closed" ? "已断开" : pathLabel(activePath)}
-            </Badge>
-          ) : (
-            <span className="statusbar-security">
-              <ShieldCheck />
-              端到端加密
-            </span>
-          )}
-        </footer>
       </main>
       {showSettings && ov && (
         <SettingsDialog

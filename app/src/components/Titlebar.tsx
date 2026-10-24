@@ -1,22 +1,25 @@
 import { isTauri } from "@tauri-apps/api/core";
-import {
-  ChevronRight,
-  CircleHelp,
-  Settings2,
-} from "lucide-react";
+import type { ReactNode } from "react";
+import { Settings, Wifi } from "lucide-react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { Overview } from "../api";
+import { LocalDevicePopover } from "./LocalDevicePopover";
 
 export function Titlebar({
-  deviceName,
+  ov,
+  onRefresh,
   terminalCount,
+  connectionAction,
   onDiag,
   onSettings,
   settingsEnabled,
 }: {
-  deviceName?: string;
+  ov: Overview | null;
+  onRefresh: () => void;
   terminalCount: number;
+  connectionAction: ReactNode;
   onDiag: () => void;
   onSettings: () => void;
   settingsEnabled: boolean;
@@ -31,16 +34,16 @@ export function Titlebar({
     >
       <div className="titlebar-brand titlebar-drag" data-tauri-drag-region>
         <img className="brand-symbol" src={appIcon} alt="" draggable={false} />
-        <strong>P2PCLI</strong>
-        <Badge variant="outline">Beta</Badge>
+        <div className="flex items-center gap-1.5">
+          <strong>P2PCLI</strong>
+          <Badge variant="secondary">Beta</Badge>
+        </div>
       </div>
-      <div className="titlebar-context titlebar-drag" data-tauri-drag-region>
-        <h1>终端工作区</h1>
-        <ChevronRight aria-hidden="true" />
-        <span>{deviceName ?? "开始连接"}</span>
-      </div>
+      <div className="titlebar-spacer titlebar-drag" data-tauri-drag-region />
       <div className="titlebar-actions">
         <Badge variant="outline">{terminalCount} 个终端</Badge>
+        {connectionAction}
+        <LocalDevicePopover ov={ov} onRefresh={onRefresh} />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -48,7 +51,7 @@ export function Titlebar({
           title="查看网络诊断"
           onClick={onDiag}
         >
-          <CircleHelp />
+          <Wifi />
         </Button>
         <Button
           variant="ghost"
@@ -58,7 +61,7 @@ export function Titlebar({
           disabled={!settingsEnabled}
           onClick={onSettings}
         >
-          <Settings2 />
+          <Settings />
         </Button>
       </div>
     </header>

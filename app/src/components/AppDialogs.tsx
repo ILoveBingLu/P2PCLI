@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -133,7 +134,11 @@ export function ApproveDialog({
         </div>
         <div className="fingerprint">
           <span>设备指纹</span>
-          <code title={req.remote}>{req.remote.slice(0, 16)}</code>
+          <Tooltip content={req.remote}>
+            <TooltipTrigger role="group" aria-label="完整设备指纹" className="ml-auto">
+              <code>{req.remote.slice(0, 16)}</code>
+            </TooltipTrigger>
+          </Tooltip>
         </div>
         <Alert variant="warning">
           <ShieldAlert />
