@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -170,10 +170,10 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(me: DeviceInfo, data_dir: &Path, local_key: &str, delegate: Arc<dyn HostDelegate>) -> Self {
+    pub fn new(me: DeviceInfo, data_dir: &Path, local_key: &str, session_program: Option<PathBuf>, delegate: Arc<dyn HostDelegate>) -> Self {
         Self {
             me: RwLock::new(me),
-            terminals: SessionManager::new(local_key),
+            terminals: SessionManager::new(local_key, session_program),
             password: RwLock::new(generate_password()),
             trust: TrustStore::open(data_dir),
             limiter: Mutex::new(Limiter::default()),

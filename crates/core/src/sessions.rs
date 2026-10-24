@@ -1,7 +1,7 @@
 //! Persistent terminals live in tmux (macOS/Linux) or psmux (native Windows).
 //! The authenticated remote key is part of every name; clients only supply a random suffix.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
@@ -13,12 +13,13 @@ use crate::proto::TerminalSession;
 
 pub struct SessionManager {
     namespace: String,
+    program: Option<PathBuf>,
     gate: tokio::sync::Mutex<()>,
 }
 
 impl SessionManager {
-    pub fn new(local_key: &str) -> Self {
-        Self { namespace: format!("p2pcli-{local_key}"), gate: tokio::sync::Mutex::new(()) }
+    pub fn new(local_key: &str, program: Option<PathBuf>) -> Self {
+        Self { namespace: format!("p2pcli-{local_key}"), program, gate: tokio::sync::Mutex::new(()) }
     }
 
     fn name(owner: &str, id: &str) -> Result<String> {
@@ -30,7 +31,7 @@ impl SessionManager {
     }
 
     async fn command(&self, args: &[&str]) -> Result<Output> {
-        let mut cmd = Command::new(executable()?);
+        let mut cmd = Command::new(executable(self.program.as_deref())?);
         cmd.args(["-L", &self.namespace]).args(args).kill_on_drop(true);
         cmd.env_remove("TMUX").env_remove("PSMUX").env_remove("PSMUX_SESSION_NAME");
         cmd.env("TERM", "xterm-256color").env("COLORTERM", "truecolor").env("TERM_PROGRAM", "P2PCLI");
@@ -89,7 +90,7 @@ impl SessionManager {
             // Per-session options only: never change the user's unrelated tmux sessions.
             self.checked(&["set-option", "-t", &name, "destroy-unattached", "off"]).await?;
         }
-        let mut cmd = CommandBuilder::new(executable()?);
+        let mut cmd = CommandBuilder::new(executable(self.program.as_deref())?);
         cmd.args(["-L", &self.namespace, "attach-session", "-t", &name]);
         cmd.env_remove("TMUX");
         cmd.env_remove("PSMUX");
@@ -108,7 +109,16 @@ impl SessionManager {
     }
 }
 
-pub fn executable() -> Result<PathBuf> {
+fn executable(bundled: Option<&Path>) -> Result<PathBuf> {
+    // Desktop builds always supply an absolute sidecar path. Never silently
+    // switch to an unrelated executable on PATH if the installation is damaged.
+    if let Some(path) = bundled {
+        if !path.is_absolute() || !path.is_file() {
+            bail!("内置会话组件缺失，请重新安装 P2PCLI；开发环境请运行 pnpm run prepare:session-tools：{}", path.display());
+        }
+        return Ok(path.to_path_buf());
+    }
+    // Standalone core/CLI users may still explicitly rely on their own tools.
     let name = if cfg!(windows) { "psmux.exe" } else { "tmux" };
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     if let Some(home) = std::env::home_dir() { dirs.push(home.join(".cargo/bin")); }
@@ -116,7 +126,6 @@ pub fn executable() -> Result<PathBuf> {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         let local = PathBuf::from(local);
         dirs.push(local.join("Microsoft/WinGet/Links"));
-        dirs.push(local.join("P2PCLI/tools/psmux-3.4.0"));
     }
     #[cfg(not(windows))]
     dirs.extend([PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")]);
@@ -131,6 +140,14 @@ pub fn executable() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_uses_only_the_explicit_sidecar_path() {
+        let existing = std::env::current_exe().unwrap();
+        assert_eq!(executable(Some(&existing)).unwrap(), existing);
+        let missing = existing.with_file_name(format!("missing-mux-{:032x}", rand::random::<u128>()));
+        assert!(executable(Some(&missing)).is_err());
+        assert!(executable(Some(Path::new("psmux.exe"))).is_err());
+    }
     #[test]
     fn session_targets_are_bound_to_authenticated_owner() {
         let a = "a".repeat(64);

@@ -5,11 +5,12 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "node scripts/dev-desktop.mjs",
     "build": "tauri build",
     "dev:web": "vite app",
     "check": "tsc --project app/tsconfig.json --noEmit",
-    "build:web": "tsc --project app/tsconfig.json --noEmit && vite build app"
+    "build:web": "tsc --project app/tsconfig.json --noEmit && vite build app",
+    "prepare:session-tools": "node scripts/prepare-session-tools.mjs"
   },
   "dependencies": {
     "@heroui/react": "^3.2.6",

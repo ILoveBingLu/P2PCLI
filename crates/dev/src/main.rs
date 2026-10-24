@@ -137,6 +137,7 @@ async fn main() -> Result<()> {
             relays: cli.relay.clone(),
             offline: false,
             proxy: None,
+            session_program: None,
         },
         Arc::new(CliDelegate { approve }),
     )

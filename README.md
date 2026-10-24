@@ -177,12 +177,35 @@ MIT，见 [LICENSE](LICENSE)。
 
 桌面端终端由被连设备上的独立后台进程托管：macOS/Linux 使用 tmux，Windows 使用原生 ConPTY 的 [psmux](https://github.com/psmux/psmux)，不需要 WSL。
 
-- macOS 被连设备先安装 `brew install tmux`。支持 Homebrew 的 Intel 和 Apple Silicon 默认路径。
-- Windows 被连设备先安装 `winget install psmux`，或将官方便携版 `psmux.exe` 加入 PATH；也支持 `%LOCALAPPDATA%\P2PCLI\tools\psmux-3.4.0\psmux.exe`。当前按 psmux 3.4.0 接口验证。
+- Windows 与 macOS 发行版内置会话管理器，用户无需安装 tmux、psmux、Homebrew 或 WSL，首次启动也不联网下载组件。
+- 按打包目标系统和 CPU 架构选择组件：Windows 只带对应架构的 psmux 3.4.0；Mac 只带对应架构的 tmux 3.7c。不会把另一系统的二进制放进安装包。Apple Silicon 和 Intel 分包；仅显式选择 universal 时合并两种 Mac 架构。
+- 桌面端通过应用目录中的绝对路径调用组件，不依赖用户 PATH。若安装内容损坏则提示重新安装，不会悄悄调用系统中其他版本。独立 core/CLI 仍可使用自行安装的工具。
 - 连接设备后显示后台会话列表，可新建、恢复或明确结束会话；终端工具栏的会话按钮可再次打开列表。
 - 断线、关闭标签和退出 P2PCLI 只断开附着客户端。再次连接同一设备，可恢复原进程、工作目录、变量和终端画面。
 - 点击“结束会话”并确认，或者在 shell 内执行 `exit`，才会结束该会话。系统重启、注销或后台 tmux/psmux 服务被结束仍会使进程退出。
 - 会话按双方设备公钥隔离；重连仍需要正常认证。不要删除设备密钥，否则新身份不能恢复旧身份的会话。
 - 协议已升级到 v2，连接双方需要一起更新。开发用一次性 CLI 命令使用临时终端并保留真实退出码，不创建后台会话。
 
-预览页 `preview.html?s=sessions` 提供后台会话模拟数据。真实会话恢复回归用例为 `persistent_session_survives_disconnect_and_host_restart`，需要已安装 tmux/psmux，默认忽略，开发者可显式运行；测试会起独立的测试命名空间。
+预览页 `preview.html?s=sessions` 提供后台会话模拟数据。真实会话恢复回归用例为 `persistent_session_survives_disconnect_and_host_restart`，默认忽略，开发者可用 `P2PCLI_TEST_SESSION_PROGRAM` 指定准备好的组件绝对路径后显式运行，无需全局安装；测试会起独立的测试命名空间。
+
+
+### 内置会话组件的打包准备
+
+`pnpm run dev` 会先完成组件准备再启动 Tauri（避免与 Cargo 并发）；`pnpm run build` 的 Tauri 前置步骤会自动准备当前目标的会话组件。日常命令保持不变；`pnpm run dev:web` 只预览前端，不准备原生工具。
+
+- Windows：下载固定版本的官方便携包，校验 SHA-256 和 PE 架构，仅提取 `psmux.exe` 与许可。支持 x64、ARM64、x86 目标。
+- macOS：在 Mac 打包机上用 Xcode Command Line Tools 的 clang/make/yacc，从锁定源码生成目标架构的 tmux；libevent 和 utf8proc 静态链接，只保留 macOS 自带动态库，部署目标为 macOS 11。现成官方 tmux 二进制要求 macOS 15，故不直接采用。无需 Homebrew。首次准备耗时，之后复用源码和成品缓存。
+- 下载版本、地址及 SHA-256 在 `scripts/session-tools.json`；准备脚本会校验架构、Mac 最低系统版本和动态库路径。失败会中止打包，避免发布缺少组件的安装包。
+- Tauri `externalBin` 在开发时复制组件到可执行文件旁，发行时只复制指定目标的 sidecar，并参与 Mac 应用签名。许可文件随对应平台资源打包。正式发布仍按 Tauri 的正常签名、公证流程进行。
+- 下载及编译缓存位于 `.cache/session-tools`，生成组件位于 `app/src-tauri/binaries`，许可位于 `app/src-tauri/resources/session-tools`；均不提交 Git，也不会将整个缓存打进应用。
+
+可单独准备或查看目标，不构建应用：
+
+```sh
+pnpm run prepare:session-tools
+pnpm run prepare:session-tools --target aarch64-pc-windows-msvc
+pnpm run prepare:session-tools --target aarch64-apple-darwin --print-plan
+node --test scripts/prepare-session-tools.test.mjs
+```
+
+默认使用 Tauri 传入的 `TAURI_ENV_TARGET_TRIPLE`（因此 `pnpm run build --target ...` 自动适配），手动准备时可指定 `--target`，否则使用 Rust 主机目标。Mac 的 `universal-apple-darwin` 只应在需要通用包时显式选择。直接使用 Cargo 或绕过根目录脚本执行 `tauri dev` 的开发者需要先运行准备命令；`build.rs` 本身不联网。`--download-only` 仅缓存所选平台的官方源码/归档，不编译、不生成安装包。

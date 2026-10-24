@@ -14,5 +14,13 @@
         "minHeight": 520
       }
     ]
+  },
+  "bundle": {
+    "externalBin": [
+      "binaries/psmux"
+    ],
+    "resources": {
+      "resources/session-tools/windows/": "session-tools/"
+    }
   }
 }

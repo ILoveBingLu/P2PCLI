@@ -26,6 +26,18 @@ use tracing::{info, warn};
 /// 每批推给界面的终端输出上限，太碎会拖慢界面
 const OUTPUT_BATCH: usize = 64 * 1024;
 
+/// Tauri externalBin is next to the app executable in both development and
+/// installed builds (Contents/MacOS on macOS). It is selected at package time.
+fn bundled_session_program() -> std::io::Result<Option<PathBuf>> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let name = if cfg!(windows) { "psmux.exe" } else { "tmux" };
+        Ok(Some(std::env::current_exe()?.with_file_name(name)))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    { Ok(None) }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Settings {
     #[serde(default)]
@@ -518,6 +530,7 @@ async fn save_settings(
     }
     let cfg = NodeConfig {
         data_dir: state.data_dir.clone(),
+        session_program: bundled_session_program().map_err(|e| e.to_string())?,
         device_name: s.device_name.clone(),
         server: effective_server(&s),
         proxy: s.proxy.clone(),
@@ -614,6 +627,7 @@ pub fn run() {
             });
             let cfg = NodeConfig {
                 data_dir: data_dir.clone(),
+                session_program: bundled_session_program()?,
                 device_name: settings.device_name.clone(),
                 server: effective_server(&settings),
                 proxy: settings.proxy.clone(),

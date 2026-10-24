@@ -29,6 +29,8 @@ const PUNCH_MIN_GAP: Duration = Duration::from_secs(2);
 pub struct NodeConfig {
     pub data_dir: PathBuf,
     pub device_name: Option<String>,
+    /// Absolute bundled tmux/psmux path supplied by the desktop application.
+    pub session_program: Option<PathBuf>,
     /// 牵线服务器，见 [`parse_rdv_server`]
     pub server: Option<String>,
     /// HTTP proxy for WebSocket rendezvous and HTTP(S) relay traffic.
@@ -120,7 +122,7 @@ impl Node {
             None => builder.bind().await.context("启动网络失败")?,
         };
         let me = DeviceInfo::local(cfg.device_name.clone());
-        let host = shared_host.unwrap_or_else(|| Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), delegate)));
+        let host = shared_host.unwrap_or_else(|| Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate)));
 
         if start_accept {
         let ep = endpoint.clone();

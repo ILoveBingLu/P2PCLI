@@ -1,0 +1,43 @@
+{
+  "windows": {
+    "version": "3.4.0",
+    "archives": {
+      "x86_64": {
+        "url": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x64.zip",
+        "sha256": "a66b6be7c13c6fa0dc3660a267b9e34eaa91a4eb7f07fbd55a0468018bd0f721"
+      },
+      "aarch64": {
+        "url": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-arm64.zip",
+        "sha256": "b123398e3b37408032bc268b4da6e7a6eab5b56461e0c3414914513a57a7a5cf"
+      },
+      "i686": {
+        "url": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x86.zip",
+        "sha256": "b1d5f037befaa4dca94280bf0559531d9bbbc2d03e66cbb4f47961f82a8fc0c1"
+      }
+    }
+  },
+  "macos": {
+    "version": "3.7c",
+    "minimumSystemVersion": "11.0",
+    "sources": {
+      "tmux": {
+        "url": "https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz",
+        "sha256": "7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf",
+        "directory": "tmux-3.7c",
+        "license": "COPYING"
+      },
+      "libevent": {
+        "url": "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz",
+        "sha256": "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb",
+        "directory": "libevent-2.1.12-stable",
+        "license": "LICENSE"
+      },
+      "utf8proc": {
+        "url": "https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v2.10.0.tar.gz",
+        "sha256": "6f4f1b639daa6dca9f80bc5db1233e9cbaa31a67790887106160b33ef743f136",
+        "directory": "utf8proc-2.10.0",
+        "license": "LICENSE.md"
+      }
+    }
+  }
+}

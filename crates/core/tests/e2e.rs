@@ -309,7 +309,11 @@ async fn read_until(input: &mut p2pcli_core::client::TermInput, output: &mut p2p
 async fn persistent_session_survives_disconnect_and_host_restart() {
     let delegate = TestDelegate::new();
     delegate.set(Decision::Allow { trust: false });
-    let cfg = NodeConfig { data_dir: temp_dir("persistent-host"), offline: true, ..Default::default() };
+    let cfg = NodeConfig {
+        data_dir: temp_dir("persistent-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    };
     let host = Node::start(cfg.clone(), delegate.clone()).await.unwrap();
     host.host.set_password("abc234");
     let guest = Node::start(NodeConfig { data_dir: temp_dir("persistent-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
