@@ -1,8 +1,9 @@
 import { History, Monitor, Trash2 } from "lucide-react";
-import { api, formatCode, platformLabel, type Overview } from "../api";
+import { api, formatCode, type Overview } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
+import { PlatformIcon } from "./PlatformIcon";
 
 export function ConnectionSidebar({ ov, busy, onConnect, onRefresh }: {
   ov: Overview | null;
@@ -35,7 +36,8 @@ export function ConnectionSidebar({ ov, busy, onConnect, onRefresh }: {
                   <span className="recent-copy">
                     <span className="truncate">{r.name}</span>
                     <span className="recent-meta">
-                      {platformLabel(r.platform)} · {formatCode(r.code)}
+                      <PlatformIcon platform={r.platform} />
+                      <span>{formatCode(r.code)}</span>
                     </span>
                   </span>
                 </Button>
