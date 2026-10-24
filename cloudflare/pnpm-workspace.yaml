@@ -1,3 +1,7 @@
 allowBuilds:
   esbuild: true
   workerd: true
+# 老版本 pnpm（10.x）认这个
+onlyBuiltDependencies:
+  - esbuild
+  - workerd

@@ -19,7 +19,7 @@
 - macOS：打开时提示无法验证开发者，到 系统设置 → 隐私与安全性，点 仍要打开
 - Windows：提示 Windows 已保护你的电脑，点 更多信息 → 仍要运行
 
-还需要一个牵线服务器（自建或部署到 Cloudflare，见下文），在软件标题栏的设置里填写，或打包时编进默认值。
+软件默认用 `wss://p2pcli.yscopy.cn` 牵线，装好就能用。想用自己部署的牵线服务器（自建或 Cloudflare，见下文），在软件标题栏的设置里换掉。
 
 ## 怎么用
 
@@ -72,18 +72,14 @@ p2pcli-server --data-dir /var/lib/p2pcli --port 7788 --ws-port 7789 --public-ip 
 
 ### Cloudflare Workers
 
-`cloudflare/` 目录是同一套协议的 Workers 版，在线设备用 Durable Objects 管，设备码存在它自带的 SQLite 里，30 多人的用量在免费额度内。
+`cloudflare/` 文件夹是同一套协议的 Workers 版，单独一个文件夹，一条命令就能部署：
 
 ```sh
 cd cloudflare
-pnpm install
-pnpm run dev       # 本机试跑，客户端填 ws://127.0.0.1:8787
-# 部署：先把 wrangler.jsonc 里 routes 的域名换成自己托管在 Cloudflare 的域名并取消注释
-pnpm exec wrangler login
-pnpm run deploy    # 客户端填 wss://你的域名
+./deploy.sh 你的域名        # Windows 用 .\deploy.ps1 你的域名
 ```
 
-`workers.dev` 域名在国内被污染，必须绑自己的域名。国内到 Cloudflare 一般绕海外节点，牵线只传几条小消息，影响不大。
+需要一个托管在 Cloudflare 的域名，部署后客户端填 `wss://你的域名`。详细说明、本机试跑和费用见 [cloudflare/README.md](cloudflare/README.md)。
 
 ## 中继
 
@@ -135,14 +131,14 @@ pnpm remove <包名>    # 移除依赖
 
 | 变量 | 作用 |
 | --- | --- |
-| `P2PCLI_SERVER` | 牵线服务器，`公钥@IP:端口` 或 `wss://域名` |
+| `P2PCLI_SERVER` | 牵线服务器，`公钥@IP:端口` 或 `wss://域名`，默认 `wss://p2pcli.yscopy.cn` |
 | `P2PCLI_RELAY` | 自建中继地址，逗号分隔 |
 | `P2PCLI_DATA_DIR` | 数据目录，一台机器开两份测试时用 |
 | `RUST_LOG` | 日志级别，日志在数据目录的 `p2pcli.log` |
 | `P2PCLI_SELFTEST` | 仅调试版：自测脚本，见 `app/src/selftest.ts` |
 | `P2PCLI_IPV6_ULA` | 测试用：把局域网 fd 开头的 IPv6 也当公网地址 |
 
-打包时设置 `P2PCLI_DEFAULT_SERVER`、`P2PCLI_DEFAULT_RELAY`，可以把默认服务器编进安装包，装好就能用。
+打包时设置 `P2PCLI_DEFAULT_SERVER`、`P2PCLI_DEFAULT_RELAY`，可以把别的默认服务器编进安装包。
 
 跨机测试命令行：
 

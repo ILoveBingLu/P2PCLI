@@ -77,6 +77,7 @@ async fn pair_approve_and_run_terminal() {
         NodeConfig {
             data_dir: host_dir.clone(),
             device_name: Some("被连机".into()),
+            offline: true,
             ..Default::default()
         },
         delegate.clone(),
@@ -87,6 +88,7 @@ async fn pair_approve_and_run_terminal() {
         NodeConfig {
             data_dir: guest_dir.clone(),
             device_name: Some("连接机".into()),
+            offline: true,
             ..Default::default()
         },
         TestDelegate::new(),
@@ -191,6 +193,7 @@ async fn connects_over_ipv6() {
     let host = Node::start(
         NodeConfig {
             data_dir: host_dir.clone(),
+            offline: true,
             ..Default::default()
         },
         delegate,
@@ -200,6 +203,7 @@ async fn connects_over_ipv6() {
     let guest = Node::start(
         NodeConfig {
             data_dir: guest_dir.clone(),
+            offline: true,
             ..Default::default()
         },
         TestDelegate::new(),

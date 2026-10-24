@@ -16,9 +16,9 @@ use p2pcli_core::rendezvous::{format_code, normalize_code, parse_server};
 struct Cli {
     #[arg(long, global = true, default_value = "./p2pcli-dev-data")]
     data_dir: PathBuf,
-    /// 牵线服务器 <公钥>@<ip:端口>
-    #[arg(long, global = true)]
-    server: Option<String>,
+    /// 牵线服务器：<公钥>@<ip:端口> 走 UDP，wss://域名 走 WebSocket；传空字符串表示不用
+    #[arg(long, global = true, default_value = p2pcli_core::rendezvous::DEFAULT_SERVER)]
+    server: String,
     #[arg(long, global = true)]
     name: Option<String>,
     /// 只走中继，测兜底
@@ -131,10 +131,11 @@ async fn main() -> Result<()> {
         NodeConfig {
             data_dir: cli.data_dir.clone(),
             device_name: cli.name.clone(),
-            server: cli.server.clone(),
+            server: Some(cli.server.clone()).filter(|s| !s.trim().is_empty()),
             relay_only: cli.relay_only,
             bind_ip: cli.bind_ip,
             relays: cli.relay.clone(),
+            offline: false,
         },
         Arc::new(CliDelegate { approve }),
     )

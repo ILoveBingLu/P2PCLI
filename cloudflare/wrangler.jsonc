@@ -1,6 +1,6 @@
 {
   // P2PCLI 牵线服务（WebSocket 版）
-  // 部署前把下面 routes 里的域名换成自己托管在 Cloudflare 的域名；workers.dev 在国内被污染，必须用自己的域名
+  // 部署用同目录的 deploy.sh / deploy.ps1，域名在部署时传进去，这里不写死
   "name": "p2pcli-rdv",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
@@ -8,5 +8,4 @@
     "bindings": [{ "name": "RDV", "class_name": "Rendezvous" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Rendezvous"] }]
-  // "routes": [{ "pattern": "rdv.example.com", "custom_domain": true }]
 }

@@ -47,6 +47,7 @@ async fn ipv6_first_dial_with_punch() {
                     data_dir: temp_dir(tag),
                     device_name: Some(name.into()),
                     server: Some(server),
+                    offline: true,
                     ..Default::default()
                 },
                 Arc::new(Allow),

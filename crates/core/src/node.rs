@@ -37,6 +37,8 @@ pub struct NodeConfig {
     pub bind_ip: Option<std::net::IpAddr>,
     /// 自建中继地址；空着就用 iroh 官方的公共中继
     pub relays: Vec<String>,
+    /// 测试用：不连 iroh 的公共地址查询和中继，只用明确给出的地址，结果不受外网影响
+    pub offline: bool,
 }
 
 pub struct Node {
@@ -70,6 +72,9 @@ impl Node {
             .collect::<Result<Vec<_>>>()?;
         if !relays.is_empty() {
             builder = builder.relay_mode(RelayMode::custom(relays));
+        }
+        if cfg.offline {
+            builder = builder.clear_address_lookup().relay_mode(RelayMode::Disabled);
         }
         if let Some(ip) = cfg.bind_ip {
             builder = builder

@@ -51,8 +51,10 @@ fn load_settings(dir: &Path) -> Settings {
 fn effective_server(s: &Settings) -> Option<String> {
     std::env::var("P2PCLI_SERVER")
         .ok()
+        .filter(|s| !s.trim().is_empty())
         .or_else(|| s.server.clone())
         .or_else(|| option_env!("P2PCLI_DEFAULT_SERVER").map(String::from))
+        .or_else(|| Some(p2pcli_core::rendezvous::DEFAULT_SERVER.to_string()))
         .filter(|s| !s.trim().is_empty())
 }
 

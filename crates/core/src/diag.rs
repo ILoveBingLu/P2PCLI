@@ -272,7 +272,8 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
     match &server {
         Some(RdvStatus::Online) => notes.push("牵线服务器在线".to_string()),
         Some(RdvStatus::Connecting) => notes.push("正在连牵线服务器".to_string()),
-        Some(RdvStatus::Offline { error }) => notes.push(format!("牵线服务器连不上：{error}")),
+        // 错误本身已经说了连不上牵线服务器，不再重复
+        Some(RdvStatus::Offline { error }) => notes.push(error.clone()),
         None => notes.push("没配置牵线服务器，别人没法用设备码连你".to_string()),
     }
 

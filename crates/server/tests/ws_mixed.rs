@@ -31,6 +31,7 @@ async fn start(tag: &str, server: String) -> Arc<Node> {
             data_dir: temp_dir(tag),
             device_name: Some(tag.into()),
             server: Some(server),
+            offline: true,
             ..Default::default()
         },
         Arc::new(Allow),

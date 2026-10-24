@@ -24,6 +24,9 @@ use crate::proto::{read_json, write_json};
 use crate::rdv_ws::WsLink;
 use crate::v6;
 
+/// 软件默认用的牵线服务器（部署在 Cloudflare，见 cloudflare/）；用户可以在设置里换成自己部署的
+pub const DEFAULT_SERVER: &str = "wss://p2pcli.yscopy.cn";
+
 /// 多久看一次自己的地址有没有变，变了就报
 const CHECK_ADDR_EVERY: Duration = Duration::from_secs(20);
 /// 地址没变也至少这么久报一次，顺带保活（WebSocket 太久没数据会被中间设备断开）
