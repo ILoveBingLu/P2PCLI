@@ -57,8 +57,18 @@ async fn ipv6_first_dial_with_punch() {
     };
     let host = start("host", "被连机").await;
     let guest = start("guest", "连接机").await;
+    let cleanup = || {
+        for tag in ["srv", "host", "guest"] {
+            let _ = std::fs::remove_dir_all(
+                std::env::temp_dir().join(format!("p2pcli-v6-{tag}-{}", std::process::id())),
+            );
+        }
+    };
     if v6::local_candidates(&host.endpoint).is_empty() {
         eprintln!("本机没有可用的 IPv6 地址，跳过");
+        host.shutdown().await;
+        guest.shutdown().await;
+        cleanup();
         return;
     }
     host.host.set_password("abc234");
@@ -114,4 +124,5 @@ async fn ipv6_first_dial_with_punch() {
     host.shutdown().await;
     guest.shutdown().await;
     srv_ep.close().await;
+    cleanup();
 }
