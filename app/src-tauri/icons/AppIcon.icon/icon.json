@@ -1,55 +1,79 @@
 {
-  "fill" : {
-    "linear-gradient" : [
+  "fill": {
+    "linear-gradient": [
       "srgb:0.12157,0.16078,0.21569,1.00000",
       "srgb:0.04314,0.07059,0.12549,1.00000"
     ]
   },
-  "groups" : [
+  "groups": [
     {
-      "name" : "连接",
-      "layers" : [
+      "name": "点击",
+      "lighting": "combined",
+      "layers": [
         {
-          "name" : "两个节点",
-          "image-name" : "link.svg",
-          "glass" : true
-        }
-      ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
-      "translucency" : { "enabled" : true, "value" : 0.4 }
-    },
-    {
-      "name" : "光标",
-      "layers" : [
-        {
-          "name" : "下划线",
-          "image-name" : "cursor.svg",
-          "glass" : true
-        }
-      ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
-      "translucency" : { "enabled" : true, "value" : 0.4 }
-    },
-    {
-      "name" : "尖括号",
-      "lighting" : "combined",
-      "layers" : [
-        {
-          "name" : "下笔",
-          "image-name" : "arm-bottom.svg",
-          "glass" : true
+          "name": "指针",
+          "image-name": "pointer.svg",
+          "glass": true
         },
         {
-          "name" : "上笔",
-          "image-name" : "arm-top.svg",
-          "glass" : true
+          "name": "光芒",
+          "image-name": "rays.svg",
+          "glass": true
         }
       ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
-      "translucency" : { "enabled" : true, "value" : 0.4 }
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.4
+      }
+    },
+    {
+      "name": "光标",
+      "layers": [
+        {
+          "name": "下划线",
+          "image-name": "cursor.svg",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.4
+      }
+    },
+    {
+      "name": "尖括号",
+      "lighting": "combined",
+      "layers": [
+        {
+          "name": "下笔",
+          "image-name": "arm-bottom.svg",
+          "glass": true
+        },
+        {
+          "name": "上笔",
+          "image-name": "arm-top.svg",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.4
+      }
     }
   ],
-  "supported-platforms" : {
-    "squares" : "shared"
+  "supported-platforms": {
+    "squares": "shared"
   }
 }

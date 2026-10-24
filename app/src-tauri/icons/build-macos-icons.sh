@@ -4,6 +4,7 @@
 #   icon.icns   更早的系统用它，从同一个图标渲染，按苹果的边距（1024 画布里图形占 824）
 # 两份都提交进仓库，打包时不需要 Xcode。改了 AppIcon.icon 跑一下这个脚本。
 # 需要 Xcode 26 以上（自带 Icon Composer、ictool、actool）。
+# 图层 SVG 不要用 transform 缩放：actool 按缩放前的线宽算图层边界，会把描边裁掉（Icon Composer 预览里看不出来）。
 set -euo pipefail
 cd "$(dirname "$0")"
 

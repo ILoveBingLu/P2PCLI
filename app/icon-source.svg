@@ -1,14 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Windows 图标和界面里的 PNG 用这张；macOS 图标在 src-tauri/icons/AppIcon.icon -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#1f2937"/>
       <stop offset="1" stop-color="#0b1220"/>
     </linearGradient>
   </defs>
   <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
-  <path d="M250 360 L410 512 L250 664" fill="none" stroke="#34d399" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="470" y="610" width="300" height="72" rx="36" fill="#e5e7eb"/>
-  <circle cx="760" cy="330" r="62" fill="#60a5fa"/>
-  <circle cx="560" cy="250" r="44" fill="#60a5fa" opacity="0.7"/>
-  <path d="M600 272 L705 315" stroke="#60a5fa" stroke-width="26" stroke-linecap="round" opacity="0.7"/>
+  <g transform="translate(512 512) scale(0.875) translate(-512 -512)">
+    <line x1="196" y1="420" x2="356" y2="565" stroke="#34d399" stroke-width="84" stroke-linecap="round"/>
+    <line x1="356" y1="565" x2="196" y2="710" stroke="#34d399" stroke-width="84" stroke-linecap="round"/>
+    <rect x="424" y="668" width="316" height="84" rx="42.0" fill="#e5e7eb"/>
+    <path d="M 578.89 424.56 A 11.95 11.95 0 0 1 594.56 408.89 L 858.56 516.89 A 12.00 12.00 0 0 1 856.78 539.66 L 752.41 564.65 A 24.00 24.00 0 0 0 734.65 582.38 L 709.69 686.78 A 12.00 12.00 0 0 1 686.89 688.56 Z" fill="#60a5fa" stroke="#60a5fa" stroke-width="60" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 698.00 290.40 L 650.00 336.00" fill="none" stroke="#60a5fa" stroke-width="60" stroke-linecap="round"/>
+  <path d="M 484.40 384.00 L 414.80 364.80" fill="none" stroke="#60a5fa" stroke-width="60" stroke-linecap="round"/>
+  <path d="M 506.00 480.00 L 460.40 528.00" fill="none" stroke="#60a5fa" stroke-width="60" stroke-linecap="round"/>
+  <path d="M 534.80 244.80 L 554.00 314.40" fill="none" stroke="#60a5fa" stroke-width="60" stroke-linecap="round"/>
+  </g>
 </svg>
