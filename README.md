@@ -65,14 +65,27 @@ iroh-relay --config-path relay.toml   # iroh 官方中继，用 Let's Encrypt �
 
 需要 Rust 1.88 以上、Node 24、pnpm。
 
+以下命令都在项目根目录执行，不需要进入 `app`：
+
 ```sh
 cargo test --workspace              # 单元测试、同进程两台设备完整走一遍、IPv6 直连流程
-cd app && pnpm install
-pnpm tauri dev                      # 开发模式
-pnpm tauri build --bundles app,dmg  # macOS 正式包；Windows 上用 --bundles nsis
+pnpm install                       # 安装应用依赖
+pnpm run dev                       # 启动桌面应用开发模式
+pnpm run build --bundles app,dmg    # macOS 正式包
+pnpm run build --bundles nsis       # Windows 正式包
 ```
 
-界面预览：`pnpm dev` 后打开 `http://localhost:1420/preview.html?s=empty`（s 还可以是 request、busy、relay），用假数据渲染界面。
+界面预览：在根目录执行 `pnpm run dev:web`，然后打开 `http://localhost:1420/preview.html?s=empty`（s 还可以是 request、busy、relay），用假数据渲染界面。仅构建前端可执行 `pnpm run build:web`。
+
+新增、移除应用依赖同样直接在根目录执行：
+
+```sh
+pnpm add <包名>       # 添加运行依赖
+pnpm add -D <包名>    # 添加开发依赖
+pnpm remove <包名>    # 移除依赖
+```
+
+根目录的 `package.json` 保存应用脚本和依赖，`pnpm-lock.yaml` 锁定依赖版本；界面和 Tauri 源码仍放在 `app` 目录。
 
 环境变量：
 

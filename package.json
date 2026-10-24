@@ -1,13 +1,14 @@
 {
-  "name": "p2pcli-app",
+  "name": "p2pcli",
   "private": true,
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "tauri": "tauri"
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "dev:web": "vite app",
+    "build:web": "tsc --project app/tsconfig.json --noEmit && vite build app"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
