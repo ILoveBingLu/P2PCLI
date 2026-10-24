@@ -1,0 +1,15 @@
+[package]
+name = "p2pcli-dev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 开发和跨机测试用，不随软件发给用户
+
+[dependencies]
+p2pcli-core.workspace = true
+iroh.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing-subscriber.workspace = true
+clap = { version = "4", features = ["derive"] }

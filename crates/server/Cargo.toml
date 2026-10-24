@@ -1,0 +1,17 @@
+[package]
+name = "p2pcli-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+p2pcli-core.workspace = true
+iroh.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rand.workspace = true
+rusqlite = { version = "0.41", features = ["bundled"] }
+clap = { version = "4", features = ["derive"] }

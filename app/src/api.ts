@@ -1,0 +1,127 @@
+// 和 Rust 端对应的类型与调用
+import { invoke } from "@tauri-apps/api/core";
+
+export type PathKind = "ipv6" | "ipv4" | "relay" | "unknown";
+export interface PathInfo {
+  kind: PathKind;
+  rtt_ms: number | null;
+  remote: string | null;
+}
+
+export interface RemoteInfo {
+  endpoint_id: string;
+  name: string;
+  platform: string;
+  user: string;
+}
+
+export interface Connected {
+  conn_id: number;
+  code: string | null;
+  info: RemoteInfo;
+  path: PathInfo;
+}
+
+export type RejectCode = "need_password" | "bad_password" | "denied" | "timeout" | "locked" | "version";
+export interface ConnectFail {
+  reject: RejectCode | null;
+  message: string;
+}
+
+export interface SessionSummary {
+  session: number;
+  remote: string;
+  name: string;
+  platform: string;
+  terminals: number;
+  since: number;
+}
+
+export interface RecentDevice {
+  code: string;
+  endpoint_id: string;
+  name: string;
+  platform: string;
+  last_used: number;
+}
+
+export interface TrustedView {
+  endpoint_id: string;
+  name: string;
+  platform: string;
+  added_at: number;
+}
+
+export type ServerState =
+  | { state: "none" }
+  | { state: "connecting" }
+  | { state: "online" }
+  | { state: "offline"; error: string };
+
+export interface Overview {
+  name: string;
+  platform: string;
+  endpoint_id: string;
+  code: string | null;
+  password: string;
+  server: ServerState;
+  sessions: SessionSummary[];
+  recent: RecentDevice[];
+  trusted: TrustedView[];
+}
+
+export interface IncomingRequest {
+  id: number;
+  remote: string;
+  name: string;
+  platform: string;
+}
+
+export type HostEvent =
+  | { type: "request_cancelled"; id: number }
+  | { type: "connected"; session: number; remote: string; name: string; platform: string; trusted: boolean }
+  | { type: "disconnected"; session: number }
+  | { type: "terminal_opened"; session: number }
+  | { type: "terminal_closed"; session: number };
+
+export type TermStatus = { type: "exited"; code: number | null } | { type: "closed"; reason: string | null };
+
+export interface SettingsView {
+  server: string | null;
+  device_name: string | null;
+  relay: string | null;
+  effective_server: string | null;
+  effective_relay: string | null;
+  data_dir: string;
+}
+
+export const api = {
+  overview: () => invoke<Overview>("overview"),
+  refreshPassword: () => invoke<string>("refresh_password"),
+  respond: (id: number, allow: boolean, trust: boolean) => invoke("respond_request", { id, allow, trust }),
+  kick: (session: number) => invoke<boolean>("kick", { session }),
+  removeTrusted: (endpointId: string) => invoke("remove_trusted", { endpointId }),
+  forgetRecent: (code: string) => invoke("forget_recent", { code }),
+  connect: (target: string, password: string | null) => invoke<Connected>("connect", { target, password }),
+  disconnect: (connId: number) => invoke("disconnect", { connId }),
+  pathInfo: (connId: number) => invoke<PathInfo>("path_info", { connId }),
+  getSettings: () => invoke<SettingsView>("get_settings"),
+  saveSettings: (server: string | null, deviceName: string | null, relay: string | null) =>
+    invoke("save_settings", { server, deviceName, relay }),
+  restart: () => invoke("restart"),
+};
+
+export function formatCode(code: string | null | undefined): string {
+  if (!code || code.length !== 9) return code ?? "";
+  return `${code.slice(0, 3)} ${code.slice(3, 6)} ${code.slice(6)}`;
+}
+
+export function platformLabel(p: string): string {
+  return ({ macos: "macOS", windows: "Windows", linux: "Linux" } as Record<string, string>)[p] ?? p;
+}
+
+export function pathLabel(p: PathInfo | null | undefined): string {
+  if (!p) return "连接中";
+  const name = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", unknown: "连接中" }[p.kind];
+  return p.rtt_ms != null && p.kind !== "unknown" ? `${name} · ${p.rtt_ms} ms` : name;
+}
