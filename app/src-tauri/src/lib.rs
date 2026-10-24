@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use p2pcli_core::client::{ConnectError, RemoteHost, RemoteInfo, TermEvent};
 use p2pcli_core::host::{
@@ -12,7 +12,7 @@ use p2pcli_core::host::{
 use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::path::PathInfo;
 use p2pcli_core::proto::RejectCode;
-use p2pcli_core::rendezvous::{RdvStatus, normalize_code, parse_server};
+use p2pcli_core::rendezvous::{normalize_code, parse_server};
 use p2pcli_core::store::{RecentDevice, TrustedDevice};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -28,6 +28,8 @@ const OUTPUT_BATCH: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Settings {
+    #[serde(default)]
+    proxy: Option<String>,
     #[serde(default)]
     server: Option<String>,
     #[serde(default)]
@@ -124,7 +126,8 @@ enum TermCmd {
 }
 
 struct AppState {
-    node: Arc<Node>,
+    node: RwLock<Arc<Node>>,
+    config_gate: tokio::sync::Mutex<()>,
     delegate: Arc<UiDelegate>,
     data_dir: PathBuf,
     settings: Mutex<Settings>,
@@ -134,6 +137,7 @@ struct AppState {
 }
 
 impl AppState {
+    fn node(&self) -> Arc<Node> { self.node.read().unwrap().clone() }
     fn next(&self) -> u64 {
         self.next.fetch_add(1, Ordering::Relaxed)
     }
@@ -171,7 +175,7 @@ struct Overview {
 
 #[tauri::command]
 fn overview(state: State<'_, AppState>) -> Overview {
-    let node = &state.node;
+    let node = state.node();
     let server = match &node.rdv {
         None => serde_json::json!({ "state": "none" }),
         Some(r) => serde_json::to_value(r.status()).unwrap_or_default(),
@@ -200,12 +204,12 @@ fn overview(state: State<'_, AppState>) -> Overview {
 
 #[tauri::command]
 async fn diagnose(state: State<'_, AppState>) -> Result<p2pcli_core::diag::Diagnosis, String> {
-    Ok(p2pcli_core::diag::diagnose(&state.node).await)
+    Ok(p2pcli_core::diag::diagnose(&state.node()).await)
 }
 
 #[tauri::command]
 fn refresh_password(state: State<'_, AppState>) -> String {
-    state.node.host.regenerate_password()
+    state.node().host.regenerate_password()
 }
 
 #[tauri::command]
@@ -221,13 +225,13 @@ fn respond_request(state: State<'_, AppState>, id: u64, allow: bool, trust: bool
 
 #[tauri::command]
 fn kick(state: State<'_, AppState>, session: u64) -> bool {
-    state.node.host.kick(session)
+    state.node().host.kick(session)
 }
 
 #[tauri::command]
 fn remove_trusted(state: State<'_, AppState>, endpoint_id: String) -> Result<(), String> {
     state
-        .node
+        .node()
         .host
         .trust
         .remove(&endpoint_id)
@@ -237,7 +241,7 @@ fn remove_trusted(state: State<'_, AppState>, endpoint_id: String) -> Result<(),
 
 #[tauri::command]
 fn forget_recent(state: State<'_, AppState>, code: String) -> Result<(), String> {
-    state.node.recent.remove(&code).map_err(|e| format!("{e:#}"))
+    state.node().recent.remove(&code).map_err(|e| format!("{e:#}"))
 }
 
 #[derive(Serialize)]
@@ -264,10 +268,10 @@ async fn connect(
     let password = password.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
     let code = normalize_code(&target);
     let res = match &code {
-        Some(c) => state.node.connect_code(c, password).await,
+        Some(c) => state.node().connect_code(c, password).await,
         // 开发测试：直接填 公钥@地址
         None => match parse_server(&target) {
-            Ok(addr) => state.node.connect_addr(addr, password).await,
+            Ok(addr) => state.node().connect_addr(addr, password).await,
             Err(_) => {
                 return Err(ConnectFail {
                     reject: None,
@@ -330,6 +334,19 @@ enum TermStatus {
     Closed { reason: Option<String> },
 }
 
+#[derive(Serialize)]
+struct OpenedTerminal { term_id: u64, session_id: String }
+
+#[tauri::command]
+async fn list_terminals(state: State<'_, AppState>, conn_id: u64) -> Result<Vec<p2pcli_core::proto::TerminalSession>, String> {
+    state.remote(conn_id)?.list_terminals().await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn end_terminal(state: State<'_, AppState>, conn_id: u64, session_id: String) -> Result<(), String> {
+    state.remote(conn_id)?.end_terminal(session_id).await.map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 async fn open_terminal(
     app: AppHandle,
@@ -337,14 +354,16 @@ async fn open_terminal(
     conn_id: u64,
     cols: u16,
     rows: u16,
+    session_id: Option<String>,
     output: Channel<InvokeResponseBody>,
     status: Channel<TermStatus>,
-) -> Result<u64, String> {
+) -> Result<OpenedTerminal, String> {
     let remote = state.remote(conn_id)?;
     let (mut input, mut out) = remote
-        .open_terminal(cols, rows)
+        .attach_terminal(session_id, cols, rows)
         .await
         .map_err(|e| format!("{e:#}"))?;
+    let session_id = out.session_id.clone();
     let term_id = state.next();
     let (tx, mut rx) = mpsc::unbounded_channel::<TermCmd>();
     state.terms.lock().unwrap().insert(term_id, tx);
@@ -412,7 +431,7 @@ async fn open_terminal(
         let _ = status.send(final_status);
         app.state::<AppState>().terms.lock().unwrap().remove(&term_id);
     });
-    Ok(term_id)
+    Ok(OpenedTerminal { term_id, session_id })
 }
 
 fn send_term(state: &AppState, term_id: u64, cmd: TermCmd) {
@@ -444,6 +463,7 @@ fn term_close(state: State<'_, AppState>, term_id: u64) {
 
 #[derive(Serialize)]
 struct SettingsView {
+    proxy: Option<String>,
     server: Option<String>,
     device_name: Option<String>,
     relay: Option<String>,
@@ -456,6 +476,7 @@ struct SettingsView {
 fn get_settings(state: State<'_, AppState>) -> SettingsView {
     let s = state.settings.lock().unwrap().clone();
     SettingsView {
+        proxy: s.proxy.clone(),
         effective_server: effective_server(&s),
         effective_relay: effective_relay(&s),
         server: s.server,
@@ -465,20 +486,26 @@ fn get_settings(state: State<'_, AppState>) -> SettingsView {
     }
 }
 
-/// 改完要重启软件才生效
+/// Prepare a new runtime, persist, then atomically swap the active configuration.
 #[tauri::command]
-fn save_settings(
+async fn save_settings(
     state: State<'_, AppState>,
     server: Option<String>,
     device_name: Option<String>,
     relay: Option<String>,
+    proxy: Option<String>,
 ) -> Result<(), String> {
+    let _gate = state.config_gate.lock().await;
     let clean = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let s = Settings {
+        proxy: clean(proxy),
         server: clean(server),
         device_name: clean(device_name),
         relay: clean(relay),
     };
+    if let Some(proxy) = &s.proxy {
+        p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
+    }
     if let Some(srv) = &s.server {
         p2pcli_core::rendezvous::parse_rdv_server(srv).map_err(|e| format!("{e:#}"))?;
     }
@@ -489,9 +516,28 @@ fn save_settings(
                 .map_err(|e| format!("中继地址格式不对：{u}（{e}）"))?;
         }
     }
+    let cfg = NodeConfig {
+        data_dir: state.data_dir.clone(),
+        device_name: s.device_name.clone(),
+        server: effective_server(&s),
+        proxy: s.proxy.clone(),
+        relays: effective_relay(&s).map(|r| r.split(',').map(|u| u.trim().to_string()).collect()).unwrap_or_default(),
+        ..Default::default()
+    };
+    let old = state.node();
+    let transport_changed = old.transport_changed(&cfg);
+    let next = old.prepare_update(cfg, state.delegate.clone()).await.map_err(|e| format!("应用网络配置失败：{e:#}"))?;
     let bytes = serde_json::to_vec_pretty(&s).map_err(|e| e.to_string())?;
-    std::fs::write(settings_path(&state.data_dir), bytes).map_err(|e| e.to_string())?;
+    if let Err(e) = p2pcli_core::store::write_private(&settings_path(&state.data_dir), &bytes) {
+        if transport_changed { next.endpoint.close().await; }
+        return Err(format!("保存设置失败，当前配置未更改：{e:#}"));
+    }
+    old.stop_rendezvous().await;
+    next.activate();
+    *state.node.write().unwrap() = next;
     *state.settings.lock().unwrap() = s;
+    if transport_changed { old.endpoint.close().await; }
+
     Ok(())
 }
 
@@ -570,6 +616,7 @@ pub fn run() {
                 data_dir: data_dir.clone(),
                 device_name: settings.device_name.clone(),
                 server: effective_server(&settings),
+                proxy: settings.proxy.clone(),
                 relays: effective_relay(&settings)
                     .map(|r| r.split(',').map(|u| u.trim().to_string()).collect())
                     .unwrap_or_default(),
@@ -578,31 +625,27 @@ pub fn run() {
             let node = tauri::async_runtime::block_on(Node::start(cfg, delegate.clone()))?;
             info!(id = %node.id(), "P2PCLI 已启动");
 
-            // 牵线状态和设备码变了，通知界面刷新
-            if let Some(rdv) = node.rdv.clone() {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut status = rdv.watch_status();
-                    let mut code = rdv.watch_code();
-                    loop {
-                        tokio::select! {
-                            r = status.changed() => if r.is_err() { break },
-                            r = code.changed() => if r.is_err() { break },
-                        }
-                        let s: RdvStatus = rdv.status();
-                        let _ = handle.emit("server-status", &s);
-                    }
-                });
-            }
-
             app.manage(AppState {
-                node,
+                node: RwLock::new(node),
+                config_gate: tokio::sync::Mutex::new(()),
                 delegate,
                 data_dir,
                 settings: Mutex::new(settings),
                 remotes: Mutex::new(HashMap::new()),
                 terms: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
+            });
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut previous = serde_json::Value::Null;
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+                loop {
+                    tick.tick().await;
+                    let node = handle.state::<AppState>().node();
+                    let current = serde_json::json!({ "status": node.rdv.as_ref().map(|r| r.status()), "code": node.rdv.as_ref().and_then(|r| r.code()), "name": node.me.name });
+                    if current != previous { let _ = handle.emit("server-status", &current); previous = current; }
+                }
             });
 
             // Windows 必须通过插件的 builder 创建窗口；平台配置禁用了自动创建。
@@ -633,7 +676,7 @@ pub fn run() {
                     "show" => show_main(app),
                     "quit" => {
                         let state = app.state::<AppState>();
-                        tauri::async_runtime::block_on(state.node.shutdown());
+                        tauri::async_runtime::block_on(state.node().shutdown());
                         app.exit(0);
                     }
                     _ => {}
@@ -665,6 +708,8 @@ pub fn run() {
             disconnect,
             path_info,
             open_terminal,
+            list_terminals,
+            end_terminal,
             term_input,
             term_resize,
             term_close,

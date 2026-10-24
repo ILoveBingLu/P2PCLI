@@ -21,3 +21,4 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+url = "2"

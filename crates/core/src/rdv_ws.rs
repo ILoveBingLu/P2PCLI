@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::{Connector, connect_async_tls_with_config};
+use tokio_tungstenite::{Connector, connect_async_tls_with_config, client_async_tls_with_config};
 use tracing::debug;
 
 use crate::rendezvous::{RdvPush, RdvRequest, RdvResponse};
@@ -99,14 +99,14 @@ fn tls_connector() -> Result<Connector> {
 
 /// 一条连到牵线服务器的 WebSocket
 pub struct WsLink {
-    out: mpsc::UnboundedSender<String>,
+    out: mpsc::UnboundedSender<Message>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<RdvResponse>>>>,
     next: AtomicU64,
     closed: watch::Receiver<Option<String>>,
 }
 
 impl WsLink {
-    pub async fn connect(url: &str, key: &SecretKey, pushes: mpsc::UnboundedSender<RdvPush>) -> Result<Arc<Self>> {
+    pub async fn connect(url: &str, key: &SecretKey, pushes: mpsc::UnboundedSender<RdvPush>, proxy: Option<&url::Url>) -> Result<Arc<Self>> {
         let mut req = url.into_client_request().context("牵线服务器地址格式不对")?;
         let host = req
             .uri()
@@ -120,17 +120,26 @@ impl WsLink {
         } else {
             Connector::Plain
         };
-        let (ws, _) = connect_async_tls_with_config(req, None, true, Some(connector))
-            .await
-            .map_err(|e| anyhow!("连不上牵线服务器：{e}"))?;
+        let (ws, _) = if let Some(proxy) = proxy {
+            let port = req.uri().port_u16().unwrap_or(if url.starts_with("wss://") { 443 } else { 80 });
+            let host = req.uri().host().ok_or_else(|| anyhow!("牵线服务器地址缺少主机"))?;
+            let authority = format!("{host}:{port}");
+            let stream = crate::proxy::tunnel(proxy, &authority).await?;
+            client_async_tls_with_config(req, stream, None, Some(connector)).await
+                .map_err(|e| anyhow!("通过代理连接牵线服务器失败：{e}"))?
+        } else {
+            connect_async_tls_with_config(req, None, true, Some(connector)).await
+                .map_err(|e| anyhow!("连不上牵线服务器：{e}"))?
+        };
         let (mut sink, mut stream) = ws.split();
-        let (out, mut rx) = mpsc::unbounded_channel::<String>();
+        let (out, mut rx) = mpsc::unbounded_channel::<Message>();
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<RdvResponse>>>> = Arc::default();
         let (closed_tx, closed) = watch::channel(None);
 
         tokio::spawn(async move {
             while let Some(text) = rx.recv().await {
-                if sink.send(Message::Text(text.into())).await.is_err() {
+                let close = matches!(&text, Message::Close(_));
+                if sink.send(text).await.is_err() || close {
                     break;
                 }
             }
@@ -182,7 +191,7 @@ impl WsLink {
             ..Default::default()
         };
         self.out
-            .send(serde_json::to_string(&frame)?)
+            .send(Message::Text(serde_json::to_string(&frame)?.into()))
             .map_err(|_| anyhow!("和牵线服务器的连接已断开"))?;
         match tokio::time::timeout(Duration::from_secs(15), rx).await {
             Ok(Ok(resp)) => Ok(resp),
@@ -193,6 +202,8 @@ impl WsLink {
             }
         }
     }
+
+    pub fn close(&self) { let _ = self.out.send(Message::Close(None)); }
 
     /// 等连接断开，返回原因
     pub async fn closed(&self) -> String {

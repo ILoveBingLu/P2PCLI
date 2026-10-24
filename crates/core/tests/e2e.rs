@@ -120,7 +120,7 @@ async fn pair_approve_and_run_terminal() {
         .expect("应该连上");
     assert_eq!(remote.info.name, "被连机");
     assert_eq!(delegate.requests.lock().unwrap()[1].name, "连接机");
-    let (mut input, mut output) = remote.open_terminal(100, 30).await.unwrap();
+    let (mut input, mut output) = remote.open_ephemeral_terminal(100, 30).await.unwrap();
     assert!(!output.shell.is_empty());
     input.resize(120, 40).await.unwrap();
     #[cfg(windows)]
@@ -221,7 +221,7 @@ async fn connects_over_ipv6() {
     );
     let remote = guest.connect_addr(addr, Some("abc234".into())).await.unwrap();
     assert_eq!(remote.path().kind, PathKind::Ipv6, "线路：{:?}", remote.path());
-    let (mut input, mut output) = remote.open_terminal(80, 24).await.unwrap();
+    let (mut input, mut output) = remote.open_ephemeral_terminal(80, 24).await.unwrap();
     #[cfg(windows)]
     input.write(b"echo v6-$(3+4); exit\r").await.unwrap();
     #[cfg(not(windows))]
@@ -244,4 +244,102 @@ async fn connects_over_ipv6() {
     guest.shutdown().await;
     let _ = std::fs::remove_dir_all(host_dir);
     let _ = std::fs::remove_dir_all(guest_dir);
+}
+
+
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_name_without_replacing_endpoint_or_host() {
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let cfg = NodeConfig {
+        data_dir: temp_dir("live-config"),
+        device_name: Some("before".into()),
+        offline: true,
+        ..Default::default()
+    };
+    let node = Node::start(cfg.clone(), delegate.clone()).await.unwrap();
+    node.host.set_password("abc234");
+    let guest = Node::start(NodeConfig {
+        data_dir: temp_dir("live-config-guest"), offline: true, ..Default::default()
+    }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&node), Some("abc234".into())).await.unwrap();
+    let sockets = node.endpoint.bound_sockets();
+    let mut updated = cfg.clone();
+    updated.device_name = Some("after".into());
+    assert!(!node.transport_changed(&updated));
+    let next = node.prepare_update(updated, delegate.clone()).await.unwrap();
+    node.stop_rendezvous().await;
+    next.activate();
+    assert!(Arc::ptr_eq(&node.host, &next.host));
+    assert!(Arc::ptr_eq(&node.recent, &next.recent));
+    assert_eq!(next.endpoint.bound_sockets(), sockets);
+    assert!(tokio::time::timeout(Duration::from_millis(100), remote.closed()).await.is_err());
+    let new_remote = guest.connect_addr(local_addr(&next), Some("abc234".into())).await.unwrap();
+    assert_eq!(new_remote.info.name, "after");
+    let mut invalid = cfg;
+    invalid.proxy = Some("socks5://127.0.0.1:7890".into());
+    assert!(next.prepare_update(invalid, delegate).await.is_err());
+    assert!(tokio::time::timeout(Duration::from_millis(100), remote.closed()).await.is_err());
+    new_remote.close();
+    remote.close();
+    guest.shutdown().await;
+    next.shutdown().await;
+}
+
+async fn read_until(input: &mut p2pcli_core::client::TermInput, output: &mut p2pcli_core::client::TermOutput, marker: &str) {
+    tokio::time::timeout(Duration::from_secs(25), async {
+        let mut text = String::new();
+        while let Some(ev) = output.next().await.unwrap() {
+            match ev {
+                TermEvent::Output(data) => {
+                    if asks_cursor_position(&data) { input.write(b"\x1b[1;1R").await.unwrap(); }
+                    text.push_str(&String::from_utf8_lossy(&data));
+                    if text.contains(marker) { return; }
+                }
+                TermEvent::Exit(code) => panic!("attachment ended before {marker}: {code:?}"),
+            }
+        }
+        panic!("stream ended before {marker}");
+    }).await.expect("persistent terminal did not respond");
+}
+
+/// Explicit opt-in: this starts a real detached tmux/psmux server on the test machine.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux on macOS/Linux or psmux on Windows"]
+async fn persistent_session_survives_disconnect_and_host_restart() {
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let cfg = NodeConfig { data_dir: temp_dir("persistent-host"), offline: true, ..Default::default() };
+    let host = Node::start(cfg.clone(), delegate.clone()).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("persistent-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let (mut input, mut output) = remote.open_terminal(100, 30).await.unwrap();
+    let id = output.session_id.clone();
+    #[cfg(windows)]
+    input.write(b"$p2pcliRetained = 41; Write-Output ('ready-' + (20+22))\r").await.unwrap();
+    #[cfg(not(windows))]
+    input.write(b"p2pcliRetained=41; printf 'ready-%s\\n' $((20+22))\r").await.unwrap();
+    read_until(&mut input, &mut output, "ready-42").await;
+    input.close(); // Closing the tab only detaches.
+    remote.close(); // A lost network connection must not kill the shell either.
+    drop((input, output, remote));
+    host.shutdown().await;
+    let restarted = Node::start(cfg, delegate).await.unwrap();
+    restarted.host.set_password("abc234");
+    let remote = guest.connect_addr(local_addr(&restarted), Some("abc234".into())).await.unwrap();
+    assert!(remote.list_terminals().await.unwrap().iter().any(|s| s.id == id));
+    assert!(restarted.host.terminals.list(&"0".repeat(64)).await.unwrap().is_empty());
+    assert!(restarted.host.terminals.end(&"0".repeat(64), &id).await.is_err());
+    let (mut input, mut output) = remote.attach_terminal(Some(id.clone()), 100, 30).await.unwrap();
+    #[cfg(windows)]
+    input.write(b"Write-Output ('retained-' + ($p2pcliRetained+1))\r").await.unwrap();
+    #[cfg(not(windows))]
+    input.write(b"printf 'retained-%s\\n' $((p2pcliRetained+1))\r").await.unwrap();
+    read_until(&mut input, &mut output, "retained-42").await;
+    remote.end_terminal(id.clone()).await.unwrap();
+    assert!(!remote.list_terminals().await.unwrap().iter().any(|s| s.id == id));
+    remote.close();
+    guest.shutdown().await;
+    restarted.shutdown().await;
 }

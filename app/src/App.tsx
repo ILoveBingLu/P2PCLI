@@ -8,6 +8,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import {
   LoaderCircle,
+  History,
   Plus,
   Radio,
   Unplug,
@@ -33,8 +34,9 @@ import { useConnection } from "./components/useConnection";
 import {
   ApproveDialog,
   DiagDialog,
-  SettingsDialog,
 } from "./components/AppDialogs";
+import { RemoteSessions, type SessionTarget } from "./components/RemoteSessions";
+import { SettingsPage } from "./components/SettingsPage";
 import { Welcome } from "./components/Welcome";
 import { Titlebar } from "./components/Titlebar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -55,6 +57,7 @@ interface Tab {
   code: string | null;
   state: "opening" | "open" | "exited" | "closed";
   note: string | null;
+  sessionId?: string;
 }
 
 export default function App() {
@@ -64,6 +67,7 @@ export default function App() {
   const [activeKey, setActiveKey] = useState<number | null>(null);
   const [paths, setPaths] = useState<Record<number, PathInfo>>({});
   const [requests, setRequests] = useState<IncomingRequest[]>([]);
+  const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
@@ -128,11 +132,20 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [activeTab?.connId, activeTab?.state]);
 
-  const addTab = (connId: number, info: RemoteInfo, code: string | null) => {
+  const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string) => {
+    const existing = sessionId ? tabs.find((t) => t.info.endpoint_id === info.endpoint_id && t.sessionId === sessionId && (t.state === "open" || t.state === "opening")) : null;
+    if (existing) {
+      if (existing.connId !== connId && !tabs.some((t) => t.connId === connId))
+        void api.disconnect(connId).catch((e) => toast.error(String(e)));
+      setActiveKey(existing.key); setSessionTarget(null); setShowSettings(false); return;
+    }
+    // A restored session gets a fresh view; remove the stale disconnected view of that same session.
+    setSessionTarget(null);
+    setShowSettings(false);
     const key = tabSeq.current++;
     setTabs((ts) => [
-      ...ts,
-      { key, connId, info, code, state: "opening", note: null },
+      ...ts.filter((t) => !sessionId || t.info.endpoint_id !== info.endpoint_id || t.sessionId !== sessionId),
+      { key, connId, info, code, state: "opening", note: null, sessionId },
     ]);
     setActiveKey(key);
   };
@@ -144,7 +157,13 @@ export default function App() {
     path: PathInfo,
   ) => {
     setPaths((m) => ({ ...m, [connId]: path }));
-    addTab(connId, info, code);
+    if (window.__ptTest) addTab(connId, info, code);
+    else {
+      if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((t) => t.connId === sessionTarget.connId))
+        void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
+      setSessionTarget({ connId, info, code });
+    }
+    setShowSettings(false);
     refresh();
     toast.success("已连接 " + info.name);
   };
@@ -170,10 +189,10 @@ export default function App() {
             ...t,
             state: "exited",
             note:
-              "程序已退出" +
+              "终端视图已结束" +
               (status.code != null ? "（退出码 " + status.code + "）" : ""),
           };
-        return { ...t, state: "closed", note: status.reason ?? "终端已关闭" };
+        return { ...t, state: "closed", note: status.reason ?? "已脱离会话" };
       }),
     );
   };
@@ -261,6 +280,27 @@ export default function App() {
           </div>
         )}
 
+        {showSettings && ov && (
+          <SettingsPage ov={ov} onClose={() => setShowSettings(false)} onChanged={refresh} />
+        )}
+        {!showSettings && sessionTarget && (
+          <RemoteSessions
+            key={sessionTarget.connId}
+            target={sessionTarget}
+            onOpen={(id) => addTab(sessionTarget.connId, sessionTarget.info, sessionTarget.code, id)}
+            onBack={() => {
+              if (!tabs.some((t) => t.connId === sessionTarget.connId))
+                void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
+              setSessionTarget(null);
+            }}
+            onEnded={(id) => {
+              const rest = tabs.filter((t) => t.info.endpoint_id !== sessionTarget.info.endpoint_id || t.sessionId !== id);
+              setTabs(rest);
+              if (!rest.some((t) => t.key === activeKey)) setActiveKey(rest.at(-1)?.key ?? null);
+            }}
+          />
+        )}
+        <div className="workspace-content" hidden={showSettings || !!sessionTarget}>
         {tabs.length > 0 ? (
           <Tabs
             selectedKey={String(activeKey)}
@@ -293,7 +333,7 @@ export default function App() {
                             aria-label={
                               "关闭终端 " + t.info.name + " #" + t.key
                             }
-                            title="关闭终端"
+                            title="关闭标签，保留后台会话"
                             onPress={() => closeTab(t.key)}
                           >
                             <X />
@@ -316,6 +356,11 @@ export default function App() {
                   ))}
                 </Tabs.List>
               </Tabs.ListContainer>
+              {activeTab && activeTab.state !== "closed" && (
+                <Button variant="ghost" size="icon-sm" aria-label="远程会话" title="查看和恢复远程会话" onClick={() => setSessionTarget(activeTab)}>
+                  <History />
+                </Button>
+              )}
               {activeTab && activeTab.state !== "closed" && (
                 <Button
                   variant="ghost"
@@ -341,12 +386,13 @@ export default function App() {
                 >
                   <TerminalView
                     connId={t.connId}
-                    active={t.key === activeKey}
-                    onReady={() =>
+                    sessionId={t.sessionId}
+                    active={!showSettings && !sessionTarget && t.key === activeKey}
+                    onReady={(_termId, sessionId) =>
                       setTabs((ts) =>
                         ts.map((x) =>
                           x.key === t.key && x.state === "opening"
-                            ? { ...x, state: "open" }
+                            ? { ...x, state: "open", sessionId }
                             : x,
                         ),
                       )
@@ -364,15 +410,23 @@ export default function App() {
                       <Card className="max-w-md">
                         <CardHeader>
                           <CardTitle>
-                            {t.state === "exited" ? "终端已结束" : "连接已断开"}
+                            {t.state === "exited" ? "已脱离终端" : "连接已断开"}
                           </CardTitle>
                         </CardHeader>
                         <CardContent>
                           <p className="text-muted-foreground break-words">
                             {t.note}
+                            <span className="mt-2 block text-xs">关闭标签不会结束后台会话。会话列表中可恢复仍在运行的会话。</span>
                           </p>
                         </CardContent>
                         <CardFooter className="justify-center gap-2">
+                          <Button
+                            onClick={() => t.state === "closed"
+                              ? void connection.doConnect(t.code ?? t.info.endpoint_id, "")
+                              : setSessionTarget(t)}
+                          >
+                            恢复会话
+                          </Button>
                           {t.state === "exited" && (
                             <Button
                               onClick={() => addTab(t.connId, t.info, t.code)}
@@ -403,14 +457,8 @@ export default function App() {
           />
         )}
 
+        </div>
       </main>
-      {showSettings && ov && (
-        <SettingsDialog
-          ov={ov}
-          onClose={() => setShowSettings(false)}
-          onChanged={refresh}
-        />
-      )}
       {showDiag && <DiagDialog onClose={() => setShowDiag(false)} />}
       {requests.length > 0 && (
         <ApproveDialog

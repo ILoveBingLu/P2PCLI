@@ -180,6 +180,8 @@ pub enum RdvStatus {
 }
 
 pub struct RdvClient {
+    task: Mutex<Option<tokio::task::AbortHandle>>,
+    proxy: Option<url::Url>,
     endpoint: Endpoint,
     server: RdvServer,
     me: DeviceInfo,
@@ -193,18 +195,21 @@ pub struct RdvClient {
 
 impl RdvClient {
     /// 起后台任务：连服务器、登记、定时报地址，断了自动重连
-    pub fn spawn(
+    pub fn prepare(
         endpoint: Endpoint,
         server: RdvServer,
         me: DeviceInfo,
         data_dir: &Path,
         pushes: mpsc::UnboundedSender<RdvPush>,
+        proxy: Option<url::Url>,
     ) -> Arc<Self> {
         let code_file = data_dir.join("device_code.txt");
         let cached = std::fs::read_to_string(&code_file)
             .ok()
             .and_then(|s| normalize_code(&s));
         let this = Arc::new(Self {
+            proxy,
+            task: Mutex::new(None),
             endpoint,
             server,
             me,
@@ -215,8 +220,22 @@ impl RdvClient {
             last_addr: Mutex::new(None),
             pushes,
         });
-        tokio::spawn(this.clone().maintain());
         this
+    }
+
+    pub fn activate(self: &Arc<Self>) {
+        let mut task = self.task.lock().unwrap();
+        if task.is_none() { *task = Some(tokio::spawn(self.clone().maintain()).abort_handle()); }
+    }
+
+    pub async fn stop(&self) {
+        if let Some(task) = self.task.lock().unwrap().take() { task.abort(); }
+        if let Some(link) = self.link.lock().await.take() {
+            match link {
+                Link::Quic(c) => c.close(0u32.into(), b"configuration changed"),
+                Link::Ws(w) => w.close(),
+            }
+        }
     }
 
     pub fn code(&self) -> Option<String> {
@@ -282,7 +301,7 @@ impl RdvClient {
             RdvServer::Ws(url) => {
                 let link = timeout(
                     Duration::from_secs(20),
-                    WsLink::connect(url, self.endpoint.secret_key(), self.pushes.clone()),
+                    WsLink::connect(url, self.endpoint.secret_key(), self.pushes.clone(), self.proxy.as_ref()),
                 )
                 .await
                 .map_err(|_| anyhow!("连接牵线服务器超时"))??;

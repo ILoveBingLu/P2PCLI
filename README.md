@@ -109,9 +109,11 @@ pnpm run build --bundles nsis       # Windows 正式包
 
 界面使用 [HeroUI v3](https://heroui.com/)、Tailwind CSS v4 和 [Lucide](https://lucide.dev/) 图标，采用深色桌面工作区布局。按钮、输入框、卡片、弹窗、标签页、复选框、通知和悬停提示使用 HeroUI；应用尺寸与语义样式封装位于 `app/src/components/ui`，主题与布局样式位于 `app/src/styles.css`。聚焦时不显示额外光圈，保留键盘交互和表单错误提示。
 
-基础控件使用 HeroUI 默认深色主题、圆角、尺寸和交互样式；封装只适配业务属性和布局，不重新绘制控件。设置弹窗内的输入框使用库自带的 `secondary` 变体，与弹窗底色区分。
+基础控件使用 HeroUI 默认深色主题、圆角、尺寸和交互样式；封装只适配业务属性和布局，不重新绘制控件。设置页内的输入框使用库自带的 `secondary` 变体，与弹窗底色区分。
 
-Windows 和 macOS 都使用单行自定义标题栏，网络诊断和设置保留在标题栏内。Windows 接入 [tauri-plugin-window-controls](https://github.com/insd47/tauri-plugin-window-controls) 0.2.1：控件由 Win32 子窗口承载，使用系统图标字体绘制并发送系统窗口命令，支持 Windows 11 贴靠布局；它并非直接复用 DWM 默认标题栏按钮。macOS 使用覆盖式标题栏及系统红黄绿按钮。关闭窗口仍隐藏到托盘。
+Windows 和 macOS 都使用单行自定义标题栏，网络诊断和设置保留在标题栏内。Windows 接入 [tauri-plugin-window-controls](https://github.com/insd47/tauri-plugin-window-controls) 0.2.1（通过仓库内 `vendor/tauri-plugin-window-controls` 补丁修正图标灰度并取消失焦淡化，保留原 MIT 许可）：控件由 Win32 子窗口承载，使用系统图标字体绘制并发送系统窗口命令，支持 Windows 11 贴靠布局；它并非直接复用 DWM 默认标题栏按钮。macOS 使用覆盖式标题栏及系统红黄绿按钮，纵向位置设为 22，与 44 逻辑像素标题栏中线对齐。关闭窗口仍隐藏到托盘。
+
+点击标题栏齿轮进入主区域的设置页，返回工作区时已有终端会话保持运行。“代理设置”分类中可启用 HTTP 代理，例如 `http://127.0.0.1:7890`（使用代理软件的 HTTP 或混合端口）。代理用于 WebSocket 牵线和 HTTP(S) 中继；UDP 牵线、点对点直连不经过该代理。暂不支持 SOCKS5、HTTPS 代理或账号密码认证，也不会自动读取系统代理。保存后即时应用，不必重启应用。设备名、牵线地址变更保留当前终端连接；代理或中继变更会重建网络端点，需重新连接远端，但后台终端会话继续运行。环境变量指定的服务器/中继仍优先于设置页。
 
 平台窗口配置分别位于 `app/src-tauri/tauri.windows.conf.json` 和 `app/src-tauri/tauri.macos.conf.json`；窗口数组会整体覆盖主配置，调整窗口尺寸时需同步。Windows 主窗口由 Rust setup 通过插件 builder 创建，标题栏高度为 44 逻辑像素，前端右侧预留 140 像素容纳三个按钮和 DPI 舍入。`windows-app-manifest.xml` 提供分层子窗口需要的系统兼容声明。
 
@@ -169,3 +171,18 @@ p2pcli-dev --server <公钥@IP:端口> connect <设备码> --password abc234 --r
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。
+
+
+### 终端会话保持
+
+桌面端终端由被连设备上的独立后台进程托管：macOS/Linux 使用 tmux，Windows 使用原生 ConPTY 的 [psmux](https://github.com/psmux/psmux)，不需要 WSL。
+
+- macOS 被连设备先安装 `brew install tmux`。支持 Homebrew 的 Intel 和 Apple Silicon 默认路径。
+- Windows 被连设备先安装 `winget install psmux`，或将官方便携版 `psmux.exe` 加入 PATH；也支持 `%LOCALAPPDATA%\P2PCLI\tools\psmux-3.4.0\psmux.exe`。当前按 psmux 3.4.0 接口验证。
+- 连接设备后显示后台会话列表，可新建、恢复或明确结束会话；终端工具栏的会话按钮可再次打开列表。
+- 断线、关闭标签和退出 P2PCLI 只断开附着客户端。再次连接同一设备，可恢复原进程、工作目录、变量和终端画面。
+- 点击“结束会话”并确认，或者在 shell 内执行 `exit`，才会结束该会话。系统重启、注销或后台 tmux/psmux 服务被结束仍会使进程退出。
+- 会话按双方设备公钥隔离；重连仍需要正常认证。不要删除设备密钥，否则新身份不能恢复旧身份的会话。
+- 协议已升级到 v2，连接双方需要一起更新。开发用一次性 CLI 命令使用临时终端并保留真实退出码，不创建后台会话。
+
+预览页 `preview.html?s=sessions` 提供后台会话模拟数据。真实会话恢复回归用例为 `persistent_session_survives_disconnect_and_host_restart`，需要已安装 tmux/psmux，默认忽略，开发者可显式运行；测试会起独立的测试命名空间。

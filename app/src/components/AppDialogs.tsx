@@ -2,25 +2,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Check,
-  Globe2,
   Laptop,
   LoaderCircle,
   Radio,
   RefreshCw,
-  Settings2,
   ShieldAlert,
   ShieldCheck,
-  Trash2,
 } from "lucide-react";
-import { Tabs, Checkbox, Description } from "@heroui/react";
-import { toast } from "@/components/ui/toast";
+import { Checkbox, Description } from "@heroui/react";
 import {
   api,
   platformLabel,
   type Diagnosis,
   type IncomingRequest,
-  type Overview,
-  type SettingsView,
 } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -43,19 +37,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import {
-  Field,
-  FieldDescription,
   FieldGroup,
-  FieldLabel,
 } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 
 export function ApproveDialog({
@@ -313,237 +296,6 @@ export function DiagDialog({ onClose }: { onClose: () => void }) {
             {busy ? "检测中…" : "重新检测"}
           </Button>
           <Button onClick={onClose}>完成</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function SettingsDialog({
-  ov,
-  onClose,
-  onChanged,
-}: {
-  ov: Overview;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const [settings, setSettings] = useState<SettingsView | null>(null);
-  const [server, setServer] = useState("");
-  const [relay, setRelay] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const value = await api.getSettings();
-      setSettings(value);
-      setServer(value.server ?? "");
-      setRelay(value.relay ?? "");
-      setName(value.device_name ?? "");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-  useEffect(() => {
-    void load();
-  }, [load]);
-  const save = async () => {
-    if (!settings || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await api.saveSettings(server, name, relay);
-      await api.restart();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const removeTrusted = async (id: string) => {
-    setRemoving(id);
-    try {
-      await api.removeTrusted(id);
-      onChanged();
-      toast.success("已移除受信设备");
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setRemoving(null);
-    }
-  };
-  return (
-    <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-      <DialogContent className="dialog-wide">
-        <DialogHeader>
-          <div className="dialog-symbol">
-            <Settings2 />
-          </div>
-          <DialogTitle>设置</DialogTitle>
-          <DialogDescription>
-            管理本机信息、连接服务器和受信设备。
-          </DialogDescription>
-        </DialogHeader>
-        <Tabs defaultSelectedKey="general">
-          <Tabs.List aria-label="设置分类" className="w-full">
-            <Tabs.Tab id="general">
-              <Globe2 />
-              连接设置
-              <Tabs.Indicator />
-            </Tabs.Tab>
-            <Tabs.Tab id="trusted">
-              <ShieldCheck />
-              受信设备（{ov.trusted.length}）
-              <Tabs.Indicator />
-            </Tabs.Tab>
-          </Tabs.List>
-          <div className="dialog-scroll">
-            <Tabs.Panel id="general" className="pt-5">
-              {loading ? (
-                <div className="loading-state" role="status">
-                  <LoaderCircle className="animate-spin" />
-                  正在读取设置…
-                </div>
-              ) : !settings ? (
-                <Button variant="outline" onClick={load}>
-                  重新加载设置
-                </Button>
-              ) : (
-                <FieldGroup className="gap-5">
-                  <Field data-disabled={saving}>
-                    <FieldLabel htmlFor="device-name">设备名称</FieldLabel>
-                    <Input
-                      id="device-name"
-                      variant="secondary"
-                      value={name}
-                      placeholder={ov.name}
-                      onChange={(e) => setName(e.target.value)}
-                      disabled={saving}
-                    />
-                    <FieldDescription>
-                      对方看到的名称，留空使用电脑名称。
-                    </FieldDescription>
-                  </Field>
-                  <Field data-disabled={saving}>
-                    <FieldLabel htmlFor="server-address">牵线服务器</FieldLabel>
-                    <Input
-                      id="server-address"
-                      variant="secondary"
-                      value={server}
-                      placeholder={
-                        settings.effective_server ??
-                        "公钥@IP:端口 或 wss://域名"
-                      }
-                      onChange={(e) => setServer(e.target.value)}
-                      spellCheck={false}
-                      disabled={saving}
-                    />
-                    <FieldDescription>
-                      公钥@IP:端口 走 UDP，wss://域名 走
-                      WebSocket。留空使用默认配置。
-                    </FieldDescription>
-                  </Field>
-                  <Field data-disabled={saving}>
-                    <FieldLabel htmlFor="relay-address">中继服务器</FieldLabel>
-                    <Input
-                      id="relay-address"
-                      variant="secondary"
-                      value={relay}
-                      placeholder={
-                        settings.effective_relay ?? "https://relay.example.com"
-                      }
-                      onChange={(e) => setRelay(e.target.value)}
-                      spellCheck={false}
-                      disabled={saving}
-                    />
-                    <FieldDescription>
-                      直连失败时转发加密数据，多个地址用逗号分隔。
-                    </FieldDescription>
-                  </Field>
-                  <Separator />
-                  <div className="settings-details">
-                    <span>数据目录</span>
-                    <code>{settings.data_dir}</code>
-                    <span>本机公钥</span>
-                    <code>{ov.endpoint_id}</code>
-                  </div>
-                </FieldGroup>
-              )}
-            </Tabs.Panel>
-            <Tabs.Panel id="trusted" className="pt-5">
-              <p className="detail-note mb-4">
-                受信设备连接本机时无需密码和确认。移除后，再次连接需要重新授权。
-              </p>
-              {ov.trusted.length === 0 ? (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <ShieldCheck />
-                    </EmptyMedia>
-                    <EmptyTitle>暂无受信设备</EmptyTitle>
-                    <EmptyDescription>
-                      在收到连接请求时，可以选择信任自己的设备。
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : (
-                <div className="trusted-list">
-                  {ov.trusted.map((device) => (
-                    <div className="trusted-device" key={device.endpoint_id}>
-                      <div className="device-symbol">
-                        <Laptop />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <strong className="block truncate">
-                          {device.name}
-                        </strong>
-                        <span>{platformLabel(device.platform)}</span>
-                      </div>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        disabled={removing !== null}
-                        onClick={() => removeTrusted(device.endpoint_id)}
-                      >
-                        {removing === device.endpoint_id ? (
-                          <LoaderCircle
-                            data-icon="inline-start"
-                            className="animate-spin"
-                          />
-                        ) : (
-                          <Trash2 data-icon="inline-start" />
-                        )}
-                        移除
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Tabs.Panel>
-          </div>
-        </Tabs>
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
-            取消
-          </Button>
-          <Button onClick={save} disabled={loading || !settings || saving}>
-            {saving && (
-              <LoaderCircle data-icon="inline-start" className="animate-spin" />
-            )}
-            保存并重启
-          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -3754,6 +3754,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "url",
  "webpki-roots",
  "whoami",
 ]
@@ -5552,8 +5553,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-window-controls"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0107521e2c0957cdf38dbc3bbf3e2d4e3ecc44c4f9e7afa4761ee13a36a3ea1e"
 dependencies = [
  "tauri",
  "windows-sys 0.61.2",

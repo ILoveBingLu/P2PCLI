@@ -60,12 +60,19 @@ pub enum Msg {
     },
     /// 开一个终端
     Open {
+        persistent: bool,
+        session_id: Option<String>,
         cols: u16,
         rows: u16,
     },
     Opened {
         shell: String,
+        session_id: String,
     },
+    ListTerminals,
+    Terminals { sessions: Vec<TerminalSession> },
+    EndTerminal { session_id: String },
+    TerminalEnded,
     Resize {
         cols: u16,
         rows: u16,
@@ -77,6 +84,13 @@ pub enum Msg {
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TerminalSession {
+    pub id: String,
+    pub created_at: u64,
+    pub attached: bool,
 }
 
 #[derive(Debug, PartialEq)]

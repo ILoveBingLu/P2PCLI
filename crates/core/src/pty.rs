@@ -56,7 +56,7 @@ fn which(exe: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 连接断了或出错时保证子进程被结束
+/// 断线时结束当前附着客户端；tmux/psmux 后台会话由独立进程持有。
 struct KillGuard {
     killer: Box<dyn ChildKiller + Send + Sync>,
     armed: bool,
@@ -72,16 +72,35 @@ impl Drop for KillGuard {
 
 type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
 
+struct InputGuard(tokio::task::AbortHandle, SharedMaster);
+
+impl Drop for InputGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+        self.1.lock().unwrap().take();
+    }
+}
+
 /// 起终端并在 recv/send 上跑到结束。调用前对面已经发过 Open。
-pub async fn serve_terminal<R, W>(mut recv: R, mut send: W, cols: u16, rows: u16) -> Result<()>
+pub async fn serve_terminal<R, W>(recv: R, send: W, cols: u16, rows: u16) -> Result<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send,
 {
+    let (cmd, shell) = shell_command();
+    serve_command(recv, send, cols, rows, cmd, shell, String::new()).await
+}
+
+pub async fn serve_session<R, W>(recv: R, send: W, cols: u16, rows: u16, cmd: CommandBuilder, session_id: String) -> Result<()>
+where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
+    serve_command(recv, send, cols, rows, cmd, if cfg!(windows) { "psmux" } else { "tmux" }.into(), session_id).await
+}
+
+async fn serve_command<R, W>(mut recv: R, mut send: W, cols: u16, rows: u16, cmd: CommandBuilder, shell: String, session_id: String) -> Result<()>
+where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
     let pair = native_pty_system()
         .openpty(size(cols, rows))
         .context("打开终端失败")?;
-    let (cmd, shell) = shell_command();
     let mut child = pair.slave.spawn_command(cmd).context("启动 shell 失败")?;
     tracing::debug!(pid = ?child.process_id(), %shell, "终端已启动");
     drop(pair.slave);
@@ -93,7 +112,7 @@ where
     let mut writer = pair.master.take_writer()?;
     let master: SharedMaster = Arc::new(Mutex::new(Some(pair.master)));
 
-    write_msg(&mut send, &Msg::Opened { shell }).await?;
+    write_msg(&mut send, &Msg::Opened { shell, session_id }).await?;
 
     // 终端输出：阻塞读放在独立线程
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
@@ -150,6 +169,8 @@ where
         }
     });
 
+    // Also release the input task and PTY when an output write fails on disconnect.
+    let _input_guard = InputGuard(input.abort_handle(), master.clone());
     let mut exit_code = None;
     let mut exited = false;
     let mut input_done = false;
@@ -173,7 +194,7 @@ where
                 deadline = Some(Instant::now() + DRAIN_AFTER_EXIT);
             }
             _ = &mut input, if !input_done => {
-                // 对面把终端关了
+                // 对面脱离终端：只结束 attach 客户端，后台会话继续运行。
                 input_done = true;
                 let _ = guard.killer.kill();
             }
@@ -216,7 +237,7 @@ mod tests {
         let task = tokio::spawn(serve_terminal(srv_r, srv_w, 100, 30));
         let (mut cr, mut cw) = tokio::io::split(client);
 
-        let Msg::Opened { shell } = read_msg(&mut cr).await.unwrap() else {
+        let Msg::Opened { shell, .. } = read_msg(&mut cr).await.unwrap() else {
             panic!("没收到 Opened");
         };
         assert!(!shell.is_empty());

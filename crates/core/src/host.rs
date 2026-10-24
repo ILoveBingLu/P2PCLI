@@ -18,7 +18,8 @@ use tracing::{debug, info, warn};
 use crate::PROTO_VERSION;
 use crate::identity::DeviceInfo;
 use crate::proto::{Msg, RejectCode, read_frame, read_msg, write_msg};
-use crate::pty::serve_terminal;
+use crate::pty::{serve_session, serve_terminal};
+use crate::sessions::SessionManager;
 use crate::store::TrustStore;
 
 /// 弹窗最多等多久
@@ -158,7 +159,8 @@ fn clean_name(s: &str) -> String {
 }
 
 pub struct Host {
-    me: DeviceInfo,
+    me: RwLock<DeviceInfo>,
+    pub terminals: SessionManager,
     password: RwLock<String>,
     pub trust: TrustStore,
     limiter: Mutex<Limiter>,
@@ -168,9 +170,10 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(me: DeviceInfo, data_dir: &Path, delegate: Arc<dyn HostDelegate>) -> Self {
+    pub fn new(me: DeviceInfo, data_dir: &Path, local_key: &str, delegate: Arc<dyn HostDelegate>) -> Self {
         Self {
-            me,
+            me: RwLock::new(me),
+            terminals: SessionManager::new(local_key),
             password: RwLock::new(generate_password()),
             trust: TrustStore::open(data_dir),
             limiter: Mutex::new(Limiter::default()),
@@ -179,6 +182,8 @@ impl Host {
             delegate,
         }
     }
+
+    pub fn set_info(&self, me: DeviceInfo) { *self.me.write().unwrap() = me; }
 
     pub fn password(&self) -> String {
         self.password.read().unwrap().clone()
@@ -305,12 +310,13 @@ impl Host {
             }
         }
 
+        let me = self.me.read().unwrap().clone();
         write_msg(
             &mut send,
             &Msg::Welcome {
-                name: self.me.name.clone(),
-                platform: self.me.platform.clone(),
-                user: self.me.user.clone(),
+                name: me.name,
+                platform: me.platform,
+                user: me.user,
             },
         )
         .await?;
@@ -348,7 +354,7 @@ impl Host {
                 bi = conn.accept_bi() => match bi {
                     Ok((s, r)) => {
                         let me = self.clone();
-                        tokio::spawn(async move { me.terminal(session, s, r).await });
+                        tokio::spawn(async move { me.terminal(session, remote.to_string(), s, r).await });
                     }
                     Err(_) => break,
                 },
@@ -363,19 +369,47 @@ impl Host {
         Ok(())
     }
 
-    async fn terminal(self: Arc<Self>, session: u64, mut send: SendStream, mut recv: RecvStream) {
-        let (cols, rows) = match timeout(Duration::from_secs(10), read_msg(&mut recv)).await {
-            Ok(Ok(Msg::Open { cols, rows })) => (cols, rows),
+    async fn terminal(self: Arc<Self>, session: u64, owner: String, mut send: SendStream, mut recv: RecvStream) {
+        let request = match timeout(Duration::from_secs(10), read_msg(&mut recv)).await {
+            Ok(Ok(msg)) => msg,
             _ => return,
         };
-        self.bump_terminals(session, 1);
-        self.delegate.event(HostEvent::TerminalOpened { session });
-        if let Err(e) = serve_terminal(recv, &mut send, cols, rows).await {
-            debug!(session, "终端结束：{e:#}");
+        let result: Result<()> = async {
+            match request {
+                Msg::ListTerminals => {
+                    let sessions = self.terminals.list(&owner).await?;
+                    write_msg(&mut send, &Msg::Terminals { sessions }).await?;
+                }
+                Msg::EndTerminal { session_id } => {
+                    self.terminals.end(&owner, &session_id).await?;
+                    write_msg(&mut send, &Msg::TerminalEnded).await?;
+                }
+                Msg::Open { cols, rows, session_id, persistent } => {
+                    let attachment = if persistent {
+                        Some(self.terminals.attach(&owner, session_id.as_deref(), cols, rows).await?)
+                    } else {
+                        if session_id.is_some() { bail!("临时终端不能恢复后台会话"); }
+                        None
+                    };
+                    self.bump_terminals(session, 1);
+                    self.delegate.event(HostEvent::TerminalOpened { session });
+                    let result = match attachment {
+                        Some((cmd, id)) => serve_session(recv, &mut send, cols, rows, cmd, id).await,
+                        None => serve_terminal(recv, &mut send, cols, rows).await,
+                    };
+                    self.bump_terminals(session, -1);
+                    self.delegate.event(HostEvent::TerminalClosed { session });
+                    result?;
+                }
+                _ => bail!("不支持的会话操作"),
+            }
+            Ok(())
+        }.await;
+        if let Err(e) = result {
+            debug!(session, "会话操作失败：{e:#}");
             let _ = write_msg(&mut send, &Msg::Error { message: format!("{e:#}") }).await;
         }
-        self.bump_terminals(session, -1);
-        self.delegate.event(HostEvent::TerminalClosed { session });
+        let _ = send.finish();
     }
 
     fn bump_terminals(&self, session: u64, delta: i32) {

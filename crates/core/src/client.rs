@@ -13,7 +13,7 @@ use tokio::time::timeout;
 use crate::host::APPROVE_TIMEOUT;
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{Frame, Msg, RejectCode, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
 #[derive(Debug)]
@@ -120,13 +120,48 @@ pub async fn handshake(
 
 impl RemoteHost {
     pub async fn open_terminal(&self, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
+        self.attach_terminal(None, cols, rows).await
+    }
+
+    pub async fn attach_terminal(&self, session_id: Option<String>, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
+        self.open(true, session_id, cols, rows).await
+    }
+
+    /// One-shot CLI commands retain the shell's exit code and do not leave background sessions.
+    pub async fn open_ephemeral_terminal(&self, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
+        self.open(false, None, cols, rows).await
+    }
+
+    async fn open(&self, persistent: bool, session_id: Option<String>, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
         let (mut send, mut recv) = self.conn.open_bi().await?;
-        write_msg(&mut send, &Msg::Open { cols, rows }).await?;
-        match timeout(Duration::from_secs(15), read_msg(&mut recv)).await?? {
-            Msg::Opened { shell } => Ok((TermInput { send }, TermOutput { recv, shell })),
+        write_msg(&mut send, &Msg::Open { persistent, cols, rows, session_id }).await?;
+        match timeout(Duration::from_secs(35), read_msg(&mut recv)).await?? {
+            Msg::Opened { shell, session_id } => Ok((TermInput { send }, TermOutput { recv, shell, session_id })),
             Msg::Error { message } => bail!("对方开终端失败：{message}"),
             other => bail!("意外的回复：{other:?}"),
         }
+    }
+
+    pub async fn list_terminals(&self) -> Result<Vec<TerminalSession>> {
+        match self.session_request(Msg::ListTerminals).await? {
+            Msg::Terminals { sessions } => Ok(sessions),
+            other => bail!("读取会话失败：{other:?}"),
+        }
+    }
+
+    pub async fn end_terminal(&self, session_id: String) -> Result<()> {
+        match self.session_request(Msg::EndTerminal { session_id }).await? {
+            Msg::TerminalEnded => Ok(()),
+            other => bail!("结束会话失败：{other:?}"),
+        }
+    }
+
+    async fn session_request(&self, msg: Msg) -> Result<Msg> {
+        let (mut send, mut recv) = self.conn.open_bi().await?;
+        write_msg(&mut send, &msg).await?;
+        let reply = timeout(Duration::from_secs(20), read_msg(&mut recv)).await??;
+        if let Msg::Error { message } = reply { bail!("{message}"); }
+        Ok(reply)
     }
 
     pub fn path(&self) -> PathInfo {
@@ -177,7 +212,7 @@ impl TermInput {
         write_msg(&mut self.send, &Msg::Resize { cols, rows }).await
     }
 
-    /// 关输入；对面会结束这个终端
+    /// 关闭当前附着；后台会话继续运行。
     pub fn close(&mut self) {
         let _ = self.send.finish();
     }
@@ -198,6 +233,7 @@ pub enum TermEvent {
 pub struct TermOutput {
     recv: RecvStream,
     pub shell: String,
+    pub session_id: String,
 }
 
 impl TermOutput {

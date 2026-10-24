@@ -6,7 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import type { TermStatus } from "./api";
+import type { TermStatus, OpenedTerminal } from "./api";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -35,12 +35,13 @@ const theme = {
 
 interface Props {
   connId: number;
+  sessionId?: string;
   active: boolean;
   onStatus: (s: TermStatus) => void;
-  onReady: (termId: number) => void;
+  onReady: (termId: number, sessionId: string) => void;
 }
 
-export function TerminalView({ connId, active, onStatus, onReady }: Props) {
+export function TerminalView({ connId, sessionId, active, onStatus, onReady }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -107,14 +108,14 @@ export function TerminalView({ connId, active, onStatus, onReady }: Props) {
     const status = new Channel<TermStatus>();
     status.onmessage = (s) => cb.current.onStatus(s);
 
-    invoke<number>("open_terminal", { connId, cols: term.cols, rows: term.rows, output, status })
-      .then((id) => {
+    invoke<OpenedTerminal>("open_terminal", { connId, sessionId: sessionId ?? null, cols: term.cols, rows: term.rows, output, status })
+      .then(({ term_id: id, session_id }) => {
         if (disposed) {
           invoke("term_close", { termId: id });
           return;
         }
         termId = id;
-        cb.current.onReady(id);
+        cb.current.onReady(id, session_id);
         // 打开期间窗口可能变过大小
         invoke("term_resize", { termId: id, cols: term.cols, rows: term.rows });
       })
@@ -142,6 +143,7 @@ export function TerminalView({ connId, active, onStatus, onReady }: Props) {
       if (termId != null) invoke("term_close", { termId });
       term.dispose();
     };
+  // sessionId identifies this attachment at mount; onReady publishes the assigned ID.
   }, [connId]);
 
   useEffect(() => {

@@ -105,7 +105,7 @@ async fn ipv6_first_dial_with_punch() {
     assert_eq!(host.punches.load(Ordering::Relaxed), 1, "被连方没收到发包请求");
 
     // 终端能用
-    let (mut input, mut output) = remote.open_terminal(80, 24).await.unwrap();
+    let (mut input, mut output) = remote.open_ephemeral_terminal(80, 24).await.unwrap();
     input.write(b"echo v6-direct-ok; exit\r").await.unwrap();
     let mut text = String::new();
     while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(20), output.next()).await.unwrap() {

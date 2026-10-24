@@ -136,6 +136,7 @@ async fn main() -> Result<()> {
             bind_ip: cli.bind_ip,
             relays: cli.relay.clone(),
             offline: false,
+            proxy: None,
         },
         Arc::new(CliDelegate { approve }),
     )
@@ -218,7 +219,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_once(remote: &RemoteHost, cmd: &str) -> Result<Option<u32>> {
-    let (mut input, mut output) = remote.open_terminal(120, 40).await?;
+    let (mut input, mut output) = remote.open_ephemeral_terminal(120, 40).await?;
     eprintln!("对面 shell：{}", output.shell);
     input.write(format!("{cmd}\r").as_bytes()).await?;
     input.write(b"exit\r").await?;

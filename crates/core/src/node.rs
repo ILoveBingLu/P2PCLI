@@ -31,6 +31,8 @@ pub struct NodeConfig {
     pub device_name: Option<String>,
     /// 牵线服务器，见 [`parse_rdv_server`]
     pub server: Option<String>,
+    /// HTTP proxy for WebSocket rendezvous and HTTP(S) relay traffic.
+    pub proxy: Option<String>,
     /// 测试中继用：完全不走直连
     pub relay_only: bool,
     /// 测试打洞用：只绑这个本机地址（比如绕开隧道网卡）
@@ -42,24 +44,55 @@ pub struct NodeConfig {
 }
 
 pub struct Node {
+    config: NodeConfig,
     pub endpoint: Endpoint,
     pub me: DeviceInfo,
     pub host: Arc<Host>,
     pub rdv: Option<Arc<RdvClient>>,
-    pub recent: RecentStore,
+    pub recent: Arc<RecentStore>,
     /// 配合对方 IPv6 直连发过几次包，排查和测试用
     pub punches: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Node {
     pub async fn start(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>) -> Result<Arc<Self>> {
+        let node = Self::prepare(cfg, delegate, None, None, None).await?;
+        node.activate();
+        Ok(node)
+    }
+
+    pub fn transport_changed(&self, cfg: &NodeConfig) -> bool {
+        self.config.proxy != cfg.proxy || self.config.relays != cfg.relays ||
+        self.config.bind_ip != cfg.bind_ip || self.config.offline != cfg.offline || self.config.relay_only != cfg.relay_only
+    }
+
+    pub async fn prepare_update(&self, cfg: NodeConfig, delegate: Arc<dyn HostDelegate>) -> Result<Arc<Self>> {
+        let endpoint = if self.transport_changed(&cfg) { None } else { Some(self.endpoint.clone()) };
+        Self::prepare(cfg, delegate, Some(self.host.clone()), endpoint, Some(self.recent.clone())).await
+    }
+
+    pub fn activate(&self) {
+        self.host.set_info(self.me.clone());
+        if let Some(rdv) = &self.rdv { rdv.activate(); }
+    }
+
+    pub async fn stop_rendezvous(&self) {
+        if let Some(rdv) = &self.rdv { rdv.stop().await; }
+    }
+
+    async fn prepare(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>, shared_host: Option<Arc<Host>>, existing_endpoint: Option<Endpoint>, recent: Option<Arc<RecentStore>>) -> Result<Arc<Self>> {
         std::fs::create_dir_all(&cfg.data_dir)
             .with_context(|| format!("建数据目录失败：{}", cfg.data_dir.display()))?;
+        let server = cfg.server.as_deref().filter(|s| !s.trim().is_empty()).map(parse_rdv_server).transpose()?;
         let key = load_or_create_key(&cfg.data_dir)?;
+        let proxy = cfg.proxy.as_deref().map(crate::proxy::parse_proxy).transpose()?;
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(key)
             .alpns(vec![ALPN_TERM.to_vec()])
             .path_selector(std::sync::Arc::new(crate::path::Ipv6First));
+        if let Some(proxy) = &proxy {
+            builder = builder.proxy_url(proxy.clone());
+        }
         if cfg.relay_only {
             builder = builder.clear_ip_transports();
         }
@@ -81,10 +114,15 @@ impl Node {
                 .bind_addr(std::net::SocketAddr::new(ip, 0))
                 .map_err(|e| anyhow!("绑定地址不对：{e}"))?;
         }
-        let endpoint = builder.bind().await.context("启动网络失败")?;
+        let start_accept = existing_endpoint.is_none();
+        let endpoint = match existing_endpoint {
+            Some(endpoint) => endpoint,
+            None => builder.bind().await.context("启动网络失败")?,
+        };
         let me = DeviceInfo::local(cfg.device_name.clone());
-        let host = Arc::new(Host::new(me.clone(), &cfg.data_dir, delegate));
+        let host = shared_host.unwrap_or_else(|| Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), delegate)));
 
+        if start_accept {
         let ep = endpoint.clone();
         let h = host.clone();
         tokio::spawn(async move {
@@ -105,14 +143,17 @@ impl Node {
             }
         });
 
+        }
+
         let (push_tx, push_rx) = mpsc::unbounded_channel();
-        let rdv = match cfg.server.as_deref().filter(|s| !s.trim().is_empty()) {
-            Some(s) => Some(RdvClient::spawn(
+        let rdv = match server {
+            Some(s) => Some(RdvClient::prepare(
                 endpoint.clone(),
-                parse_rdv_server(s)?,
+                s,
                 me.clone(),
                 &cfg.data_dir,
                 push_tx,
+                proxy,
             )),
             None => None,
         };
@@ -124,7 +165,8 @@ impl Node {
             me,
             host,
             rdv,
-            recent: RecentStore::open(&cfg.data_dir),
+            recent: recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir))),
+            config: cfg,
             punches,
         }))
     }
@@ -241,6 +283,7 @@ impl Node {
     }
 
     pub async fn shutdown(&self) {
+        self.stop_rendezvous().await;
         self.host.kick_all();
         self.endpoint.close().await;
     }

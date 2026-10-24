@@ -15,6 +15,14 @@ export interface RemoteInfo {
   user: string;
 }
 
+export interface TerminalSession {
+  id: string;
+  created_at: number;
+  attached: boolean;
+}
+
+export interface OpenedTerminal { term_id: number; session_id: string }
+
 export interface Connected {
   conn_id: number;
   code: string | null;
@@ -87,6 +95,7 @@ export type HostEvent =
 export type TermStatus = { type: "exited"; code: number | null } | { type: "closed"; reason: string | null };
 
 export interface SettingsView {
+  proxy: string | null;
   server: string | null;
   device_name: string | null;
   relay: string | null;
@@ -121,9 +130,11 @@ export const api = {
   connect: (target: string, password: string | null) => invoke<Connected>("connect", { target, password }),
   disconnect: (connId: number) => invoke("disconnect", { connId }),
   pathInfo: (connId: number) => invoke<PathInfo>("path_info", { connId }),
+  listTerminals: (connId: number) => invoke<TerminalSession[]>("list_terminals", { connId }),
+  endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
-  saveSettings: (server: string | null, deviceName: string | null, relay: string | null) =>
-    invoke("save_settings", { server, deviceName, relay }),
+  saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null) =>
+    invoke("save_settings", { server, deviceName, relay, proxy }),
   restart: () => invoke("restart"),
 };
 

@@ -1,7 +1,7 @@
 // 开发用：浏览器里假数据渲染界面，看排版。不进正式包。
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Overview } from "./api";
+import type { Overview, SettingsView, TerminalSession } from "./api";
 
 const s = new URLSearchParams(location.search).get("s") ?? "empty";
 
@@ -29,7 +29,14 @@ if (s === "unconfigured") {
   ov.recent = [];
 }
 if (s === "offline") ov.server = { state: "offline", error: "无法连接牵线服务器" };
+const previewSettings: SettingsView = {
+  server: null, device_name: null, relay: null, proxy: null,
+  effective_relay: null, effective_server: "wss://p2pcli.yscopy.cn",
+  data_dir: "~/Library/Application Support/io.github.ilovebinglu.p2pcli",
+};
 let termSeq = 0;
+const terminalSessions: TerminalSession[] = s === "sessions" ? [{ id: "a".repeat(32), created_at: Math.floor(Date.now() / 1000) - 3600, attached: false }] : [];
+const attachments = new Map<number, { sessionId: string; status: any }>();
 
 const sample = [
   "\x1b[1;32mme@studio\x1b[0m \x1b[1;34m~\x1b[0m % claude\r\n",
@@ -63,10 +70,34 @@ mockIPC(
             600,
           ),
         );
-      case "open_terminal":
+      case "list_terminals":
+        return terminalSessions.map((session) => ({ ...session }));
+      case "end_terminal": {
+        const index = terminalSessions.findIndex((session) => session.id === args.sessionId);
+        if (index >= 0) terminalSessions.splice(index, 1);
+        for (const [id, attachment] of attachments) {
+          if (attachment.sessionId === args.sessionId) { attachment.status.onmessage({ type: "exited", code: 0 }); attachments.delete(id); }
+        }
+        return null;
+      }
+      case "open_terminal": {
+        let session = terminalSessions.find((session) => session.id === args.sessionId);
+        if (!session && args.sessionId) return Promise.reject("会话已结束");
+        if (!session) { session = { id: crypto.randomUUID().replaceAll("-", ""), created_at: Math.floor(Date.now() / 1000), attached: true }; terminalSessions.push(session); }
+        session.attached = true;
+        const termId = ++termSeq;
+        attachments.set(termId, { sessionId: session.id, status: args.status });
         ((window as any).__outs ??= []).push(args.output);
         setTimeout(() => args.output.onmessage(new TextEncoder().encode(sample).buffer), 100);
-        return ++termSeq;
+        return { term_id: termId, session_id: session.id };
+      }
+      case "term_close": {
+        const attachment = attachments.get(args.termId);
+        attachments.delete(args.termId);
+        const session = terminalSessions.find((s) => s.id === attachment?.sessionId);
+        if (session) session.attached = [...attachments.values()].some((a) => a.sessionId === session.id);
+        return null;
+      }
       case "refresh_password":
         ov.password = ov.password === "ankab7" ? "h9km2p" : "ankab7";
         return ov.password;
@@ -82,7 +113,16 @@ mockIPC(
       case "path_info":
         return { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" };
       case "get_settings":
-        return { server: null, device_name: null, relay: null, effective_relay: null, effective_server: "<服务器公钥>@203.0.113.10:7788", data_dir: "~/Library/Application Support/io.github.ilovebinglu.p2pcli" };
+        return { ...previewSettings };
+      case "save_settings":
+        previewSettings.server = args.server?.trim() || null;
+        previewSettings.device_name = args.deviceName?.trim() || null;
+        previewSettings.relay = args.relay?.trim() || null;
+        previewSettings.proxy = args.proxy?.trim() || null;
+        ov.name = previewSettings.device_name ?? "我的 MacBook Pro";
+        return null;
+      case "restart":
+        return null;
       case "selftest_config":
         return null;
       case "diagnose":
