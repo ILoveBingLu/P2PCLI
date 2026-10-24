@@ -4,6 +4,7 @@
 //! 桌面端（Tauri）和开发用命令行都只调这里的接口。
 
 pub mod client;
+pub mod diag;
 pub mod host;
 pub mod identity;
 pub mod node;

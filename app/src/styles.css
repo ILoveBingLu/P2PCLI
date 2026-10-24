@@ -266,6 +266,8 @@ button {
 .sidebar-foot {
   margin-top: auto;
   padding: 4px;
+  display: flex;
+  justify-content: space-between;
 }
 
 .link {
@@ -278,6 +280,46 @@ button {
 
 .link:hover {
   color: var(--text);
+}
+
+.diag-rating {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+
+.diag-rating.ok {
+  border-color: #134e3a;
+  background: #0f2a22;
+}
+.diag-rating.warn {
+  border-color: #1e3a5f;
+  background: #111f33;
+}
+.diag-rating.bad {
+  border-color: #5c3d0c;
+  background: #2a1d0a;
+}
+
+.diag-grade {
+  font-weight: 650;
+  font-size: 15px;
+}
+
+.diag-summary {
+  color: #c7ccd8;
+  line-height: 1.5;
+}
+
+.diag-notes {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  line-height: 1.7;
+  color: #c7ccd8;
 }
 
 /* 右侧 */

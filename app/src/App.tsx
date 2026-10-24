@@ -6,6 +6,7 @@ import {
   pathLabel,
   platformLabel,
   type ConnectFail,
+  type Diagnosis,
   type HostEvent,
   type IncomingRequest,
   type Overview,
@@ -37,6 +38,7 @@ export default function App() {
   const [paths, setPaths] = useState<Record<number, PathInfo>>({});
   const [requests, setRequests] = useState<IncomingRequest[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [showDiag, setShowDiag] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -144,6 +146,7 @@ export default function App() {
         onConnected={onConnected}
         onRefresh={refresh}
         onSettings={() => setShowSettings(true)}
+        onDiag={() => setShowDiag(true)}
         flash={flash}
       />
       <main className="main">
@@ -232,6 +235,7 @@ export default function App() {
       </main>
       {requests.length > 0 && <ApproveDialog key={requests[0].id} req={requests[0]} onRespond={respond} />}
       {showSettings && ov && <SettingsDialog ov={ov} onClose={() => setShowSettings(false)} onChanged={refresh} />}
+      {showDiag && <DiagDialog onClose={() => setShowDiag(false)} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -260,6 +264,7 @@ function Sidebar(props: {
   onConnected: (connId: number, info: RemoteInfo, code: string | null, path: PathInfo) => void;
   onRefresh: () => void;
   onSettings: () => void;
+  onDiag: () => void;
   flash: (m: string) => void;
 }) {
   const { ov, flash } = props;
@@ -393,6 +398,9 @@ function Sidebar(props: {
         <button className="link" onClick={props.onSettings}>
           设置{ov && ov.trusted.length > 0 ? ` · 受信设备 ${ov.trusted.length} 台` : ""}
         </button>
+        <button className="link" onClick={props.onDiag}>
+          网络诊断
+        </button>
       </div>
     </aside>
   );
@@ -443,6 +451,55 @@ function ApproveDialog({ req, onRespond }: { req: IncomingRequest; onRespond: (r
           </button>
           <button className="btn primary" onClick={() => onRespond(req, true, trust)}>
             允许
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const RATING_CLASS: Record<Diagnosis["rating"], string> = { 好: "ok", 一般: "warn", 差: "bad", 未知: "off" };
+
+function DiagDialog({ onClose }: { onClose: () => void }) {
+  const [d, setD] = useState<Diagnosis | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = () => {
+    setBusy(true);
+    api
+      .diagnose()
+      .then(setD)
+      .finally(() => setBusy(false));
+  };
+  useEffect(run, []);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal diag" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-title">网络诊断</div>
+        {!d && <div className="muted">正在检测，大约要几秒…</div>}
+        {d && (
+          <>
+            <div className={`diag-rating ${RATING_CLASS[d.rating]}`}>
+              <span className="diag-grade">直连条件：{d.rating}</span>
+              <span className="diag-summary">{d.summary}</span>
+            </div>
+            <ul className="diag-notes">
+              {d.notes.map((n, i) => (
+                <li key={i}>{n}</li>
+              ))}
+            </ul>
+            <div className="muted small">
+              公网 IPv4：{d.ipv4_public ?? "未知"}
+              {d.ipv6_addrs.length > 0 && ` · 公网 IPv6：${d.ipv6_addrs.join("、")}`}
+            </div>
+            <div className="muted small">NAT 类型用小米 STUN（stun.miwifi.com）检测，测不通时用中继探测的结果。</div>
+          </>
+        )}
+        <div className="modal-actions">
+          <button className="btn" onClick={run} disabled={busy}>
+            {busy ? "检测中…" : "重新检测"}
+          </button>
+          <button className="btn primary" onClick={onClose}>
+            关闭
           </button>
         </div>
       </div>

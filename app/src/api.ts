@@ -95,8 +95,24 @@ export interface SettingsView {
   data_dir: string;
 }
 
+export type NatKind = "none" | "cone" | "symmetric" | "unknown";
+export interface Diagnosis {
+  rating: "好" | "一般" | "差" | "未知";
+  summary: string;
+  ipv6_addrs: string[];
+  ipv4_public: string | null;
+  nat: NatKind;
+  nat_source: "stun" | "relay" | "none";
+  stun_error: string | null;
+  relay: string | null;
+  relay_connected: boolean;
+  relay_latency_ms: number | null;
+  notes: string[];
+}
+
 export const api = {
   overview: () => invoke<Overview>("overview"),
+  diagnose: () => invoke<Diagnosis>("diagnose"),
   refreshPassword: () => invoke<string>("refresh_password"),
   respond: (id: number, allow: boolean, trust: boolean) => invoke("respond_request", { id, allow, trust }),
   kick: (session: number) => invoke<boolean>("kick", { session }),

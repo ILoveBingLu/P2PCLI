@@ -197,6 +197,11 @@ fn overview(state: State<'_, AppState>) -> Overview {
 }
 
 #[tauri::command]
+async fn diagnose(state: State<'_, AppState>) -> Result<p2pcli_core::diag::Diagnosis, String> {
+    Ok(p2pcli_core::diag::diagnose(&state.node).await)
+}
+
+#[tauri::command]
 fn refresh_password(state: State<'_, AppState>) -> String {
     state.node.host.regenerate_password()
 }
@@ -626,6 +631,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             overview,
+            diagnose,
             refresh_password,
             respond_request,
             kick,

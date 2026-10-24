@@ -52,6 +52,8 @@ enum Cmd {
         #[arg(long, value_enum, default_value = "ask")]
         approve: Approve,
     },
+    /// 网络诊断：IPv6、NAT 类型、中继
+    Diag,
     /// 连过去跑一条命令，打印输出，退出码跟对面一致
     Connect {
         /// 9 位设备码，或 <公钥>@<ip:端口>
@@ -107,6 +109,10 @@ fn serde_json_line(ev: &HostEvent) -> String {
     format!("{ev:?}")
 }
 
+fn serde_json_pretty(d: &p2pcli_core::diag::Diagnosis) -> String {
+    format!("{d:#?}")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -154,6 +160,19 @@ async fn main() -> Result<()> {
                 _ => eprintln!("直连地址暂时拿不到"),
             }
             tokio::signal::ctrl_c().await?;
+            node.shutdown().await;
+            Ok(())
+        }
+        Cmd::Diag => {
+            // 给中继探测一点时间
+            let _ = tokio::time::timeout(Duration::from_secs(10), node.endpoint.online()).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let d = p2pcli_core::diag::diagnose(&node).await;
+            println!("直连条件：{}（{}）", d.rating, d.summary);
+            for n in &d.notes {
+                println!("- {n}");
+            }
+            eprintln!("{}", serde_json_pretty(&d));
             node.shutdown().await;
             Ok(())
         }

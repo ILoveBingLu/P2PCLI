@@ -64,6 +64,32 @@ mockIPC(
         return { server: null, device_name: null, relay: null, effective_relay: null, effective_server: "<服务器公钥>@203.0.113.10:7788", data_dir: "~/Library/Application Support/io.github.ilovebinglu.p2pcli" };
       case "selftest_config":
         return null;
+      case "diagnose":
+        return new Promise((r) =>
+          setTimeout(
+            () =>
+              r({
+                rating: "差",
+                summary: "没有 IPv6，IPv4 是对称 NAT：对方网络好时还能直连，否则走中继，延迟会高一些",
+                ipv6_addrs: [],
+                ipv4_public: "203.0.113.25",
+                nat: "symmetric",
+                nat_source: "relay",
+                stun_error: "小米 STUN 服务器连不上，可能是路由器或代理拦了 UDP 3478",
+                relay: "https://relay.example.com/",
+                relay_connected: true,
+                relay_latency_ms: 38,
+                notes: [
+                  "没有公网 IPv6，只能走 IPv4 打洞或中继",
+                  "IPv4 是对称 NAT（经中继测得）：每个目标外网端口都不同；对方是锥形 NAT 时多半还能打通，对方也是对称 NAT 就只能走中继",
+                  "STUN 检测没成功：小米 STUN 服务器连不上，可能是路由器或代理拦了 UDP 3478",
+                  "中继已连上：https://relay.example.com/，延迟 38 毫秒",
+                  "牵线服务器在线",
+                ],
+              }),
+            800,
+          ),
+        );
       default:
         return null;
     }
