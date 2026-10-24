@@ -16,6 +16,9 @@ struct Args {
     /// 监听的 UDP 端口
     #[arg(long, default_value_t = 7788)]
     port: u16,
+    /// 同时开 WebSocket 入口的 TCP 端口（明文 ws，对外的 TLS 交给反向代理）
+    #[arg(long)]
+    ws_port: Option<u16>,
     /// 对外地址（公网 IP），只用来打印给客户端填的那串配置
     #[arg(long)]
     public_ip: Option<String>,
@@ -46,6 +49,13 @@ async fn main() -> Result<()> {
     let ip = args.public_ip.as_deref().unwrap_or("<公网IP>");
     info!("牵线服务器已启动，客户端配置填：{id}@{ip}:{}", args.port);
     println!("{id}@{ip}:{}", args.port);
+    if let Some(port) = args.ws_port {
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
+            .await
+            .with_context(|| format!("WebSocket 端口 {port} 绑不上"))?;
+        info!("WebSocket 入口：ws://<地址>:{port}/v1/ws（对外用 wss:// 时在前面加反向代理）");
+        tokio::spawn(p2pcli_server::serve_ws(listener, state.clone()));
+    }
     p2pcli_server::serve(endpoint, state).await;
     Ok(())
 }

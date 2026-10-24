@@ -1,9 +1,13 @@
 //! 牵线服务器：给设备发 9 位设备码，记谁在线、在哪，按设备码查；
 //! 两边都有公网 IPv6 时替连接方叫被连方同时发包。终端数据不经过这里。
+//!
+//! 同时开两个入口：UDP（iroh）和 WebSocket（见 p2pcli_core::rdv_ws），
+//! 两边登记的设备在同一张表里，能互相查到。
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,8 +15,14 @@ use anyhow::{Context, Result};
 use iroh::endpoint::{Connection, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
 use p2pcli_core::ALPN_RDV;
+use futures_util::{SinkExt, StreamExt};
 use p2pcli_core::proto::{read_json, write_json};
+use p2pcli_core::rdv_ws::{AUTH_HEADER, WsFrame, verify_auth};
 use p2pcli_core::rendezvous::{RdvPush, RdvRequest, RdvResponse, normalize_code};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use p2pcli_core::store::now_secs;
 use rusqlite::{Connection as Db, OptionalExtension, params};
 use tracing::{debug, info, warn};
@@ -22,10 +32,48 @@ const LOOKUPS_PER_MINUTE: usize = 20;
 /// 转给被连方的地址最多几个
 const MAX_PUNCH_ADDRS: usize = 6;
 
+/// 一台在线设备连上来的那条通道
+#[derive(Clone)]
+enum Peer {
+    Quic(Connection),
+    Ws { id: u64, tx: mpsc::UnboundedSender<String> },
+}
+
+impl Peer {
+    fn same(&self, other: &Peer) -> bool {
+        match (self, other) {
+            (Peer::Quic(a), Peer::Quic(b)) => a.stable_id() == b.stable_id(),
+            (Peer::Ws { id: a, .. }, Peer::Ws { id: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+
+    async fn push(&self, push: &RdvPush) -> Result<()> {
+        match self {
+            Peer::Quic(conn) => {
+                let mut s = conn.open_uni().await?;
+                write_json(&mut s, push).await?;
+                s.finish()?;
+            }
+            Peer::Ws { tx, .. } => {
+                let frame = WsFrame {
+                    push: Some(push.clone()),
+                    ..Default::default()
+                };
+                tx.send(serde_json::to_string(&frame)?)
+                    .map_err(|_| anyhow::anyhow!("对方连接已断开"))?;
+            }
+        }
+        Ok(())
+    }
+}
+
 struct Online {
-    conn: Connection,
+    peer: Peer,
     addr: Option<EndpointAddr>,
 }
+
+static NEXT_WS_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct State {
     db: Mutex<Db>,
@@ -105,8 +153,8 @@ pub async fn serve(endpoint: Endpoint, state: Arc<State>) {
 
 async fn serve_device(state: Arc<State>, conn: Connection) {
     let remote = conn.remote_id();
-    let conn_id = conn.stable_id();
-    debug!(remote = %remote.fmt_short(), "设备连上");
+    let me = Peer::Quic(conn.clone());
+    debug!(remote = %remote.fmt_short(), "设备连上（UDP）");
     loop {
         let (mut send, mut recv) = match conn.accept_bi().await {
             Ok(s) => s,
@@ -119,7 +167,7 @@ async fn serve_device(state: Arc<State>, conn: Connection) {
                 continue;
             }
         };
-        let resp = handle(&state, &conn, req).await.unwrap_or_else(|e| {
+        let resp = handle(&state, remote, &me, req).await.unwrap_or_else(|e| {
             warn!("处理请求出错：{e:#}");
             RdvResponse::Error {
                 message: "服务器出错".into(),
@@ -128,19 +176,100 @@ async fn serve_device(state: Arc<State>, conn: Connection) {
         let _ = write_json(&mut send, &resp).await;
         let _ = send.finish();
     }
+    gone(&state, remote, &me);
+}
+
+/// 设备断开：同一台设备可能已经换了新连接，只删自己这条
+fn gone(state: &State, remote: EndpointId, me: &Peer) {
     let mut online = state.online.lock().unwrap();
-    // 同一台设备可能已经换了新连接，只删自己这条
-    if online
-        .get(&remote)
-        .is_some_and(|o| o.conn.stable_id() == conn_id)
-    {
+    if online.get(&remote).is_some_and(|o| o.peer.same(me)) {
         online.remove(&remote);
         info!(remote = %remote.fmt_short(), "设备离线");
     }
 }
 
-async fn handle(state: &State, conn: &Connection, req: RdvRequest) -> Result<RdvResponse> {
-    let remote = conn.remote_id();
+/// WebSocket 入口：明文 ws，对外的 TLS 交给前面的反向代理或 Cloudflare
+pub async fn serve_ws(listener: TcpListener, state: Arc<State>) {
+    while let Ok((tcp, from)) = listener.accept().await {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = serve_ws_device(state, tcp).await {
+                debug!(%from, "WebSocket 连接结束：{e:#}");
+            }
+        });
+    }
+}
+
+// 握手回调的错误类型是 WebSocket 库定的，大小改不了
+#[allow(clippy::result_large_err)]
+async fn serve_ws_device(state: Arc<State>, tcp: tokio::net::TcpStream) -> Result<()> {
+    let authed: Arc<Mutex<Option<EndpointId>>> = Arc::default();
+    let slot = authed.clone();
+    let check = move |req: &Request, resp: Response| -> std::result::Result<Response, ErrorResponse> {
+        let header = req.headers().get(AUTH_HEADER).and_then(|v| v.to_str().ok());
+        let host = req.headers().get("host").and_then(|v| v.to_str().ok());
+        match (header, host) {
+            (Some(h), Some(host)) => match verify_auth(h, host, now_secs()) {
+                Ok(id) => {
+                    *slot.lock().unwrap() = Some(id);
+                    Ok(resp)
+                }
+                Err(e) => Err(reject(&format!("{e}"))),
+            },
+            _ => Err(reject("缺少鉴权信息")),
+        }
+    };
+    let ws = tokio_tungstenite::accept_hdr_async(tcp, check).await?;
+    let remote = authed.lock().unwrap().ok_or_else(|| anyhow::anyhow!("没通过鉴权"))?;
+    let (mut sink, mut stream) = ws.split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let me = Peer::Ws {
+        id: NEXT_WS_ID.fetch_add(1, Ordering::Relaxed),
+        tx: tx.clone(),
+    };
+    debug!(remote = %remote.fmt_short(), "设备连上（WebSocket）");
+    let writer = tokio::spawn(async move {
+        while let Some(text) = rx.recv().await {
+            if sink.send(Message::Text(text.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+    while let Some(msg) = stream.next().await {
+        let text = match msg {
+            Ok(Message::Text(t)) => t,
+            Ok(Message::Close(_)) | Err(_) => break,
+            Ok(_) => continue,
+        };
+        let Ok(WsFrame { id: Some(id), req: Some(req), .. }) = serde_json::from_str::<WsFrame>(&text) else {
+            debug!("WebSocket 请求格式不对");
+            continue;
+        };
+        let resp = handle(&state, remote, &me, req).await.unwrap_or_else(|e| {
+            warn!("处理请求出错：{e:#}");
+            RdvResponse::Error {
+                message: "服务器出错".into(),
+            }
+        });
+        let frame = WsFrame {
+            id: Some(id),
+            resp: Some(resp),
+            ..Default::default()
+        };
+        let _ = tx.send(serde_json::to_string(&frame)?);
+    }
+    writer.abort();
+    gone(&state, remote, &me);
+    Ok(())
+}
+
+fn reject(reason: &str) -> ErrorResponse {
+    let mut r = ErrorResponse::new(Some(reason.to_string()));
+    *r.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED;
+    r
+}
+
+async fn handle(state: &State, remote: EndpointId, me: &Peer, req: RdvRequest) -> Result<RdvResponse> {
     match req {
         RdvRequest::Register { name, platform } => {
             let name: String = name.chars().filter(|c| !c.is_control()).take(48).collect();
@@ -149,7 +278,7 @@ async fn handle(state: &State, conn: &Connection, req: RdvRequest) -> Result<Rdv
             state.online.lock().unwrap().insert(
                 remote,
                 Online {
-                    conn: conn.clone(),
+                    peer: me.clone(),
                     addr: None,
                 },
             );
@@ -165,7 +294,7 @@ async fn handle(state: &State, conn: &Connection, req: RdvRequest) -> Result<Rdv
             {
                 let mut online = state.online.lock().unwrap();
                 match online.get_mut(&remote) {
-                    Some(o) if o.conn.stable_id() == conn.stable_id() => o.addr = Some(addr),
+                    Some(o) if o.peer.same(me) => o.addr = Some(addr),
                     _ => {
                         return Ok(RdvResponse::Error {
                             message: "请先登记".into(),
@@ -203,12 +332,12 @@ async fn handle(state: &State, conn: &Connection, req: RdvRequest) -> Result<Rdv
             let Some((target, ..)) = find(state, &code)? else {
                 return Ok(RdvResponse::NotFound);
             };
-            let Some(target_conn) = state
+            let Some(target_peer) = state
                 .online
                 .lock()
                 .unwrap()
                 .get(&target)
-                .map(|o| o.conn.clone())
+                .map(|o| o.peer.clone())
             else {
                 return Ok(RdvResponse::Error {
                     message: "对方不在线".into(),
@@ -224,13 +353,7 @@ async fn handle(state: &State, conn: &Connection, req: RdvRequest) -> Result<Rdv
                 addrs,
             };
             // 推送失败不影响连接方，它还会走常规流程
-            let sent = tokio::time::timeout(Duration::from_secs(3), async {
-                let mut s = target_conn.open_uni().await?;
-                write_json(&mut s, &push).await?;
-                s.finish()?;
-                anyhow::Ok(())
-            })
-            .await;
+            let sent = tokio::time::timeout(Duration::from_secs(3), target_peer.push(&push)).await;
             debug!(from = %remote.fmt_short(), to = %target.fmt_short(), ok = matches!(sent, Ok(Ok(()))), "转达发包请求");
             Ok(RdvResponse::Ok)
         }

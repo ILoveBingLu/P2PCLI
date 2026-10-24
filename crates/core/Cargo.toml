@@ -16,3 +16,8 @@ bytes.workspace = true
 portable-pty = "0.9"
 whoami = "2"
 netdev = "0.45.1"
+# WebSocket 牵线（可部署到 Cloudflare）；TLS 用 iroh 已经在用的 ring，不另引加密库
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "__rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

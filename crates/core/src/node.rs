@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 use crate::client::{self, ConnectError, RemoteHost};
 use crate::host::{Host, HostDelegate};
 use crate::identity::{DeviceInfo, load_or_create_key};
-use crate::rendezvous::{RdvClient, RdvPush, RdvResponse, normalize_code, parse_server};
+use crate::rendezvous::{RdvClient, RdvPush, RdvResponse, normalize_code, parse_rdv_server};
 use crate::store::{RecentDevice, RecentStore, now_secs};
 use crate::{ALPN_PUNCH, ALPN_TERM, v6};
 
@@ -29,7 +29,7 @@ const PUNCH_MIN_GAP: Duration = Duration::from_secs(2);
 pub struct NodeConfig {
     pub data_dir: PathBuf,
     pub device_name: Option<String>,
-    /// 牵线服务器，见 [`parse_server`]
+    /// 牵线服务器，见 [`parse_rdv_server`]
     pub server: Option<String>,
     /// 测试中继用：完全不走直连
     pub relay_only: bool,
@@ -104,7 +104,7 @@ impl Node {
         let rdv = match cfg.server.as_deref().filter(|s| !s.trim().is_empty()) {
             Some(s) => Some(RdvClient::spawn(
                 endpoint.clone(),
-                parse_server(s)?,
+                parse_rdv_server(s)?,
                 me.clone(),
                 &cfg.data_dir,
                 push_tx,

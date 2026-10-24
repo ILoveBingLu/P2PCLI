@@ -11,6 +11,7 @@ pub mod node;
 pub mod path;
 pub mod proto;
 pub mod pty;
+pub mod rdv_ws;
 pub mod rendezvous;
 pub mod store;
 pub mod v6;

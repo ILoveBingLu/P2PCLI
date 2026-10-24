@@ -478,7 +478,7 @@ fn save_settings(
         relay: clean(relay),
     };
     if let Some(srv) = &s.server {
-        parse_server(srv).map_err(|e| format!("{e:#}"))?;
+        p2pcli_core::rendezvous::parse_rdv_server(srv).map_err(|e| format!("{e:#}"))?;
     }
     if let Some(r) = &s.relay {
         for u in r.split(',') {

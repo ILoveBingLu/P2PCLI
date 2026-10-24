@@ -19,7 +19,7 @@
 - macOS：打开时提示无法验证开发者，到 系统设置 → 隐私与安全性，点 仍要打开
 - Windows：提示 Windows 已保护你的电脑，点 更多信息 → 仍要运行
 
-还需要一台牵线服务器（见下文自建），在软件左下角 设置 里填写，或打包时编进默认值。
+还需要一个牵线服务器（自建或部署到 Cloudflare，见下文），在软件左下角 设置 里填写，或打包时编进默认值。
 
 ## 怎么用
 
@@ -34,14 +34,15 @@
 
 ```
 crates/core     核心库：身份、连接、配对校验、远程终端、牵线客户端、选路
-crates/server   牵线服务器：发设备码、记在线状态和地址（终端数据不经过它）
+crates/server   牵线服务器：发设备码、记在线状态和地址（终端数据不经过它），UDP 和 WebSocket 两个入口
+cloudflare/     牵线服务器的 Cloudflare Workers 版（WebSocket）
 crates/dev      开发测试用命令行
 app/            桌面软件（src-tauri 是 Rust 端，src 是界面）
 ```
 
 连接层是 [iroh](https://github.com/n0-computer/iroh)（QUIC）。每台设备有一把长期私钥，公钥就是设备身份，连接两端互相认证并加密。
 
-1. 每台设备启动时连牵线服务器，登记拿到固定的设备码，之后定时报告当前地址
+1. 每台设备启动时连牵线服务器（UDP 或 WebSocket），登记拿到固定的设备码，之后报告当前地址
 2. 连接方按设备码查到对方公钥和地址，连过去
 3. 连接方发开场消息带临时密码；被连方校验密码（同一设备连错 5 次锁 10 分钟，所有设备加起来错太多也暂停），再弹窗问主人
 4. 主人同意后，连接方每开一个标签就开一条 QUIC 流，被连方起一个真终端接上去（macOS 是用户的登录 shell，Windows 是 PowerShell）
@@ -50,16 +51,49 @@ IPv6 直连（`crates/core/src/v6.rs`）：公网 IPv6 没有 NAT，网卡地址
 
 选路（`crates/core/src/path.rs`）：IPv6 只要不比 IPv4 慢 50 毫秒以上就用 IPv6，其次 IPv4，中继只在都不通时用。iroh 自带的规则只给 IPv6 让 3 毫秒、又要求快 5 毫秒才换路，做不到 IPv6 优先，所以用了它的选路接口（这个接口标着不稳定，iroh 版本已锁死）。
 
-## 自建牵线服务器和中继
+## 牵线服务器
 
-一台有公网 IP 的小服务器，跑两个程序：
+牵线服务器只负责发设备码、交换地址、转达 IPv6 发包通知，终端数据不经过它。有两种接法，客户端按地址写法自动区分：
+
+| 写法 | 通道 | 适合 |
+| --- | --- | --- |
+| `公钥@IP:端口` | UDP（iroh，加密并认证服务器身份） | 自己有公网服务器 |
+| `wss://域名` | WebSocket（TLS） | 放在 Cloudflare Workers 这类只支持 HTTP 的平台，不用自己维护服务器 |
+
+两种接法连的是不同的服务器时，设备之间互相查不到；同一台自建服务器同时开两个入口时，走 UDP 和走 WebSocket 的设备能互相查到。
+
+### 自建服务器
 
 ```sh
-p2pcli-server --data-dir /var/lib/p2pcli --port 7788 --public-ip <公网IP> --relay https://<中继域名>
-iroh-relay --config-path relay.toml   # iroh 官方中继，用 Let's Encrypt 自动签证书
+p2pcli-server --data-dir /var/lib/p2pcli --port 7788 --ws-port 7789 --public-ip <公网IP>
 ```
 
-放行 UDP 7788（牵线）、TCP 80/443（中继）、UDP 7842（中继的地址探测）。`p2pcli-server` 启动时会打印客户端要填的服务器地址（`公钥@IP:端口`）。iroh 官方公共中继在国内很慢甚至连不上，建议自建。
+放行 UDP 7788。启动时会打印 UDP 写法要填的地址（`公钥@IP:端口`）。`--ws-port` 开的是明文 WebSocket，对外用 `wss://` 时在前面加反向代理（例如 Caddy：`rdv.example.com { reverse_proxy 127.0.0.1:7789 }`），或者把域名放在 Cloudflare 代理后面。
+
+### Cloudflare Workers
+
+`cloudflare/` 目录是同一套协议的 Workers 版，在线设备用 Durable Objects 管，设备码存在它自带的 SQLite 里，30 多人的用量在免费额度内。
+
+```sh
+cd cloudflare
+pnpm install
+pnpm run dev       # 本机试跑，客户端填 ws://127.0.0.1:8787
+# 部署：先把 wrangler.jsonc 里 routes 的域名换成自己托管在 Cloudflare 的域名并取消注释
+pnpm exec wrangler login
+pnpm run deploy    # 客户端填 wss://你的域名
+```
+
+`workers.dev` 域名在国内被污染，必须绑自己的域名。国内到 Cloudflare 一般绕海外节点，牵线只传几条小消息，影响不大。
+
+## 中继
+
+打不通时转发终端数据的中继要另外准备，iroh 官方公共中继在国内很慢甚至连不上。中继是 [iroh-relay](https://github.com/n0-computer/iroh)，需要一台有公网 IP 的服务器：
+
+```sh
+iroh-relay --config-path relay.toml   # 用 Let's Encrypt 自动签证书
+```
+
+放行 TCP 80/443（中继）、UDP 7842（中继的地址探测）。客户端在设置里填中继地址，或用 `P2PCLI_RELAY`。
 
 ## 开发
 
@@ -91,7 +125,7 @@ pnpm remove <包名>    # 移除依赖
 
 | 变量 | 作用 |
 | --- | --- |
-| `P2PCLI_SERVER` | 牵线服务器，`公钥@IP:端口` |
+| `P2PCLI_SERVER` | 牵线服务器，`公钥@IP:端口` 或 `wss://域名` |
 | `P2PCLI_RELAY` | 自建中继地址，逗号分隔 |
 | `P2PCLI_DATA_DIR` | 数据目录，一台机器开两份测试时用 |
 | `RUST_LOG` | 日志级别，日志在数据目录的 `p2pcli.log` |

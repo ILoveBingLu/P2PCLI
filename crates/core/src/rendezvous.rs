@@ -21,10 +21,13 @@ use tracing::{debug, info};
 use crate::ALPN_RDV;
 use crate::identity::DeviceInfo;
 use crate::proto::{read_json, write_json};
+use crate::rdv_ws::WsLink;
 use crate::v6;
 
-/// 多久把自己的地址报一次（顺带保活）
-const REPORT_EVERY: Duration = Duration::from_secs(20);
+/// 多久看一次自己的地址有没有变，变了就报
+const CHECK_ADDR_EVERY: Duration = Duration::from_secs(20);
+/// 地址没变也至少这么久报一次，顺带保活（WebSocket 太久没数据会被中间设备断开）
+const REPORT_AT_LEAST: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -101,6 +104,70 @@ pub fn parse_server(s: &str) -> Result<EndpointAddr> {
     Ok(EndpointAddr::from_parts(id, ips))
 }
 
+/// 牵线服务器的两种接法
+#[derive(Debug, Clone, PartialEq)]
+pub enum RdvServer {
+    /// 自建服务器，走 UDP（iroh），写法 `公钥@IP:端口`
+    Quic(EndpointAddr),
+    /// 走 WebSocket，可以放在 Cloudflare 这类只支持 HTTP 的平台，写法 `wss://域名`
+    Ws(String),
+}
+
+/// 识别服务器地址写法：`wss://`、`ws://`、`https://` 开头的走 WebSocket，其余按 `公钥@IP:端口`
+pub fn parse_rdv_server(s: &str) -> Result<RdvServer> {
+    let s = s.trim();
+    let ws = if let Some(rest) = s.strip_prefix("https://") {
+        Some(format!("wss://{rest}"))
+    } else if let Some(rest) = s.strip_prefix("http://") {
+        Some(format!("ws://{rest}"))
+    } else if s.starts_with("wss://") || s.starts_with("ws://") {
+        Some(s.to_string())
+    } else {
+        None
+    };
+    let Some(mut url) = ws else {
+        return Ok(RdvServer::Quic(parse_server(s)?));
+    };
+    // 只写了域名就补上默认路径
+    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or("");
+    match after_scheme.find('/') {
+        None => url.push_str(crate::rdv_ws::WS_PATH),
+        Some(i) if after_scheme[i..] == *"/" => {
+            url.pop();
+            url.push_str(crate::rdv_ws::WS_PATH);
+        }
+        _ => {}
+    }
+    let host = url.split_once("://").map(|(_, r)| r.split('/').next().unwrap_or("")).unwrap_or("");
+    if host.is_empty() {
+        bail!("牵线服务器地址里没有域名");
+    }
+    Ok(RdvServer::Ws(url))
+}
+
+/// 和牵线服务器的一条连接，UDP 或 WebSocket
+#[derive(Clone)]
+enum Link {
+    Quic(Connection),
+    Ws(Arc<WsLink>),
+}
+
+impl Link {
+    async fn request(&self, req: &RdvRequest) -> Result<RdvResponse> {
+        match self {
+            Link::Quic(c) => request(c, req).await,
+            Link::Ws(w) => w.request(req).await,
+        }
+    }
+
+    async fn closed(&self) -> String {
+        match self {
+            Link::Quic(c) => c.closed().await.to_string(),
+            Link::Ws(w) => w.closed().await,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum RdvStatus {
@@ -111,10 +178,10 @@ pub enum RdvStatus {
 
 pub struct RdvClient {
     endpoint: Endpoint,
-    server: EndpointAddr,
+    server: RdvServer,
     me: DeviceInfo,
     code_file: PathBuf,
-    conn: tokio::sync::Mutex<Option<Connection>>,
+    link: tokio::sync::Mutex<Option<Link>>,
     code: watch::Sender<Option<String>>,
     status: watch::Sender<RdvStatus>,
     last_addr: Mutex<Option<EndpointAddr>>,
@@ -125,7 +192,7 @@ impl RdvClient {
     /// 起后台任务：连服务器、登记、定时报地址，断了自动重连
     pub fn spawn(
         endpoint: Endpoint,
-        server: EndpointAddr,
+        server: RdvServer,
         me: DeviceInfo,
         data_dir: &Path,
         pushes: mpsc::UnboundedSender<RdvPush>,
@@ -139,7 +206,7 @@ impl RdvClient {
             server,
             me,
             code_file,
-            conn: tokio::sync::Mutex::new(None),
+            link: tokio::sync::Mutex::new(None),
             code: watch::channel(cached).0,
             status: watch::channel(RdvStatus::Connecting).0,
             last_addr: Mutex::new(None),
@@ -177,7 +244,7 @@ impl RdvClient {
                     });
                 }
             }
-            *self.conn.lock().await = None;
+            *self.link.lock().await = None;
             *self.last_addr.lock().unwrap() = None;
             if self.endpoint.is_closed() {
                 return;
@@ -187,23 +254,49 @@ impl RdvClient {
         }
     }
 
+    /// 新开一条到牵线服务器的连接；服务器的推送都转到 pushes
+    async fn open_link(&self) -> Result<Link> {
+        match &self.server {
+            RdvServer::Quic(addr) => {
+                let conn = timeout(Duration::from_secs(20), self.endpoint.connect(addr.clone(), ALPN_RDV))
+                    .await
+                    .map_err(|_| anyhow!("连接牵线服务器超时"))?
+                    .map_err(|e| anyhow!("连不上牵线服务器：{e}"))?;
+                let c = conn.clone();
+                let pushes = self.pushes.clone();
+                tokio::spawn(async move {
+                    while let Ok(mut recv) = c.accept_uni().await {
+                        match read_json::<_, RdvPush>(&mut recv).await {
+                            Ok(push) => {
+                                let _ = pushes.send(push);
+                            }
+                            Err(e) => debug!("服务器推送格式不对：{e:#}"),
+                        }
+                    }
+                });
+                Ok(Link::Quic(conn))
+            }
+            RdvServer::Ws(url) => {
+                let link = timeout(
+                    Duration::from_secs(20),
+                    WsLink::connect(url, self.endpoint.secret_key(), self.pushes.clone()),
+                )
+                .await
+                .map_err(|_| anyhow!("连接牵线服务器超时"))??;
+                Ok(Link::Ws(link))
+            }
+        }
+    }
+
     async fn session(&self) -> Result<()> {
         self.status.send_replace(RdvStatus::Connecting);
-        let conn = timeout(
-            Duration::from_secs(20),
-            self.endpoint.connect(self.server.clone(), ALPN_RDV),
-        )
-        .await
-        .map_err(|_| anyhow!("连接牵线服务器超时"))?
-        .map_err(|e| anyhow!("连不上牵线服务器：{e}"))?;
-        let resp = request(
-            &conn,
-            &RdvRequest::Register {
+        let link = self.open_link().await?;
+        let resp = link
+            .request(&RdvRequest::Register {
                 name: self.me.name.clone(),
                 platform: self.me.platform.clone(),
-            },
-        )
-        .await?;
+            })
+            .await?;
         let RdvResponse::Registered { code } = resp else {
             bail!("登记失败：{resp:?}");
         };
@@ -212,20 +305,14 @@ impl RdvClient {
             self.code.send_replace(Some(code.clone()));
         }
         info!(code = %format_code(&code), "已登记到牵线服务器");
-        *self.conn.lock().await = Some(conn.clone());
+        *self.link.lock().await = Some(link.clone());
         self.status.send_replace(RdvStatus::Online);
 
-        let mut tick = tokio::time::interval(REPORT_EVERY);
+        let mut tick = tokio::time::interval(CHECK_ADDR_EVERY);
+        let mut last_sent: Option<tokio::time::Instant> = None;
         loop {
             tokio::select! {
-                e = conn.closed() => bail!("和牵线服务器断开：{e}"),
-                uni = conn.accept_uni() => {
-                    let mut recv = uni?;
-                    match read_json::<_, RdvPush>(&mut recv).await {
-                        Ok(push) => { let _ = self.pushes.send(push); }
-                        Err(e) => debug!("服务器推送格式不对：{e:#}"),
-                    }
-                }
+                reason = link.closed() => bail!("和牵线服务器断开：{reason}"),
                 _ = tick.tick() => {
                     // iroh 自己会报公网 IPv6；测试时放开的局域网 IPv6 它不报，这里统一补上
                     let mut addr = self.endpoint.addr();
@@ -233,9 +320,10 @@ impl RdvClient {
                         addr = addr.with_ip_addr(a);
                     }
                     let changed = self.last_addr.lock().unwrap().as_ref() != Some(&addr);
-                    // 地址没变也报，顺带让服务器知道还在线
-                    request(&conn, &RdvRequest::Addr { addr: addr.clone() }).await?;
-                    if changed {
+                    let due = last_sent.is_none_or(|t| t.elapsed() >= REPORT_AT_LEAST);
+                    if changed || due {
+                        link.request(&RdvRequest::Addr { addr: addr.clone() }).await?;
+                        last_sent = Some(tokio::time::Instant::now());
                         *self.last_addr.lock().unwrap() = Some(addr);
                     }
                 }
@@ -245,31 +333,37 @@ impl RdvClient {
 
     /// 按设备码查对方
     pub async fn lookup(&self, code: &str) -> Result<RdvResponse> {
-        let conn = self.connection().await?;
-        request(&conn, &RdvRequest::Lookup { code: code.into() }).await
+        self.current_link().await?.request(&RdvRequest::Lookup { code: code.into() }).await
     }
 
     /// 请对方同时往我这些 IPv6 地址发包
     pub async fn punch(&self, code: &str, addrs: Vec<SocketAddr>) -> Result<()> {
-        let conn = self.connection().await?;
-        match request(&conn, &RdvRequest::Punch { code: code.into(), addrs }).await? {
+        match self
+            .current_link()
+            .await?
+            .request(&RdvRequest::Punch { code: code.into(), addrs })
+            .await?
+        {
             RdvResponse::Ok => Ok(()),
             other => bail!("服务器没转达：{other:?}"),
         }
     }
 
-    async fn connection(&self) -> Result<Connection> {
-        let conn = self.conn.lock().await.clone();
-        Ok(match conn {
-            Some(c) => c,
-            None => timeout(
-                Duration::from_secs(20),
-                self.endpoint.connect(self.server.clone(), ALPN_RDV),
-            )
-            .await
-            .map_err(|_| anyhow!("连接牵线服务器超时"))?
-            .map_err(|e| anyhow!("连不上牵线服务器：{e}"))?,
-        })
+    /// 登记用的那条连接还在就复用；正在登记就稍等一下；都不行再临时开一条
+    async fn current_link(&self) -> Result<Link> {
+        if let Some(l) = self.link.lock().await.clone() {
+            return Ok(l);
+        }
+        let mut status = self.watch_status();
+        // 只要个结果，别把状态的读锁带过下面的等待
+        let settled = matches!(
+            timeout(Duration::from_secs(5), status.wait_for(|s| !matches!(s, RdvStatus::Connecting))).await,
+            Ok(Ok(_))
+        );
+        if settled && let Some(l) = self.link.lock().await.clone() {
+            return Ok(l);
+        }
+        self.open_link().await
     }
 }
 
@@ -295,6 +389,21 @@ mod tests {
         assert_eq!(normalize_code("12345678"), None);
         assert_eq!(normalize_code("12345678a9"), None);
         assert_eq!(format_code("123456789"), "123 456 789");
+    }
+
+    #[test]
+    fn rdv_server_kinds() {
+        let id = iroh::SecretKey::generate().public();
+        assert!(matches!(parse_rdv_server(&format!("{id}@192.0.2.10:7788")).unwrap(), RdvServer::Quic(_)));
+        let ws = |s: &str| match parse_rdv_server(s).unwrap() {
+            RdvServer::Ws(u) => u,
+            other => panic!("应该是 WebSocket：{other:?}"),
+        };
+        assert_eq!(ws("wss://rdv.example.com"), "wss://rdv.example.com/v1/ws");
+        assert_eq!(ws("https://rdv.example.com/"), "wss://rdv.example.com/v1/ws");
+        assert_eq!(ws("ws://127.0.0.1:8787"), "ws://127.0.0.1:8787/v1/ws");
+        assert_eq!(ws("wss://rdv.example.com/custom/ws"), "wss://rdv.example.com/custom/ws");
+        assert!(parse_rdv_server("wss://").is_err());
     }
 
     #[test]

@@ -1,0 +1,17 @@
+{
+  "name": "p2pcli-rdv-cloudflare",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261009.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.152.0"
+  }
+}

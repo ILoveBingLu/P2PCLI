@@ -4,6 +4,10 @@
 node_modules/
 /app/src-tauri/gen/
 
+# Cloudflare 本地运行状态（里面有本地测试的设备库）和本地密钥
+.wrangler/
+.dev.vars*
+
 # 本地运行数据：设备私钥、受信名单、设备库、日志，绝不能进仓库
 *-data/
 identity.key

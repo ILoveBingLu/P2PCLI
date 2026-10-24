@@ -539,11 +539,11 @@ function SettingsDialog({ ov, onClose, onChanged }: { ov: Overview; onClose: () 
           <input className="input" value={name} placeholder={ov.name} onChange={(e) => setName(e.target.value)} />
         </label>
         <label className="field">
-          <span>牵线服务器（留空用默认）</span>
+          <span>牵线服务器（公钥@IP:端口 走 UDP，wss://域名 走 WebSocket；留空用默认）</span>
           <input
             className="input mono"
             value={server}
-            placeholder={s?.effective_server ?? "公钥@IP:端口"}
+            placeholder={s?.effective_server ?? "公钥@IP:端口 或 wss://域名"}
             onChange={(e) => setServer(e.target.value)}
             spellCheck={false}
           />
