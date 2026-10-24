@@ -23,7 +23,7 @@ export function AlertDialog({
         isOpen={open}
         isDismissable={false}
         isKeyboardDismissDisabled
-        className="z-50 bg-black/60"
+        className="z-50"
       >
         {children}
       </HeroAlertDialog.Backdrop>
@@ -36,7 +36,7 @@ export function AlertDialogContent({ children }: { children: ReactNode }) {
     <HeroAlertDialog.Container placement="center" size="lg">
       <HeroAlertDialog.Dialog
         aria-describedby={descriptionId}
-        className="grid gap-4 rounded-xl border bg-background p-6 text-foreground"
+        className="gap-4"
       >
         {children}
       </HeroAlertDialog.Dialog>

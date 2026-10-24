@@ -3,8 +3,8 @@ import {
   ChevronRight,
   CircleHelp,
   Settings2,
-  TerminalSquare,
 } from "lucide-react";
+import appIcon from "../../src-tauri/icons/128x128.png";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -30,9 +30,7 @@ export function Titlebar({
       aria-label="应用标题栏"
     >
       <div className="titlebar-brand titlebar-drag" data-tauri-drag-region>
-        <span className="brand-symbol">
-          <TerminalSquare aria-hidden="true" />
-        </span>
+        <img className="brand-symbol" src={appIcon} alt="" draggable={false} />
         <strong>P2PCLI</strong>
         <Badge variant="outline">Beta</Badge>
       </div>

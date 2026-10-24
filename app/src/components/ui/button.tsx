@@ -46,14 +46,8 @@ export function Button({
       isIconOnly={size.startsWith("icon")}
       isDisabled={disabled ?? props.isDisabled}
       className={cn(
-        "shrink-0 gap-2 rounded-md text-sm [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
-        size === "default" && "h-9 px-4",
-        size === "xs" && "h-6 px-2 text-xs",
-        size === "sm" && "h-8 px-3 text-xs",
-        size === "icon-xs" && "size-6 min-w-0 p-0",
-        size === "icon-sm" && "size-8 min-w-0 p-0",
-        size === "icon" && "size-9 min-w-0 p-0",
-        variant === "link" && "text-primary underline-offset-4 hover:underline",
+        "shrink-0",
+        variant === "link" && "underline-offset-4 hover:underline",
         className,
       )}
     />

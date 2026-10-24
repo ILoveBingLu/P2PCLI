@@ -26,7 +26,7 @@ export function Dialog({
         isOpen={open}
         onOpenChange={onOpenChange}
         isDismissable
-        className="z-50 bg-black/60"
+        className="z-50"
       >
         {children}
       </Modal.Backdrop>
@@ -46,7 +46,7 @@ export function DialogContent({
       <Modal.Dialog
         aria-describedby={descriptionId}
         className={cn(
-          "relative grid gap-4 rounded-xl border bg-background p-6 text-foreground",
+          "gap-4",
           className,
         )}
       >

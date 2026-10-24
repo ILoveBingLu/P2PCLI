@@ -416,6 +416,7 @@ export function SettingsDialog({
                     <FieldLabel htmlFor="device-name">设备名称</FieldLabel>
                     <Input
                       id="device-name"
+                      variant="secondary"
                       value={name}
                       placeholder={ov.name}
                       onChange={(e) => setName(e.target.value)}
@@ -429,6 +430,7 @@ export function SettingsDialog({
                     <FieldLabel htmlFor="server-address">牵线服务器</FieldLabel>
                     <Input
                       id="server-address"
+                      variant="secondary"
                       value={server}
                       placeholder={
                         settings.effective_server ??
@@ -447,6 +449,7 @@ export function SettingsDialog({
                     <FieldLabel htmlFor="relay-address">中继服务器</FieldLabel>
                     <Input
                       id="relay-address"
+                      variant="secondary"
                       value={relay}
                       placeholder={
                         settings.effective_relay ?? "https://relay.example.com"

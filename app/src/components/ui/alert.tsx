@@ -22,7 +22,7 @@ export function Alert({
       {...props}
       status={variant === "destructive" ? "danger" : variant}
       role="alert"
-      className={cn("w-full text-sm [&_svg]:size-4", className)}
+      className={cn("w-full", className)}
     >
       {indicator && <HeroAlert.Indicator>{indicator}</HeroAlert.Indicator>}
       <HeroAlert.Content>
@@ -40,7 +40,7 @@ export function AlertDescription({
     <HeroAlert.Description
       {...props}
       className={cn(
-        "grid justify-items-start gap-2 text-xs leading-relaxed",
+        "grid justify-items-start gap-2",
         className,
       )}
     />

@@ -38,7 +38,7 @@ export function FieldLabel({
     <Label
       {...props}
       data-slot="field-label"
-      className={cn("w-fit text-xs font-medium", className)}
+      className={className}
     />
   );
 }
@@ -50,7 +50,7 @@ export function FieldDescription({
     <Description
       {...props}
       data-slot="field-description"
-      className={cn("text-xs leading-relaxed text-muted-foreground", className)}
+      className={className}
     />
   );
 }

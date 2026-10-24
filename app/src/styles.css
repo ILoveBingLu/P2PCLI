@@ -28,10 +28,6 @@
   --color-success-soft: var(--success-soft);
   --color-warning: var(--warning);
   --color-warning-soft: var(--warning-soft);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
   --font-sans:
     "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Microsoft YaHei UI", "PingFang SC", sans-serif;
@@ -39,52 +35,25 @@
 }
 
 :root {
-  color-scheme: dark;
-  --background: #111114;
-  --foreground: #ededf1;
-  --card: #1c1c22;
-  --card-foreground: #ededf1;
-  --popover: #1c1c22;
-  --popover-foreground: #ededf1;
-  --primary: #7762dc;
-  --primary-foreground: #fff;
-  --secondary: #292930;
-  --secondary-foreground: #e0dfe8;
-  --muted-surface: #232329;
-  --muted: #96969f;
-  --muted-foreground: #96969f;
-  --accent: #7762dc;
-  --accent-foreground: #f3f2f8;
-  --destructive: #f0848b;
-  --border: #2b2b33;
-  --input: #35353f;
-  --ring: #8b7cf8;
-  --success: #83d6ac;
-  --success-soft: #192b24;
-  --warning: #e9bb76;
-  --warning-soft: #30291f;
-  --sidebar: #18181c;
+  /* Application aliases follow HeroUI's default dark theme. */
+  --card: var(--surface);
+  --card-foreground: var(--surface-foreground);
+  --popover: var(--overlay);
+  --popover-foreground: var(--overlay-foreground);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --secondary: var(--default);
+  --secondary-foreground: var(--default-foreground);
+  --muted-surface: var(--surface-secondary);
+  --muted-foreground: var(--muted);
+  --destructive: var(--danger);
+  --input: var(--field-border);
+  --ring: var(--focus);
+  --sidebar: var(--background);
   --terminal: #111114;
-  --radius: 0.625rem;
-  --surface: var(--card);
-  --surface-foreground: var(--foreground);
-  --surface-secondary: var(--secondary);
-  --overlay: var(--card);
-  --overlay-foreground: var(--foreground);
-  --default: var(--secondary);
-  --default-foreground: var(--foreground);
-  --field-background: #232329;
-  --field-foreground: var(--foreground);
-  --field-placeholder: var(--muted-foreground);
-  --field-border: var(--input);
-  --field-border-width: 1px;
-  --field-border-focus: var(--input);
-  --field-focus: var(--field-background);
-  --field-shadow: none;
-  --segment: var(--secondary);
-  --segment-foreground: var(--foreground);
-  --separator: var(--border);
-  --danger: var(--destructive);
+
+  /* User preference: no added focus outline, ring or focused field border. */
+  --field-border-focus: var(--field-border);
   --focus: transparent;
 }
 
@@ -103,19 +72,8 @@
     @apply bg-background text-foreground font-sans antialiased;
     font-size: 13px;
   }
-  button,
-  input {
-    font: inherit;
-  }
   button:not(:disabled) {
     cursor: pointer;
-  }
-  button,
-  input {
-    transition:
-      background-color 150ms ease,
-      border-color 150ms ease,
-      box-shadow 150ms ease;
   }
   button:disabled {
     cursor: not-allowed;
@@ -207,7 +165,6 @@
 }
 .titlebar-brand [data-slot="chip"] {
   margin-left: auto;
-  font-size: 9px;
 }
 .titlebar-context {
   flex: 1;
@@ -240,18 +197,10 @@
   flex: none;
 }
 .brand-symbol {
-  width: 25px;
-  height: 25px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  background: var(--primary);
-  color: var(--primary-foreground);
-  box-shadow: 0 3px 12px #0003;
-}
-.brand-symbol svg {
-  width: 17px;
-  height: 17px;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  object-fit: contain;
 }
 .sidebar-scroll {
   padding: 18px 18px 20px;
@@ -259,27 +208,11 @@
   min-height: 0;
   flex: 1;
 }
-.device-card {
-  gap: 0;
-  padding-block: 0;
-  box-shadow: 0 2px 6px #0000000d;
-  overflow: hidden;
-}
 .device-card [data-slot="card-header"] {
-  display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 14px 16px 12px;
-}
-.device-card [data-slot="card-content"] {
-  padding-inline: 16px;
-  padding-bottom: 12px;
-}
-.device-card [data-slot="card-footer"] {
-  padding: 8px 16px;
-  border-top: 1px solid var(--border);
 }
 .section-heading {
   display: flex;
@@ -826,10 +759,6 @@
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
 }
-[data-slot="modal-header"],
-[data-slot="alert-dialog-header"] {
-  gap: 8px;
-}
 [data-slot="tabs-tab"] > svg {
   width: 16px;
   height: 16px;
@@ -1013,11 +942,6 @@
     padding-inline: 10px;
   }
 
-  .device-card [data-slot="card-header"],
-  .device-card [data-slot="card-content"],
-  .device-card [data-slot="card-footer"] {
-    padding-inline: 12px;
-  }
   .device-code {
     font-size: 20px;
   }
