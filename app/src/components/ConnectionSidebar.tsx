@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
 import { ArrowUpRight, Copy, History, House, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
-import { api, formatCode, pathLabel, type DeviceStatus, type NearbyDevice, type Overview } from "../api";
+import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -220,9 +220,6 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
                     </Accordion.Heading>
                     <Accordion.Panel>
                       <div className="mb-2 ml-4 min-w-0 border-l border-border pl-2">
-                        <div className="flex h-6 items-center pl-2" data-menu={`device:${device.endpoint_id}`}>
-                          <span className="font-mono text-[10px] text-muted-foreground">{formatCode(device.code)}</span>
-                        </div>
                         {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
                           key={target?.connId ?? "disconnected"} target={target} status={status} tabs={deviceTabs} sessionsRev={sessionsRev}
                           activeKey={sessionTarget ? null : activeKey} busy={busy}

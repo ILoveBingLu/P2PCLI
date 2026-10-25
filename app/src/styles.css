@@ -661,6 +661,7 @@
 /* HeroUI 的标签面板默认有 8px 内边距，终端和底部条要贴边，这里清掉 */
 .terminal-panel {
   position: absolute;
+  isolation: isolate;
   inset: 0;
   margin: 0;
   padding: 0;
@@ -718,6 +719,8 @@
 .term {
   flex: 1;
   min-height: 0;
+  /* xterm's canvas layers have their own z-index; keep them below sibling overlays. */
+  isolation: isolate;
 }
 /* 滚动条浮在内容上，细一点；xterm 用内联样式定宽，只能用 !important 盖掉 */
 .term .xterm-scrollable-element > .scrollbar.vertical {
@@ -730,6 +733,7 @@
 }
 .term-overlay {
   position: absolute;
+  z-index: 1;
   inset: 0;
   display: flex;
   align-items: center;
@@ -740,6 +744,7 @@
 }
 .terminal-loading {
   position: absolute;
+  z-index: 1;
   inset: 0;
   display: flex;
   align-items: center;

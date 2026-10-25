@@ -155,6 +155,10 @@ mockIPC(
         attachments.set(termId, { sessionId: session.id, status: args.status });
         ((window as any).__outs ??= []).push(args.output);
         setTimeout(() => args.output.onmessage(new TextEncoder().encode(sample).buffer), 100);
+        // Reproduce disconnected overlays alongside another mounted terminal tab.
+        if (s === "disconnected" && termId === 1) {
+          setTimeout(() => args.status.onmessage({ type: "closed", reason: "网络中断，连接超时" }), 1500);
+        }
         return { term_id: termId, session_id: session.id };
       }
       case "term_close": {
