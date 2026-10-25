@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" preserveAspectRatio="xMinYMin meet">
+  <!-- windows-icon.svg 的小尺寸版，出 icon.ico 里的 16 和 24 像素：
+       光芒在这么小时会糊成小点，去掉，剩下的图形再放大一点。 -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#273244"/>
+      <stop offset="1" stop-color="#0b1220"/>
+    </linearGradient>
+    <path id="pointer" d="M 578.89 424.56 A 11.95 11.95 0 0 1 594.56 408.89 L 858.56 516.89 A 12.00 12.00 0 0 1 856.78 539.66 L 752.41 564.65 A 24.00 24.00 0 0 0 734.65 582.38 L 709.69 686.78 A 12.00 12.00 0 0 1 686.89 688.56 Z"/>
+    <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <use href="#pointer" fill="#000" stroke="#000" stroke-width="132" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <rect x="2" y="2" width="252" height="252" rx="54" fill="url(#plate)"/>
+  <rect x="3" y="3" width="250" height="250" rx="53" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width="2"/>
+  <g transform="translate(-20.6 -33.0) scale(0.285)">
+    <g stroke="#34d399" stroke-width="84" stroke-linecap="round">
+      <line x1="196" y1="420" x2="356" y2="565"/>
+      <line x1="356" y1="565" x2="196" y2="710"/>
+    </g>
+    <rect x="424" y="668" width="316" height="84" rx="42" fill="#e5e7eb" mask="url(#gap)"/>
+    <use href="#pointer" fill="#60a5fa" stroke="#60a5fa" stroke-width="60" stroke-linejoin="round"/>
+  </g>
+</svg>

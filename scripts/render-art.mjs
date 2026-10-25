@@ -1,6 +1,6 @@
 // 把 SVG 渲染成打包要用的图：
 // app/src-tauri/installer 里的 dmg 窗口背景（1 倍和 2 倍合成一个 TIFF，Retina 屏也清楚）、NSIS 侧边图和顶栏图（按两倍尺寸出 24 位 BMP），
-// 以及 app/src-tauri/icons 里的 Mac 菜单栏模板图。
+// 以及 app/src-tauri/icons 里的 Mac 菜单栏模板图、Windows 软件图标 icon.ico。
 // 只在 Mac 上跑：用 Chrome 渲染 SVG（CHROME 环境变量指向它的可执行文件），再用系统自带的 sips、tiffutil 转格式。
 // 用法：CHROME=/path/to/chrome node scripts/render-art.mjs
 import { execFileSync } from "node:child_process";
@@ -14,7 +14,7 @@ const icons = fileURLToPath(new URL("../app/src-tauri/icons/", import.meta.url))
 const tmp = mkdtempSync(path.join(os.tmpdir(), "p2pcli-art-"));
 
 function render(chrome, svg, width, height, scale, from = dir) {
-  const out = path.join(tmp, `${path.basename(svg, ".svg")}@${scale}x.png`);
+  const out = path.join(tmp, `${path.basename(svg, ".svg")}-${width}x${height}@${scale}x.png`);
   // 直接打开 SVG 而不是放进 <img>，里面引用的图标才能加载
   execFileSync(chrome, [
     "--headless=new", "--disable-gpu", "--hide-scrollbars", "--allow-file-access-from-files",
@@ -45,6 +45,24 @@ function bmp(png, name) {
   writeFileSync(path.join(dir, name), b);
 }
 
+/** 把各尺寸的 PNG 打成 ico，每个尺寸直接存 PNG（Windows Vista 起都认，NSIS 也认） */
+function ico(sizes, pngs, out) {
+  const head = Buffer.alloc(6 + 16 * pngs.length);
+  head.writeUInt16LE(1, 2);
+  head.writeUInt16LE(pngs.length, 4);
+  let offset = head.length;
+  pngs.forEach((png, i) => {
+    const e = 6 + i * 16;
+    head[e] = head[e + 1] = sizes[i] % 256; // 256 要写成 0
+    head.writeUInt16LE(1, e + 4);
+    head.writeUInt16LE(32, e + 6);
+    head.writeUInt32LE(png.length, e + 8);
+    head.writeUInt32LE(offset, e + 12);
+    offset += png.length;
+  });
+  writeFileSync(out, Buffer.concat([head, ...pngs]));
+}
+
 try {
   const chrome = process.env.CHROME;
   if (!chrome) throw new Error("用 CHROME 环境变量指定 Chrome 的可执行文件");
@@ -54,7 +72,11 @@ try {
   bmp(render(chrome, "nsis-header.svg", 150, 57, 2), "nsis-header.bmp");
   // 菜单栏图标只看透明度，颜色由系统按菜单栏深浅来染；48x36 就是 2 倍屏上的 24x18 点
   copyFileSync(render(chrome, "tray.svg", 48, 36, 1, icons), path.join(icons, "tray-template.png"));
-  console.log("已更新 dmg-background.tiff、nsis-sidebar.bmp、nsis-header.bmp、tray-template.png");
+  // Windows 软件图标：底板铺满画布；16 和 24 用去掉光芒的小尺寸版
+  const sizes = [16, 24, 32, 48, 64, 256];
+  const svg = (n) => (n <= 24 ? "windows-icon-small.svg" : "windows-icon.svg");
+  ico(sizes, sizes.map((n) => readFileSync(render(chrome, svg(n), n, n, 1, icons))), path.join(icons, "icon.ico"));
+  console.log("已更新 dmg-background.tiff、nsis-sidebar.bmp、nsis-header.bmp、tray-template.png、icon.ico");
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
