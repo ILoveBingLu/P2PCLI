@@ -164,7 +164,7 @@
   font-weight: 650;
   letter-spacing: -0.3px;
 }
-/* 为 macOS 原生红绿灯及分隔线留出空间，标题后接侧边栏开关。 */
+/* 为 macOS 原生红绿灯及分隔线留出空间，标题后接设置和收起／返回按钮。 */
 .titlebar-macos .titlebar-brand {
   padding-left: 90px;
 }

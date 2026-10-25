@@ -47,6 +47,17 @@ export function Titlebar({
         </div>
       </div>
       <Button
+        variant="ghost"
+        size="icon-sm"
+        className="mr-2"
+        aria-label="设置"
+        title="设置"
+        disabled={!settingsEnabled}
+        onClick={onSettings}
+      >
+        <Settings />
+      </Button>
+      <Button
         variant={onBack ? "secondary" : "ghost"}
         size={onBack ? "sm" : "icon-sm"}
         className={onBack ? "titlebar-sidebar-toggle gap-1.5 rounded-full px-2.5" : "titlebar-sidebar-toggle"}
@@ -71,16 +82,6 @@ export function Titlebar({
           onClick={onDiag}
         >
           <Wifi />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="设置"
-          title="设置"
-          disabled={!settingsEnabled}
-          onClick={onSettings}
-        >
-          <Settings />
         </Button>
       </div>
     </header>
