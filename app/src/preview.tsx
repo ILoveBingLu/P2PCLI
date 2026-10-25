@@ -162,6 +162,7 @@ mockIPC(
         );
       }
       case "list_terminals": {
+        if (s === "sessions-error") return Promise.reject("无法连接到会话服务，请检查被控端运行状态。");
         // s=status-live: change metadata, fail briefly, then recover without a reload.
         const elapsed = statusStartedAt ? Date.now() - statusStartedAt : 0;
         if (s === "status-live" && elapsed >= 12000 && elapsed < 18000)

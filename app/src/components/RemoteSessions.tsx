@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronRight, LoaderCircle, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, LoaderCircle, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2, Unplug } from "lucide-react";
 import { api, pathLabel, platformLabel, type PathInfo, type RemoteInfo, type TerminalSession } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -79,10 +79,11 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
   const labels = sessionLabels(sessions ?? []);
   const ordered = [...(sessions ?? [])].sort((a, b) => (labels.get(a.id) ?? "").localeCompare(labels.get(b.id) ?? "", "zh-CN", { numeric: true }));
   const { info } = target;
+  const hasSessions = ordered.length > 0;
 
   return (
     <section
-      className="settings-page"
+      className="remote-sessions-page"
       aria-labelledby="remote-sessions-title"
       // 空白处右键：新建、刷新；会话行自己的菜单先接到，不会冒泡到这里
       onContextMenu={(e) => menu.open(e, [
@@ -91,51 +92,49 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
       ])}
     >
       {menu.element}
-      <div className="settings-page-inner">
         <header className="remote-device">
           <Button variant="ghost" size="icon-sm" title="返回工作区" aria-label="返回工作区" onClick={onBack}><ArrowLeft /></Button>
           <div className="remote-device-icon">
             <PlatformIcon platform={info.platform} decorative />
-            <span className="connected-dot" aria-hidden="true" />
           </div>
-          <div className="min-w-0 flex-1">
+          <div className="remote-device-summary">
             <h1 id="remote-sessions-title" className="truncate text-base font-semibold">{info.name}</h1>
             <p className="remote-device-meta">
-              <span className="status-dot" data-kind={path?.kind ?? "unknown"} />
-              <span>已连接 · {pathLabel(path)}</span>
-              <span className="text-muted-foreground">{platformLabel(info.platform)} · 用户 {info.user}</span>
+              <span className="remote-connection-state"><span className="status-dot" data-kind={path?.kind ?? "unknown"} />已连接</span>
+              <span>{pathLabel(path)}</span>
+              <span className="remote-device-user">{platformLabel(info.platform)} · {info.user}</span>
             </p>
           </div>
-          <Button onClick={() => onOpen()} disabled={sessions === null}><Plus data-icon="inline-start" />新建会话</Button>
+          <Button variant="ghost" size="icon-sm" title="刷新会话" aria-label="刷新会话" disabled={refreshing || sessions === null} onClick={() => void load(true)}>
+            <RefreshCw className={refreshing ? "animate-spin" : undefined} />
+          </Button>
         </header>
 
-        <div className="flex flex-col gap-3">
-          <div className="section-title mb-0">
-            <h2>
-              会话
-              {sessions && sessions.length > 0 && <Badge variant="secondary">{sessions.length}</Badge>}
-            </h2>
-            <Button variant="ghost" size="icon-sm" title="刷新会话" aria-label="刷新会话" disabled={refreshing} onClick={() => void load(true)}>
-              <RefreshCw className={refreshing ? "animate-spin" : undefined} />
-            </Button>
-          </div>
-          <p className="-mt-1 text-xs text-muted-foreground">关闭标签或断线后，会话照样在这台设备上运行。点一下打开，右键可以结束。</p>
+        <div className={`remote-sessions-body${hasSessions ? " has-sessions" : ""}`}>
+          {hasSessions && <div className="remote-sessions-heading">
+            <h2>会话 <Badge variant="secondary">{sessions?.length}</Badge></h2>
+            <Button size="sm" onClick={() => onOpen()}><Plus data-icon="inline-start" />新建会话</Button>
+          </div>}
 
-          {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+          {error && hasSessions && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
 
           {sessions === null ? (
-            <div className="loading-state" role="status"><LoaderCircle className="animate-spin" />正在读取会话…</div>
-          ) : ordered.length === 0 ? (
-            !error && (
+            <div className="remote-sessions-loading loading-state" role="status"><LoaderCircle className="animate-spin" />正在读取会话…</div>
+          ) : !hasSessions ? (
               <Empty className="session-empty">
                 <EmptyHeader>
-                  <EmptyMedia variant="icon"><SquareTerminal /></EmptyMedia>
-                  <EmptyTitle>这台设备上还没有会话</EmptyTitle>
-                  <EmptyDescription>新建一个会话，关掉标签或断线后它会继续在后台运行。</EmptyDescription>
+                  <EmptyMedia variant="icon" className="session-empty-icon">{error ? <Unplug /> : <SquareTerminal />}</EmptyMedia>
+                  <EmptyTitle role="heading" aria-level={2}>{error ? "暂时无法读取会话" : "开始一个新会话"}</EmptyTitle>
+                  <EmptyDescription>{error ? "未能获取这台设备的会话，请重试。" : "这台设备暂无会话，新建一个终端开始使用。"}</EmptyDescription>
                 </EmptyHeader>
-                <Button onClick={() => onOpen()}><Plus data-icon="inline-start" />新建会话</Button>
+                {error ? <>
+                  <p className="session-empty-error" role="alert">{error}</p>
+                  <Button onClick={() => void load(true)} disabled={refreshing}><RefreshCw className={refreshing ? "animate-spin" : undefined} data-icon="inline-start" />重新加载</Button>
+                </> : <>
+                  <Button onClick={() => onOpen()}><Plus data-icon="inline-start" />新建会话</Button>
+                  <p className="session-empty-note">关闭标签或断线后，会话仍在后台运行</p>
+                </>}
               </Empty>
-            )
           ) : (
             <ul className="session-list">
               {ordered.map((s) => {
@@ -176,7 +175,6 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
             </ul>
           )}
         </div>
-      </div>
       {ending && (
         <AlertDialog open>
           <AlertDialogContent>

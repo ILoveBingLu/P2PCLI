@@ -107,13 +107,12 @@
   height: 100%;
   min-height: 0;
 }
-/* 收起时宽度收到 0，内容固定宽度只被裁掉不重排；分隔线用内阴影，宽度能真正到 0。 */
+/* 收起时宽度收到 0，内容固定宽度只被裁掉不重排；分隔线由主区域绘制。 */
 .connection-sidebar {
   width: 260px;
   min-height: 0;
   overflow: hidden;
   background: var(--sidebar);
-  box-shadow: inset -1px 0 var(--border);
   transition:
     width 220ms cubic-bezier(0.32, 0.72, 0, 1),
     visibility 0s;
@@ -139,7 +138,6 @@
   align-items: center;
   min-width: 0;
   background: var(--sidebar);
-  border-bottom: 1px solid var(--border);
   user-select: none;
 }
 .titlebar-drag {
@@ -373,28 +371,36 @@
   line-height: 1.6;
 }
 
-/* 连上一台设备后右边的会话页：上面是设备卡片，下面是会话列表 */
+/* 设备会话页独占工作区；空状态使用完整剩余空间，不复用设置页布局。 */
+.remote-sessions-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
 .remote-device {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px 14px 8px;
-  border-radius: 16px;
-  background: var(--muted-surface);
+  flex: none;
+  padding: 12px 24px 12px 16px;
+  border-bottom: 1px solid var(--border);
 }
 .remote-device-icon {
   position: relative;
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   flex: none;
-  border-radius: 12px;
-  background: var(--default);
+  border-radius: 10px;
+  background: var(--muted-surface);
 }
 .remote-device-icon .platform-icon {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
 }
 /* 已连接：图标右下角的绿点 */
 .connected-dot {
@@ -407,17 +413,71 @@
   background: var(--success);
   box-shadow: 0 0 0 2.5px var(--muted-surface);
 }
+.remote-device-summary {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 16px;
+  min-width: 0;
+  overflow: hidden;
+}
+.remote-device-summary h1 {
+  flex: 0 1 auto;
+  max-width: 40%;
+  min-width: 0;
+}
 .remote-device-meta {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   column-gap: 10px;
-  row-gap: 2px;
-  margin-top: 2px;
-  font-size: 12px;
+  font-size: 11px;
+  color: var(--muted-foreground);
 }
-.remote-device-meta .status-dot {
-  margin-right: -4px;
+.remote-device-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remote-connection-state {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  color: var(--foreground);
+}
+.remote-sessions-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: 24px;
+  width: 100%;
+  min-width: 0;
+}
+.remote-sessions-body.has-sessions {
+  max-width: 960px;
+  margin-inline: auto;
+  gap: 16px;
+}
+.remote-sessions-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+.remote-sessions-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.remote-sessions-loading {
+  flex: 1;
 }
 .session-list {
   display: flex;
@@ -473,8 +533,46 @@
   height: 17px;
 }
 .session-empty {
-  border: 1px dashed var(--border);
-  border-radius: 16px;
+  min-height: 320px;
+  gap: 22px;
+  border: 0;
+  padding: 32px 16px;
+}
+.session-empty .session-empty-icon {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--muted-surface);
+  color: var(--muted-foreground);
+}
+.session-empty .session-empty-icon svg {
+  width: 28px;
+  height: 28px;
+}
+.session-empty [data-slot="empty-title"] {
+  font-size: 20px;
+  font-weight: 600;
+}
+.session-empty [data-slot="empty-description"] {
+  font-size: 13px;
+}
+.session-empty-note {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.session-empty-error {
+  max-width: 440px;
+  max-height: 120px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+@media (max-width: 760px) {
+  .remote-device { padding: 12px; gap: 8px; }
+  .remote-sessions-body { padding: 16px; }
 }
 /* 侧边栏里已连接的设备：平台图标右下角一个绿点 */
 .device-icon {
@@ -545,6 +643,13 @@
   display: flex;
   flex-direction: column;
   background: var(--background);
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+/* 分隔线由主区域绘制，左上角自然转弯，避免旧直线穿过圆角。 */
+.connection-sidebar:not([data-collapsed]) + .workspace {
+  border-left: 1px solid var(--border);
+  border-top-left-radius: 14px;
 }
 .workspace-full-width {
   grid-column: 1 / -1;
