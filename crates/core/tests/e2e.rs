@@ -347,3 +347,82 @@ async fn persistent_session_survives_disconnect_and_host_restart() {
     guest.shutdown().await;
     restarted.shutdown().await;
 }
+
+/// 在线探测：配对过的能拿会话列表；没配对的只知道在线和延迟；旧版本认得出来，不当成离线
+#[tokio::test(flavor = "multi_thread")]
+async fn presence_probe_paired_unpaired_and_old_version() {
+    use p2pcli_core::presence::{self, ProbeError};
+
+    let delegate = TestDelegate::new();
+    let start = |dir: std::path::PathBuf, name: &str, d: Arc<TestDelegate>| {
+        let name = name.to_string();
+        async move {
+            Node::start(NodeConfig { data_dir: dir, device_name: Some(name), offline: true, ..Default::default() }, d)
+                .await
+                .unwrap()
+        }
+    };
+    let host = start(temp_dir("presence-host"), "被连机", delegate.clone()).await;
+    let paired = start(temp_dir("presence-paired"), "配对过的", TestDelegate::new()).await;
+    let stranger = start(temp_dir("presence-stranger"), "陌生的", TestDelegate::new()).await;
+    host.host.set_password("abc234");
+    let addr = local_addr(&host);
+
+    // 同意过一次，就记成配对设备
+    delegate.set(Decision::Allow { trust: false });
+    let remote = paired.connect_addr(addr.clone(), Some("abc234".into())).await.expect("应该连上");
+    remote.close();
+    assert!(host.host.paired.contains(&paired.id()), "同意过的设备应该记成配对");
+    let requests = delegate.request_count();
+
+    // 配对过的：拿得到会话列表，也有线路和延迟，而且不再弹窗
+    let conn = presence::connect(&paired.endpoint, addr.clone()).await.expect("探测应该连上");
+    let sessions = presence::ask_sessions(&conn).await.unwrap();
+    assert!(sessions.is_some(), "配对过的设备应该拿到会话列表");
+    assert!(sessions.unwrap().iter().all(|s| s.details.is_none()), "探测不该带目录和程序");
+    let path = p2pcli_core::path::current(&conn);
+    assert!(path.rtt_ms.is_some(), "应该测得出延迟：{path:?}");
+    assert_eq!(delegate.request_count(), requests, "探测不该弹窗");
+
+    // 没配对过的：只回“没配对”，延迟照样有
+    let conn = presence::connect(&stranger.endpoint, addr.clone()).await.expect("探测应该连上");
+    assert_eq!(presence::ask_sessions(&conn).await.unwrap(), None);
+    assert!(p2pcli_core::path::current(&conn).rtt_ms.is_some());
+    assert_eq!(delegate.request_count(), requests, "探测不该弹窗");
+
+    // 旧版本：只认终端协议，探测要认出是旧版本，不是离线
+    let old = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .alpns(vec![p2pcli_core::ALPN_TERM.to_vec()])
+        .clear_address_lookup()
+        .relay_mode(iroh::RelayMode::Disabled)
+        .bind()
+        .await
+        .unwrap();
+    let old_accept = old.clone();
+    tokio::spawn(async move {
+        while let Some(incoming) = old_accept.accept().await {
+            tokio::spawn(async move {
+                if let Ok(a) = incoming.accept() {
+                    let _ = a.await;
+                }
+            });
+        }
+    });
+    let old_addr = EndpointAddr::from_parts(
+        old.id(),
+        old.bound_sockets()
+            .into_iter()
+            .filter(|s| s.is_ipv4())
+            .map(|s| TransportAddr::Ip(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), s.port()))),
+    );
+    match presence::connect(&paired.endpoint, old_addr).await {
+        Err(ProbeError::OldVersion) => {}
+        Err(ProbeError::Unreachable(e)) => panic!("旧版本被当成连不上：{e}"),
+        Ok(_) => panic!("旧版本不该连上探测协议"),
+    }
+
+    old.close().await;
+    for n in [host, paired, stranger] {
+        n.shutdown().await;
+    }
+}

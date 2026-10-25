@@ -27,6 +27,20 @@ const ov: Overview = {
     { endpoint_id: "c".repeat(64), name: "客厅的 Windows", platform: "windows", online: true },
   ],
   trusted: [{ endpoint_id: "f9bb5fbc3f", name: "工作室 Mac mini", platform: "macos", added_at: 0 }],
+  // 后台探测：工作室 Mac mini 在线、配对过，会话是实时的；办公室 PC 离线，只有记住的会话
+  devices: [
+    {
+      endpoint_id: "x", state: "online", paired: true,
+      path: { kind: "ipv6", rtt_ms: 12, remote: "[240e::1]:7788" },
+      sessions: [], sessions_live: true, sessions_at: Math.floor(Date.now() / 1000),
+    },
+    {
+      endpoint_id: "y", state: "offline", paired: null, path: null,
+      sessions: [{ id: "d".repeat(32), created_at: Math.floor(Date.now() / 1000) - 26 * 3600, attached: false }],
+      sessions_live: false, sessions_at: Math.floor(Date.now() / 1000) - 2 * 3600,
+    },
+  ],
+  paired: [{ endpoint_id: "zz", name: "小王的 ThinkPad", platform: "windows", added_at: 0 }],
 };
 
 if (s === "unconfigured") {
@@ -58,6 +72,8 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "b".repeat(32), created_at: now - 40 * 60, attached: true },
   { id: "c".repeat(32), created_at: now - 90, attached: false },
 ] : [];
+// 工作室 Mac mini 的后台探测结果用同一份会话，连上前后编号对得上
+ov.devices[0].sessions = terminalSessions.map((session) => ({ ...session }));
 const attachments = new Map<number, { sessionId: string; status: any }>();
 
 const sample = [
@@ -165,6 +181,11 @@ mockIPC(
         return ov.password;
       case "forget_recent":
         ov.recent = ov.recent.filter((device) => device.code !== args.code);
+        return null;
+      case "refresh_devices":
+        return null;
+      case "remove_paired":
+        ov.paired = ov.paired.filter((device) => device.endpoint_id !== args.endpointId);
         return null;
       case "remove_trusted":
         ov.trusted = ov.trusted.filter((device) => device.endpoint_id !== args.endpointId);

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { ArrowUpRight, LoaderCircle, SquareArrowOutUpRight, Terminal, Trash2 } from "lucide-react";
-import { api, type RemoteInfo, type TerminalSession } from "../api";
+import { api, type DeviceStatus, type RemoteInfo, type TerminalSession } from "../api";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/components/ui/toast";
 import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
-import { sessionLabels } from "./sessionText";
+import { relativeTime, sessionLabels } from "./sessionText";
 
 export interface SidebarTab {
   key: number;
@@ -17,14 +17,18 @@ export interface SidebarTab {
   state: "opening" | "open" | "exited" | "closed";
 }
 
-export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onConnect, onOpen, onSelect, onEnded, openMenu }: {
+export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, busy, onConnect, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
   target?: SessionTarget;
+  /** 后台探测的结果：没连上时拿它显示会话列表 */
+  status?: DeviceStatus;
   tabs: SidebarTab[];
   /** 会话增减时变，变了就在后台重读 */
   sessionsRev: number;
   activeKey: number | null;
   busy: boolean;
   onConnect: () => void;
+  /** 没连上时点会话：先连上，再打开这个会话；null 是新建 */
+  onConnectOpen: (sessionId: string | null) => void;
   onOpen: (target: SessionTarget, sessionId?: string) => void;
   onSelect: (key: number) => void;
   onEnded: (sessionId: string) => void;
@@ -111,6 +115,10 @@ export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onC
     ]);
   };
 
+  if (!target) return (
+    <OfflineSessions status={status} busy={busy} onConnect={onConnect} onConnectOpen={onConnectOpen} openMenu={openMenu} />
+  );
+
   return (
     <div className="flex min-w-0 flex-col gap-1" onContextMenu={onContextMenu}>
       {rows.map((row) => (
@@ -127,11 +135,6 @@ export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onC
       {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
       {error && <p className="px-2 py-1 text-xs text-destructive break-words" role="alert">{error}</p>}
       {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话，右键设备可以新建</p>}
-      {!target && (
-        <Button variant="ghost" className="h-8 w-full justify-start px-2 text-xs" disabled={busy} onClick={onConnect}>
-          {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowUpRight className="size-3.5" />}连接以查看会话
-        </Button>
-      )}
       {ending && (
         <AlertDialog open>
           <AlertDialogContent>
@@ -146,6 +149,51 @@ export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onC
           </AlertDialogContent>
         </AlertDialog>
       )}
+    </div>
+  );
+}
+
+/** 没连上时：显示后台探测拿到的、或者上次记住的会话，点一下就连上并打开 */
+function OfflineSessions({ status, busy, onConnect, onConnectOpen, openMenu }: {
+  status?: DeviceStatus;
+  busy: boolean;
+  onConnect: () => void;
+  onConnectOpen: (sessionId: string | null) => void;
+  openMenu: (e: MouseEvent, actions: MenuAction[]) => void;
+}) {
+  const sessions = [...(status?.sessions ?? [])].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id));
+  const labels = sessionLabels(sessions);
+  const stale = !status?.sessions_live;
+  const offline = status?.state === "offline";
+  const hint = sessions.length
+    ? stale && status?.sessions_at ? `上次看到 · ${relativeTime(status.sessions_at)}` : null
+    : status?.paired === false || status?.state === "old_version"
+      ? "连接一次以后，这里会显示会话"
+      : offline ? "离线，没有记住的会话" : status?.state === "online" ? "暂无会话" : null;
+  return (
+    <div className="flex min-w-0 flex-col gap-1" data-stale={stale ? "" : undefined}
+      onContextMenu={(e) => {
+        const id = (e.target as HTMLElement).closest<HTMLElement>("[data-offline-session]")?.dataset.offlineSession;
+        if (!id) return;
+        openMenu(e, [
+          { id: "open", label: "连接并打开", icon: <SquareArrowOutUpRight className="size-4" />, disabled: busy || offline, onAction: () => onConnectOpen(id) },
+        ]);
+      }}>
+      {hint && <p className="px-2 pt-0.5 text-[10px] text-muted-foreground">{hint}</p>}
+      {sessions.map((s) => (
+        <Button key={s.id} variant="ghost" data-offline-session={s.id}
+          className="offline-session h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
+          disabled={busy || offline}
+          title={offline ? "设备离线" : "连接并打开这个会话"}
+          onClick={() => onConnectOpen(s.id)}>
+          <Terminal className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left">{labels.get(s.id) ?? "会话"}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground">{s.attached ? "在用" : "后台运行"}</span>
+        </Button>
+      ))}
+      <Button variant="ghost" className="h-8 w-full justify-start px-2 text-xs" disabled={busy || offline} onClick={onConnect}>
+        {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowUpRight className="size-3.5" />}连接
+      </Button>
     </div>
   );
 }

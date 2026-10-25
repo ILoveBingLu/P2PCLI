@@ -15,10 +15,11 @@ use crate::client::{self, ConnectError, RemoteHost};
 use crate::host::{Host, HostDelegate};
 use crate::identity::{DeviceInfo, load_or_create_key};
 use crate::lan::{Lan, NearbyDevice};
+use crate::presence::{DeviceStatus, Prober};
 use crate::proto::RejectCode;
 use crate::rendezvous::{RdvClient, RdvPush, RdvResponse, normalize_code, parse_rdv_server};
 use crate::store::{RecentDevice, RecentStore, now_secs};
-use crate::{ALPN_PUNCH, ALPN_TERM, v6};
+use crate::{ALPN_PRESENCE, ALPN_PUNCH, ALPN_TERM, v6};
 
 /// IPv6 直连先跑这么久，还没通就同时走常规流程（中继加打洞），谁先通用谁
 const V6_HEAD_START: Duration = Duration::from_millis(1500);
@@ -60,6 +61,8 @@ pub struct Node {
     /// 局域网发现，没开或者没启动成功是 None
     pub lan: Option<Arc<Lan>>,
     pub recent: Arc<RecentStore>,
+    /// 后台探测连接历史里的设备：在线、延迟、会话列表
+    pub prober: Arc<Prober>,
     /// 配合对方 IPv6 直连发过几次包，排查和测试用
     pub punches: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -85,9 +88,12 @@ impl Node {
     pub fn activate(&self) {
         self.host.set_info(self.me.clone());
         if let Some(rdv) = &self.rdv { rdv.activate(); }
+        if !self.config.offline { self.prober.start(); }
     }
 
+    /// 停掉后台任务：牵线、在线探测。换配置时旧的那份要先停
     pub async fn stop_rendezvous(&self) {
+        self.prober.stop();
         if let Some(rdv) = &self.rdv { rdv.stop().await; }
     }
 
@@ -99,7 +105,7 @@ impl Node {
         let proxy = cfg.proxy.as_deref().map(crate::proxy::parse_proxy).transpose()?;
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(key)
-            .alpns(vec![ALPN_TERM.to_vec()])
+            .alpns(vec![ALPN_TERM.to_vec(), ALPN_PRESENCE.to_vec()])
             .path_selector(std::sync::Arc::new(crate::path::Ipv6First));
         if let Some(proxy) = &proxy {
             builder = builder.proxy_url(proxy.clone());
@@ -163,6 +169,8 @@ impl Node {
                     };
                     if conn.alpn() == ALPN_TERM {
                         h.handle(conn).await;
+                    } else if conn.alpn() == ALPN_PRESENCE {
+                        h.handle_presence(conn).await;
                     }
                 });
             }
@@ -185,13 +193,17 @@ impl Node {
         let punches = Arc::new(std::sync::atomic::AtomicU64::new(0));
         spawn_punch_handler(endpoint.clone(), push_rx, punches.clone());
 
+        let recent = recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir)));
+        let prober = Prober::new(endpoint.clone(), rdv.clone(), recent.clone());
+
         Ok(Arc::new(Self {
             endpoint,
             me,
             host,
             rdv,
             lan,
-            recent: recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir))),
+            recent,
+            prober,
             config: cfg,
             punches,
         }))
@@ -246,6 +258,8 @@ impl Node {
         }) {
             warn!("记最近设备失败：{e:#}");
         }
+        // 新连上的设备马上探一次，侧边栏不用等 30 秒
+        self.prober.refresh_now();
         Ok(remote)
     }
 
@@ -294,6 +308,11 @@ impl Node {
         }
     }
 
+    /// 连接历史里每台设备的在线、延迟、会话列表
+    pub fn devices(&self) -> Vec<DeviceStatus> {
+        self.prober.statuses()
+    }
+
     /// 局域网里看到的设备
     pub fn nearby(&self) -> Vec<NearbyDevice> {
         self.lan.as_ref().map(|l| l.devices()).unwrap_or_default()
@@ -312,6 +331,7 @@ impl Node {
         if let Err(e) = self.recent.touch(&id.to_string(), &remote.info.name, &remote.info.platform) {
             warn!("更新连接历史失败：{e:#}");
         }
+        self.prober.refresh_now();
         Ok(remote)
     }
 

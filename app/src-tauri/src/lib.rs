@@ -16,6 +16,7 @@ use p2pcli_core::path::PathInfo;
 use p2pcli_core::proto::RejectCode;
 use p2pcli_core::rendezvous::{normalize_code, parse_server};
 use p2pcli_core::lan::NearbyDevice;
+use p2pcli_core::presence::DeviceStatus;
 use p2pcli_core::store::{RecentDevice, TrustedDevice};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -218,7 +219,11 @@ struct Overview {
     recent: Vec<RecentDevice>,
     /// 局域网里发现的设备
     nearby: Vec<NearbyDevice>,
+    /// 连接历史里各台设备的在线、线路、延迟、会话列表
+    devices: Vec<DeviceStatus>,
     trusted: Vec<TrustedView>,
+    /// 同意过一次的设备：能在后台看延迟和自己的会话列表
+    paired: Vec<TrustedView>,
 }
 
 #[tauri::command]
@@ -239,6 +244,14 @@ fn overview(state: State<'_, AppState>) -> Overview {
         sessions: node.host.sessions(),
         recent: node.recent.list(),
         nearby: node.nearby(),
+        devices: node.devices(),
+        paired: node
+            .host
+            .paired
+            .list()
+            .into_iter()
+            .map(|(endpoint_id, device)| TrustedView { endpoint_id, device })
+            .collect(),
         trusted: node
             .host
             .trust
@@ -310,6 +323,17 @@ fn remove_trusted(state: State<'_, AppState>, endpoint_id: String) -> Result<(),
         .remove(&endpoint_id)
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn remove_paired(state: State<'_, AppState>, endpoint_id: String) -> Result<(), String> {
+    state.node().host.paired.remove(&endpoint_id).map(|_| ()).map_err(|e| format!("{e:#}"))
+}
+
+/// 马上把连接历史里的设备探一遍
+#[tauri::command]
+fn refresh_devices(state: State<'_, AppState>) {
+    state.node().prober.refresh_now();
 }
 
 #[tauri::command]
@@ -417,7 +441,13 @@ struct OpenedTerminal { term_id: u64, session_id: String }
 
 #[tauri::command]
 async fn list_terminals(state: State<'_, AppState>, conn_id: u64) -> Result<Vec<p2pcli_core::proto::TerminalSession>, String> {
-    state.remote(conn_id)?.list_terminals().await.map_err(|e| format!("{e:#}"))
+    let remote = state.remote(conn_id)?;
+    let sessions = remote.list_terminals().await.map_err(|e| format!("{e:#}"))?;
+    // 记下来，断开以后侧边栏还能显示这台设备上有哪些会话
+    if let Err(e) = state.node().recent.save_sessions(&remote.info.endpoint_id, &sessions) {
+        warn!("记会话列表失败：{e:#}");
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -754,7 +784,7 @@ pub fn run() {
                 loop {
                     tick.tick().await;
                     let node = handle.state::<AppState>().node();
-                    let current = serde_json::json!({ "status": node.rdv.as_ref().map(|r| r.status()), "code": node.rdv.as_ref().and_then(|r| r.code()), "name": node.me.name, "lan": node.nearby() });
+                    let current = serde_json::json!({ "status": node.rdv.as_ref().map(|r| r.status()), "code": node.rdv.as_ref().and_then(|r| r.code()), "name": node.me.name, "lan": node.nearby(), "devices": node.devices() });
                     if current != previous { let _ = handle.emit("server-status", &current); previous = current; }
                 }
             });
@@ -812,6 +842,8 @@ pub fn run() {
             scan_nearby,
             diagnose,
             refresh_password,
+            remove_paired,
+            refresh_devices,
             set_password_fixed,
             check_update,
             install_update,

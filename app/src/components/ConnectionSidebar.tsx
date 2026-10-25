@@ -1,7 +1,7 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Copy, History, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
-import { api, formatCode, type NearbyDevice, type Overview } from "../api";
+import { ArrowUpRight, Copy, History, House, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { api, formatCode, pathLabel, type DeviceStatus, type NearbyDevice, type Overview } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -11,7 +11,7 @@ import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 
-export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearbyReveal, onScanNearby, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab, onSessionEnded, onSessionsChanged }: {
+export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearbyReveal, onScanNearby, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab, onSessionEnded, onSessionsChanged, onPendingOpen }: {
   ov: Overview | null;
   /** 会话被结束时变，设备下面的会话列表跟着刷新 */
   sessionsRev: number;
@@ -33,6 +33,8 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   onSessionEnded: (endpointId: string, sessionId: string) => void;
   /** 要所有会话列表重读一遍 */
   onSessionsChanged: () => void;
+  /** 没连上的设备上点了会话：连上以后直接打开它（null 是新建） */
+  onPendingOpen: (endpointId: string, sessionId: string | null) => void;
 }) {
   const menu = useContextMenu();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -68,6 +70,16 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
     </span>
   );
   const lanOnline = new Set(nearby.filter((d) => d.online).map((d) => d.endpoint_id));
+  const statuses = new Map((ov?.devices ?? []).map((d) => [d.endpoint_id, d]));
+
+  // 第一次拿到状态时，把有会话的设备展开，打开软件就能看到之前的会话
+  const autoExpanded = useRef(false);
+  useEffect(() => {
+    if (autoExpanded.current || !ov?.devices.length) return;
+    autoExpanded.current = true;
+    const withSessions = ov.devices.filter((d) => d.sessions.length > 0).map((d) => d.endpoint_id);
+    if (withSessions.length) setExpanded((keys) => new Set([...keys, ...withSessions]));
+  }, [ov?.devices]);
 
   // 正连着就拿到连接，没连着就按局域网或设备码去连
   const targetFor = (endpointId: string) =>
@@ -78,6 +90,10 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
     lanOnline.has(device.endpoint_id)
       ? onConnectLan({ endpoint_id: device.endpoint_id, name: device.name, platform: device.platform, online: true })
       : onConnect(device.code);
+  const connectOpen = (device: { endpoint_id: string; name: string; platform: string; code: string }, sessionId: string | null) => {
+    onPendingOpen(device.endpoint_id, sessionId);
+    connectDevice(device);
+  };
   const forget = async (endpointId: string) => {
     try {
       for (const entry of ov?.recent.filter((item) => item.endpoint_id === endpointId) ?? []) await api.forgetRecent(entry.code);
@@ -97,11 +113,19 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
       const device = devices.find((d) => d.endpoint_id === endpointId);
       if (!device) return;
       const target = targetFor(endpointId);
+      const offline = statuses.get(endpointId)?.state === "offline";
+      actions = target
+        ? [
+          { id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) },
+          { id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged },
+        ]
+        : [
+          { id: "new", label: "新建会话", icon: <Plus className="size-4" />, disabled: busy || offline, onAction: () => connectOpen(device, null) },
+          { id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy || offline, onAction: () => connectDevice(device) },
+          { id: "refresh", label: "刷新状态", icon: <RefreshCw className="size-4" />, onAction: () => void api.refreshDevices() },
+        ];
       actions = [
-        target
-          ? { id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }
-          : { id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy, onAction: () => connectDevice(device) },
-        ...(target ? [{ id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged }] : []),
+        ...actions,
         { id: "copy", label: "复制设备码", icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
         { id: "forget", label: "从连接历史移除", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => void forget(endpointId) },
       ];
@@ -177,13 +201,20 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
               {devices.map((device) => {
                 const deviceTabs = tabs.filter((tab) => tab.info.endpoint_id === device.endpoint_id);
                 const target = sessionTarget?.info.endpoint_id === device.endpoint_id ? sessionTarget : deviceTabs.find((tab) => tab.state !== "closed");
+                const status = statuses.get(device.endpoint_id);
                 return (
                   <Accordion.Item id={device.endpoint_id} key={device.endpoint_id}>
                     <Accordion.Heading>
-                      <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-xs" data-menu={`device:${device.endpoint_id}`}>
+                      <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-xs" data-menu={`device:${device.endpoint_id}`}
+                        data-offline={!target && status?.state === "offline" ? "" : undefined}>
                         {deviceIcon(device.endpoint_id, device.platform)}
                         <span className="min-w-0 flex-1 truncate">{device.name}</span>
-                        {lanOnline.has(device.endpoint_id) && <Badge variant="success" title="在同一个局域网里，连接不经过牵线服务器">局域网</Badge>}
+                        {lanOnline.has(device.endpoint_id) && (
+                          <span className="lan-mark" title="在同一个局域网里，连接不经过牵线服务器">
+                            <House aria-hidden="true" /><span className="sr-only">局域网</span>
+                          </span>
+                        )}
+                        <PresenceLabel status={status} />
                         <Accordion.Indicator className="size-3.5" />
                       </Accordion.Trigger>
                     </Accordion.Heading>
@@ -193,9 +224,10 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
                           <span className="font-mono text-[10px] text-muted-foreground">{formatCode(device.code)}</span>
                         </div>
                         {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
-                          key={target?.connId ?? "disconnected"} target={target} tabs={deviceTabs} sessionsRev={sessionsRev}
+                          key={target?.connId ?? "disconnected"} target={target} status={status} tabs={deviceTabs} sessionsRev={sessionsRev}
                           activeKey={sessionTarget ? null : activeKey} busy={busy}
                           onConnect={() => connectDevice(device)}
+                          onConnectOpen={(id) => connectOpen(device, id)}
                           onOpen={onOpenSession} onSelect={onSelectTab}
                           onEnded={(id) => onSessionEnded(device.endpoint_id, id)}
                           openMenu={menu.open} />}
@@ -212,4 +244,17 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
       </div>
     </aside>
   );
+}
+
+/** 设备行右边的在线状态：在线显示延迟（直连绿色、中继黄色），离线、旧版本各有提示 */
+function PresenceLabel({ status }: { status?: DeviceStatus }) {
+  if (!status) return null;
+  if (status.state === "online") {
+    const p = status.path;
+    const tip = `在线 · ${pathLabel(p)}${p?.remote ? ` · ${p.remote}` : ""}`;
+    return <span className="presence-label" data-kind={p?.kind ?? "unknown"} title={tip}>{p?.rtt_ms != null ? `${p.rtt_ms} ms` : "在线"}</span>;
+  }
+  if (status.state === "offline") return <span className="presence-label" data-kind="off" title="离线">离线</span>;
+  if (status.state === "old_version") return <span className="presence-label" title="对方的 P2PCLI 版本旧，升级后能显示延迟和会话">需更新</span>;
+  return null;
 }

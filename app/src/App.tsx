@@ -163,6 +163,9 @@ export default function App() {
     setActiveKey(key);
   };
 
+  /** 在没连上的设备上点了会话：连上以后直接打开它（null 是新建），不停在会话页 */
+  const pendingOpen = useRef<{ endpointId: string; sessionId: string | null } | null>(null);
+
   const onConnected = (
     connId: number,
     info: RemoteInfo,
@@ -170,8 +173,12 @@ export default function App() {
     path: PathInfo,
   ) => {
     setPaths((m) => ({ ...m, [connId]: path }));
+    const pending = pendingOpen.current;
+    pendingOpen.current = null;
     if (window.__ptTest) addTab(connId, info, code);
-    else {
+    else if (pending && pending.endpointId === info.endpoint_id) {
+      addTab(connId, info, code, pending.sessionId ?? undefined);
+    } else {
       if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((t) => t.connId === sessionTarget.connId))
         void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
       setSessionTarget({ connId, info, code });
@@ -269,7 +276,11 @@ export default function App() {
             onOpenChange={(open) => {
               setShowConnect(open);
               // 关掉面板就回到输设备码，下次从加号打开不会还停在局域网设备上
-              if (!open) connection.setLanTarget(null);
+              if (!open) {
+                connection.setLanTarget(null);
+                // 没连上就关了面板：之前点的会话不再自动打开
+                if (!connection.busy) pendingOpen.current = null;
+              }
             }}
           />
         }
@@ -279,6 +290,7 @@ export default function App() {
         sessionsRev={sessionsRev}
         onSessionEnded={sessionEnded}
         onSessionsChanged={() => setSessionsRev((v) => v + 1)}
+        onPendingOpen={(endpointId, sessionId) => { pendingOpen.current = { endpointId, sessionId }; }}
         busy={connection.busy}
         open={sidebar.open}
         scanning={scanningNearby}

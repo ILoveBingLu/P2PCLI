@@ -60,6 +60,12 @@ enum Cmd {
     },
     /// 网络诊断：IPv6、NAT 类型、中继
     Diag,
+    /// 列出连接历史里各台设备的在线、线路、延迟、会话列表（后台探测的结果）
+    Devices {
+        /// 等多少秒再列
+        #[arg(long, default_value_t = 8)]
+        wait: u64,
+    },
     /// 列出局域网里发现的 P2PCLI 设备
     Nearby {
         /// 等多少秒再列
@@ -177,6 +183,20 @@ async fn main() -> Result<()> {
                 _ => eprintln!("直连地址暂时拿不到"),
             }
             tokio::signal::ctrl_c().await?;
+            node.shutdown().await;
+            Ok(())
+        }
+        Cmd::Devices { wait } => {
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            for d in node.devices() {
+                let path = d.path.map(|p| format!("{:?} {}ms {}", p.kind, p.rtt_ms.unwrap_or(0), p.remote.unwrap_or_default())).unwrap_or_default();
+                let sessions: Vec<String> = d.sessions.iter().map(|s| format!("{}{}", &s.id[..8], if s.attached { "(在用)" } else { "" })).collect();
+                println!(
+                    "{}  {:?}  {}  配对={:?}  会话[{}]{}",
+                    &d.endpoint_id[..10], d.state, path, d.paired, sessions.join(","),
+                    if d.sessions_live { "" } else { "（记住的）" }
+                );
+            }
             node.shutdown().await;
             Ok(())
         }

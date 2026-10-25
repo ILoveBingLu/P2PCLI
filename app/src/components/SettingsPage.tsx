@@ -78,12 +78,12 @@ export function SettingsPage({
       setSaving(false);
     }
   };
-  const removeTrusted = async (id: string) => {
+  const removeTrusted = async (id: string, paired = false) => {
     setRemoving(id);
     try {
-      await api.removeTrusted(id);
+      await (paired ? api.removePaired(id) : api.removeTrusted(id));
       onChanged();
-      toast.success("已移除受信设备");
+      toast.success(paired ? "已移除配对设备" : "已移除受信设备");
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -288,6 +288,40 @@ export function SettingsPage({
                             data-icon="inline-start"
                             className="animate-spin"
                           />
+                        ) : (
+                          <Trash2 data-icon="inline-start" />
+                        )}
+                        移除
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <h3 className="mt-8 mb-1 text-sm font-medium">配对过的设备（{ov.paired.length}）</h3>
+              <p className="detail-note mb-4">
+                你同意过一次的设备。它们能在后台看到本机在不在线、延迟多少，以及它自己开在本机上的会话（只有编号和状态，看不到目录和程序）。打开终端照常要配对密码和你的同意，受信设备除外。移除后就看不到了，下次你再同意它连接时会重新加进来。
+              </p>
+              {ov.paired.length === 0 ? (
+                <p className="text-xs text-muted-foreground">暂无配对过的设备。</p>
+              ) : (
+                <div className="trusted-list">
+                  {ov.paired.map((device) => (
+                    <div className="trusted-device" key={device.endpoint_id}>
+                      <div className="device-symbol">
+                        <PlatformIcon platform={device.platform} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <strong className="block truncate">{device.name}</strong>
+                        <span>{platformLabel(device.platform)}</span>
+                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={removing !== null}
+                        onClick={() => removeTrusted(device.endpoint_id, true)}
+                      >
+                        {removing === device.endpoint_id ? (
+                          <LoaderCircle data-icon="inline-start" className="animate-spin" />
                         ) : (
                           <Trash2 data-icon="inline-start" />
                         )}

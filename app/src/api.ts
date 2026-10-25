@@ -86,7 +86,25 @@ export interface Overview {
   recent: RecentDevice[];
   /** 局域网里发现的设备 */
   nearby: NearbyDevice[];
+  /** 连接历史里各台设备的在线、线路、延迟、会话列表 */
+  devices: DeviceStatus[];
   trusted: TrustedView[];
+  /** 同意过一次的设备：能在后台看延迟和自己的会话列表 */
+  paired: TrustedView[];
+}
+
+export type PresenceState = "checking" | "online" | "offline" | "old_version";
+
+export interface DeviceStatus {
+  endpoint_id: string;
+  state: PresenceState;
+  path: PathInfo | null;
+  /** 对方认不认我；还没探测到是 null */
+  paired: boolean | null;
+  /** 刚从对方拿到的，或者上次记住的 */
+  sessions: TerminalSession[];
+  sessions_live: boolean;
+  sessions_at: number | null;
 }
 
 export interface NearbyDevice {
@@ -162,6 +180,8 @@ export const api = {
   diagnose: () => invoke<Diagnosis>("diagnose"),
   refreshPassword: () => invoke<string>("refresh_password"),
   setPasswordFixed: (fixed: boolean) => invoke("set_password_fixed", { fixed }),
+  removePaired: (endpointId: string) => invoke("remove_paired", { endpointId }),
+  refreshDevices: () => invoke("refresh_devices"),
   checkUpdate: () => invoke<UpdateView | null>("check_update"),
   /** 下载、安装并重启；成功时软件会直接重启，不会返回 */
   installUpdate: (onProgress: (p: UpdateProgress) => void) => {

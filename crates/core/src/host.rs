@@ -17,9 +17,10 @@ use tracing::{debug, info, warn};
 
 use crate::PROTO_VERSION;
 use crate::identity::DeviceInfo;
-use crate::proto::{Msg, RejectCode, read_frame, read_msg, write_msg};
+use crate::proto::{Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
+use crate::presence::{PresenceReq, PresenceResp};
 use crate::store::{TrustStore, write_private};
 
 /// 弹窗最多等多久
@@ -166,6 +167,8 @@ pub struct Host {
     password_file: PathBuf,
     password_fixed: AtomicBool,
     pub trust: TrustStore,
+    /// 同意过一次的设备：能在后台探测延迟、看自己的会话列表，开终端照常要密码和同意
+    pub paired: TrustStore,
     limiter: Mutex<Limiter>,
     sessions: Mutex<HashMap<u64, SessionEntry>>,
     next_id: AtomicU64,
@@ -186,6 +189,7 @@ impl Host {
             password: RwLock::new(fixed.unwrap_or_else(generate_password)),
             password_file,
             trust: TrustStore::open(data_dir),
+            paired: TrustStore::open_file(data_dir, "paired.json"),
             limiter: Mutex::new(Limiter::default()),
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -282,6 +286,36 @@ impl Host {
         }
     }
 
+    /// 回答在线探测：不弹窗、不开终端。配对过的设备能拿到自己的会话列表（只有编号和状态），
+    /// 没配对过的只回一句“没配对”，对方从这次握手里也就知道在线和延迟
+    pub async fn handle_presence(self: Arc<Self>, conn: Connection) {
+        let remote = conn.remote_id();
+        let owner = remote.to_string();
+        while let Ok((mut send, mut recv)) = conn.accept_bi().await {
+            let Ok(Ok(req)) = timeout(Duration::from_secs(10), read_json::<_, PresenceReq>(&mut recv)).await else {
+                break;
+            };
+            let resp = match req {
+                PresenceReq::Sessions if self.trust.contains(&remote) || self.paired.contains(&remote) => {
+                    match self.terminals.list(&owner).await {
+                        Ok(list) => PresenceResp::Sessions {
+                            sessions: list.into_iter().map(|s| TerminalSession { details: None, ..s }).collect(),
+                        },
+                        Err(e) => {
+                            debug!("探测时读会话列表失败：{e:#}");
+                            PresenceResp::Sessions { sessions: Vec::new() }
+                        }
+                    }
+                }
+                PresenceReq::Sessions => PresenceResp::NotPaired,
+            };
+            if write_json(&mut send, &resp).await.is_err() {
+                break;
+            }
+            let _ = send.finish();
+        }
+    }
+
     /// 处理一条进来的连接，直到对面走
     pub async fn handle(self: Arc<Self>, conn: Connection) {
         let remote = conn.remote_id();
@@ -340,6 +374,13 @@ impl Host {
                     }
                 }
             }
+        }
+
+        // 同意过（包括受信设备直接进来的）就记成配对过的设备，之后能在后台看延迟和会话列表
+        if !self.paired.contains(&remote)
+            && let Err(e) = self.paired.add(&remote, &name, &platform)
+        {
+            warn!("记配对设备失败：{e:#}");
         }
 
         let me = self.me.read().unwrap().clone();
