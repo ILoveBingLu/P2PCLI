@@ -1,0 +1,84 @@
+# 编一个平台的安装包和在线更新包，放到 dist/ 上传，给 app-release.yml 里各平台的任务共用。
+name: 编安装包
+description: 编一个平台的 P2PCLI 安装包和在线更新包
+
+inputs:
+  target:
+    description: Rust 目标，例如 aarch64-apple-darwin
+    required: true
+  bundles:
+    description: 要打的包，Mac 是 app,dmg，Windows 是 nsis
+    required: true
+  arch:
+    description: 文件名里的架构，aarch64 或 x64
+    required: true
+  signing-key:
+    description: 在线更新包的签名私钥
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: 标签要和软件版本一致
+      shell: bash
+      run: |
+        want="v$(node -p "require('./app/src-tauri/tauri.conf.json').version")"
+        if [ "$GITHUB_REF_NAME" != "$want" ]; then
+          echo "标签是 $GITHUB_REF_NAME，tauri.conf.json 里的版本对应 $want"
+          exit 1
+        fi
+
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 12.14.0
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+        cache: pnpm
+
+    - name: 装 Rust 目标
+      shell: bash
+      run: rustup target add ${{ inputs.target }}
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.target }}
+
+    - name: 装前端依赖
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: 打包
+      shell: bash
+      env:
+        TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.signing-key }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      run: |
+        if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+          echo "仓库 Secrets 里没有 TAURI_SIGNING_PRIVATE_KEY，在线更新包签不了名"
+          exit 1
+        fi
+        pnpm tauri build --target ${{ inputs.target }} --bundles ${{ inputs.bundles }} \
+          --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+    - name: 收集安装包
+      shell: bash
+      run: |
+        ver="${GITHUB_REF_NAME#v}"
+        b="target/${{ inputs.target }}/release/bundle"
+        mkdir -p dist
+        if [ -d "$b/macos" ]; then
+          cp "$b/dmg/P2PCLI_${ver}_${{ inputs.arch }}.dmg" dist/
+          cp "$b/macos/P2PCLI.app.tar.gz" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz"
+          cp "$b/macos/P2PCLI.app.tar.gz.sig" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz.sig"
+        else
+          cp "$b/nsis/P2PCLI_${ver}_${{ inputs.arch }}-setup.exe" dist/
+          cp "$b/nsis/P2PCLI_${ver}_${{ inputs.arch }}-setup.exe.sig" dist/
+        fi
+        ls -la dist
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.target }}
+        path: dist/*

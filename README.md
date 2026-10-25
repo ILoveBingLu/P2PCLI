@@ -11,7 +11,7 @@
 
 到 [Releases](../../releases) 下载：
 
-- macOS 15 及以上（Apple 芯片和 Intel 都能装）：`P2PCLI_x.y.z_universal.dmg`
+- macOS 15 及以上，Apple 芯片：`P2PCLI_x.y.z_aarch64.dmg`；Intel 芯片：`P2PCLI_x.y.z_x64.dmg`（不知道是哪种：苹果菜单 → 关于本机，看芯片一栏）
 - Windows：`P2PCLI_x.y.z_x64-setup.exe`
 
 装好以后软件会自己检查更新（启动后一次，之后每 6 小时一次，设置 → 关于 里也能手动查），有新版本在主界面点“更新并重启”就行。更新包用发布者的私钥签过名，软件只装签名对得上的包。设置里配了 HTTP 代理时，检查和下载更新也走代理。
@@ -121,7 +121,7 @@ pnpm run build --bundles app,dmg    # macOS 正式包
 pnpm run build --bundles nsis       # Windows 正式包
 ```
 
-发布软件：改好 `app/src-tauri/tauri.conf.json` 的版本号，推一个同版本的 `vX.Y.Z` 标签（标签附带的说明会成为更新说明），GitHub Actions 会编译 Mac 通用版和 Windows 安装包，连同在线更新用的 `latest.json` 发到发布页并标成最新版本（`.github/workflows/app-release.yml`）。在线更新包要签名：仓库 Secrets 里放 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容，没有密码），公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥丢了，已经装上的软件就收不到更新了。本地打正式包不需要私钥，只有加上 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 才会生成更新包并要求签名。
+发布软件：改好 `app/src-tauri/tauri.conf.json` 的版本号，推一个同版本的 `vX.Y.Z` 标签（标签附带的说明会成为更新说明），GitHub Actions 会同时编译 Mac（Apple 芯片）、Mac（Intel）和 Windows 三个安装包，连同在线更新用的 `latest.json` 发到发布页并标成最新版本（`.github/workflows/app-release.yml`）。在线更新包要签名：仓库 Secrets 里放 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容，没有密码），公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥丢了，已经装上的软件就收不到更新了。本地打正式包不需要私钥，只有加上 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 才会生成更新包并要求签名。
 
 发布牵线服务器：改好根目录 `Cargo.toml` 的版本号，推一个同版本的 `server-vX.Y.Z` 标签，GitHub Actions 会编译 Linux x86_64、aarch64 两个版本连同校验和放到发布页（`.github/workflows/server-release.yml`），一键安装脚本就从那里下载。
 

@@ -1,5 +1,6 @@
-# 推 vX.Y.Z 标签时编译 Mac（通用版，Apple 芯片和 Intel 都能装）和 Windows 安装包，
-# 连同在线更新用的 latest.json 一起发布，并标成最新版本。
+# 推 vX.Y.Z 标签时，Mac（Apple 芯片）、Mac（Intel）、Windows 三个安装包同时开编，
+# 编完由“发布”汇总，连同在线更新用的 latest.json 一起发到发布页，并标成最新版本。
+# 各平台共用的步骤在 .github/actions/build-app。
 # 在线更新的安装包要签名：仓库 Settings → Secrets 里要有 TAURI_SIGNING_PRIVATE_KEY（没有密码）。
 name: 安装包发布
 
@@ -11,87 +12,45 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: universal-apple-darwin
-            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
-            bundles: app,dmg
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            rust_targets: x86_64-pc-windows-msvc
-            bundles: nsis
-    runs-on: ${{ matrix.os }}
+  mac-arm:
+    name: Mac（Apple 芯片）
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 标签要和软件版本一致
-        shell: bash
-        run: |
-          want="v$(node -p "require('./app/src-tauri/tauri.conf.json').version")"
-          if [ "$GITHUB_REF_NAME" != "$want" ]; then
-            echo "标签是 $GITHUB_REF_NAME，tauri.conf.json 里的版本对应 $want"
-            exit 1
-          fi
-
-      - uses: pnpm/action-setup@v4
+      - uses: ./.github/actions/build-app
         with:
-          version: 12.14.0
+          target: aarch64-apple-darwin
+          bundles: app,dmg
+          arch: aarch64
+          signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
-      - uses: actions/setup-node@v4
+  mac-intel:
+    name: Mac（Intel）
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-app
         with:
-          node-version: 24
-          cache: pnpm
+          target: x86_64-apple-darwin
+          bundles: app,dmg
+          arch: x64
+          signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
-      - name: 装 Rust 目标
-        shell: bash
-        run: rustup target add ${{ matrix.rust_targets }}
-
-      - uses: Swatinem/rust-cache@v2
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-app
         with:
-          key: ${{ matrix.target }}
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: 打包
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "仓库 Secrets 里没有 TAURI_SIGNING_PRIVATE_KEY，在线更新包签不了名"
-            exit 1
-          fi
-          pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
-            --config '{"bundle":{"createUpdaterArtifacts":true}}'
-
-      - name: 收集安装包
-        shell: bash
-        run: |
-          ver="${GITHUB_REF_NAME#v}"
-          b="target/${{ matrix.target }}/release/bundle"
-          mkdir dist
-          if [ "${{ runner.os }}" = macOS ]; then
-            cp "$b/dmg/P2PCLI_${ver}_universal.dmg" dist/
-            cp "$b/macos/P2PCLI.app.tar.gz" "dist/P2PCLI_${ver}_universal.app.tar.gz"
-            cp "$b/macos/P2PCLI.app.tar.gz.sig" "dist/P2PCLI_${ver}_universal.app.tar.gz.sig"
-          else
-            cp "$b/nsis/P2PCLI_${ver}_x64-setup.exe" dist/
-            cp "$b/nsis/P2PCLI_${ver}_x64-setup.exe.sig" dist/
-          fi
-          ls -la dist
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: dist/*
+          target: x86_64-pc-windows-msvc
+          bundles: nsis
+          arch: x64
+          signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
   release:
-    needs: build
+    name: 发布
+    needs: [mac-arm, mac-intel, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +60,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: 发布
+      - name: 生成更新清单并发布
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -111,22 +70,30 @@ jobs:
           git fetch --depth=1 origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           notes="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed '/-----BEGIN/,$d')"
           [ -n "$notes" ] || notes="P2PCLI ${ver}"
-          mac="P2PCLI_${ver}_universal.app.tar.gz"
+          arm="P2PCLI_${ver}_aarch64.app.tar.gz"
+          intel="P2PCLI_${ver}_x64.app.tar.gz"
           win="P2PCLI_${ver}_x64-setup.exe"
           jq -n --arg v "$ver" --arg notes "$notes" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg mac_url "$base/$mac" --arg mac_sig "$(cat "dist/$mac.sig")" \
+            --arg arm_url "$base/$arm" --arg arm_sig "$(cat "dist/$arm.sig")" \
+            --arg intel_url "$base/$intel" --arg intel_sig "$(cat "dist/$intel.sig")" \
             --arg win_url "$base/$win" --arg win_sig "$(cat "dist/$win.sig")" \
             '{version: $v, notes: $notes, pub_date: $date, platforms: {
-              "darwin-aarch64": {url: $mac_url, signature: $mac_sig},
-              "darwin-x86_64": {url: $mac_url, signature: $mac_sig},
+              "darwin-aarch64": {url: $arm_url, signature: $arm_sig},
+              "darwin-x86_64": {url: $intel_url, signature: $intel_sig},
               "windows-x86_64": {url: $win_url, signature: $win_sig}
             }}' > dist/latest.json
           cat dist/latest.json
           body="${notes}
 
-          下载：Mac 用 \`P2PCLI_${ver}_universal.dmg\`（Apple 芯片和 Intel 都能装），Windows 用 \`P2PCLI_${ver}_x64-setup.exe\`。
+          下载：
+          - Mac（Apple 芯片，M1 到 M4 这些）：\`P2PCLI_${ver}_aarch64.dmg\`
+          - Mac（Intel 芯片）：\`P2PCLI_${ver}_x64.dmg\`
+          - Windows：\`P2PCLI_${ver}_x64-setup.exe\`
+
+          不知道 Mac 是哪种芯片：左上角苹果菜单 → 关于本机，芯片一栏写 Apple 的选第一个，写 Intel 的选第二个。
           安装包没有付费签名，第一次打开会被系统拦一下：Mac 到 系统设置 → 隐私与安全性 点 仍要打开；Windows 点 更多信息 → 仍要运行。
           装好以后软件会自动检查更新，有新版本在主界面点一下就能更新。"
           gh release create "$GITHUB_REF_NAME" \
-            "dist/P2PCLI_${ver}_universal.dmg" "dist/$mac" "dist/$win" dist/latest.json \
+            "dist/P2PCLI_${ver}_aarch64.dmg" "dist/P2PCLI_${ver}_x64.dmg" \
+            "dist/$arm" "dist/$intel" "dist/$win" dist/latest.json \
             --title "P2PCLI ${ver}" --notes "$body" --latest
