@@ -348,7 +348,7 @@ async fn persistent_session_survives_disconnect_and_host_restart() {
     restarted.shutdown().await;
 }
 
-/// 在线探测：配对过的能拿会话列表；没配对的只知道在线和延迟；旧版本认得出来，不当成离线
+/// 在线探测：配对过的能拿会话列表；没配对的只知道在线和延迟；旧版本认得出来，不当成离线；对方关了 ping 就不通
 #[tokio::test(flavor = "multi_thread")]
 async fn presence_probe_paired_unpaired_and_old_version() {
     use p2pcli_core::presence::{self, ProbeError};
@@ -383,11 +383,17 @@ async fn presence_probe_paired_unpaired_and_old_version() {
     let path = p2pcli_core::path::current(&conn);
     assert!(path.rtt_ms.is_some(), "应该测得出延迟：{path:?}");
     assert_eq!(delegate.request_count(), requests, "探测不该弹窗");
+    // ping 和会话列表同时问，互不耽误
+    let (a, b) = tokio::join!(presence::ping(&conn), presence::ask_sessions(&conn));
+    a.expect("ping 应该通");
+    b.expect("会话列表应该拿得到");
+    let paired_conn = conn;
 
     // 没配对过的：只回“没配对”，延迟照样有
     let conn = presence::connect(&stranger.endpoint, addr.clone()).await.expect("探测应该连上");
     assert_eq!(presence::ask_sessions(&conn).await.unwrap(), None);
     assert!(p2pcli_core::path::current(&conn).rtt_ms.is_some());
+    presence::ping(&conn).await.expect("没配对的也能 ping，只是测延迟");
     assert_eq!(delegate.request_count(), requests, "探测不该弹窗");
 
     // 旧版本：只认终端协议，探测要认出是旧版本，不是离线
@@ -422,7 +428,12 @@ async fn presence_probe_paired_unpaired_and_old_version() {
     }
 
     old.close().await;
-    for n in [host, paired, stranger] {
+    // 被连方关了：ping 要在超时内报错，不能一直卡着
+    host.shutdown().await;
+    let started = std::time::Instant::now();
+    assert!(presence::ping(&paired_conn).await.is_err(), "对方关了 ping 不该通");
+    assert!(started.elapsed() < Duration::from_secs(5), "ping 卡太久：{:?}", started.elapsed());
+    for n in [paired, stranger] {
         n.shutdown().await;
     }
 }

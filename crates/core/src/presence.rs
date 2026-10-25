@@ -3,6 +3,9 @@
 //!
 //! 走单独的协议号，和终端连接分开：被连方不弹窗、不记成一次连接。
 //! 探测连接留着复用，下次不用重新握手，打洞找到的直连线路也一直热着，真要开终端时连得更快。
+//!
+//! 延迟是实时的：连接上每 2 秒发一个很小的 ping，QUIC 每收到确认就更新一次平滑往返时间，
+//! 界面每次读状态都现读这个值；ping 连续失败或者对方关了连接，几秒内就标成离线。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -22,8 +25,13 @@ use crate::proto::{TerminalSession, read_json, write_json};
 use crate::rendezvous::{RdvClient, RdvResponse};
 use crate::store::{RecentStore, now_secs};
 
-/// 多久探测一轮
-const PROBE_EVERY: Duration = Duration::from_secs(30);
+/// 多久完整探测一轮：连不上的设备重试、刷新会话列表
+const PROBE_EVERY: Duration = Duration::from_secs(10);
+/// 连着的设备多久 ping 一次，延迟跟着刷新
+const PING_EVERY: Duration = Duration::from_secs(2);
+const PING_TIMEOUT: Duration = Duration::from_secs(2);
+/// ping 连续失败几次就当离线
+const PING_FAILS_OFFLINE: u32 = 2;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -31,6 +39,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum PresenceReq {
     Sessions,
+    /// 只为让 QUIC 测一次往返时间，对方回 Pong
+    Ping,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,6 +50,7 @@ pub enum PresenceResp {
     Sessions { sessions: Vec<TerminalSession> },
     /// 没配对过：只能看到在线和延迟，不给会话列表
     NotPaired,
+    Pong,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -106,7 +117,23 @@ pub async fn ask_sessions(conn: &Connection) -> Result<Option<Vec<TerminalSessio
     Ok(match resp {
         PresenceResp::Sessions { sessions } => Some(sessions),
         PresenceResp::NotPaired => None,
+        PresenceResp::Pong => return Err(anyhow!("对方回了意外的消息")),
     })
+}
+
+/// 在探测连接上 ping 一次；整个来回都算在超时里，网断了写也可能卡住
+pub async fn ping(conn: &Connection) -> Result<()> {
+    timeout(PING_TIMEOUT, async {
+        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
+        write_json(&mut send, &PresenceReq::Ping).await?;
+        let _ = send.finish();
+        match read_json(&mut recv).await? {
+            PresenceResp::Pong => Ok(()),
+            _ => Err(anyhow!("对方回了意外的消息")),
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("ping 超时"))?
 }
 
 /// 一台设备的最新探测结果
@@ -118,14 +145,16 @@ struct Seen {
     sessions: Option<(Vec<TerminalSession>, u64)>,
 }
 
-/// 连接方的后台探测：每 30 秒把连接历史里的设备都探一遍
+/// 连接方的后台探测：每 10 秒把连接历史里的设备都探一遍，连着的每 2 秒 ping 一次
 pub struct Prober {
     endpoint: Endpoint,
     rdv: Option<Arc<RdvClient>>,
     recent: Arc<RecentStore>,
-    conns: tokio::sync::Mutex<HashMap<EndpointId, Connection>>,
+    conns: Mutex<HashMap<EndpointId, Connection>>,
+    /// 每台设备 ping 连续失败了几次
+    fails: Mutex<HashMap<EndpointId, u32>>,
     seen: Mutex<HashMap<String, Seen>>,
-    task: Mutex<Option<tokio::task::AbortHandle>>,
+    tasks: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
 impl Prober {
@@ -135,18 +164,19 @@ impl Prober {
             rdv,
             recent,
             conns: Default::default(),
+            fails: Default::default(),
             seen: Default::default(),
-            task: Mutex::new(None),
+            tasks: Mutex::new(Vec::new()),
         })
     }
 
     pub fn start(self: &Arc<Self>) {
-        let mut task = self.task.lock().unwrap();
-        if task.is_some() {
+        let mut tasks = self.tasks.lock().unwrap();
+        if !tasks.is_empty() {
             return;
         }
         let this = self.clone();
-        *task = Some(
+        tasks.push(
             tokio::spawn(async move {
                 // 刚启动时牵线服务器还没连上，稍等一下再探第一轮
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -157,12 +187,49 @@ impl Prober {
             })
             .abort_handle(),
         );
+        let this = self.clone();
+        tasks.push(
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(PING_EVERY);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    this.ping_all().await;
+                }
+            })
+            .abort_handle(),
+        );
     }
 
     pub fn stop(&self) {
-        if let Some(task) = self.task.lock().unwrap().take() {
+        for task in self.tasks.lock().unwrap().drain(..) {
             task.abort();
         }
+    }
+
+    /// 给每条连着的探测连接 ping 一次；连不上了就马上标成离线，不等下一轮完整探测
+    async fn ping_all(&self) {
+        let conns: Vec<(EndpointId, Connection)> =
+            self.conns.lock().unwrap().iter().map(|(id, c)| (*id, c.clone())).collect();
+        join_all(conns.into_iter().map(|(id, conn)| async move {
+            let ok = conn.close_reason().is_none() && ping(&conn).await.is_ok();
+            let mut fails = self.fails.lock().unwrap();
+            if ok {
+                fails.remove(&id);
+                return;
+            }
+            let n = fails.entry(id).or_default();
+            *n += 1;
+            if conn.close_reason().is_some() || *n >= PING_FAILS_OFFLINE {
+                fails.remove(&id);
+                drop(fails);
+                debug!(id = %id.fmt_short(), "ping 不通，标成离线");
+                conn.close(0u32.into(), b"unreachable");
+                self.conns.lock().unwrap().remove(&id);
+                self.record(id, Seen { state: PresenceState::Offline, path: None, paired: None, sessions: None });
+            }
+        }))
+        .await;
     }
 
     /// 马上探一轮，比如刚连过、刚删过历史
@@ -186,7 +253,7 @@ impl Prober {
     async fn probe_all(&self) {
         let devices = self.devices();
         // 已经不在历史里的设备，探测连接也关掉
-        self.conns.lock().await.retain(|id, conn| {
+        self.conns.lock().unwrap().retain(|id, conn| {
             let keep = devices.iter().any(|(d, _)| d == id);
             if !keep {
                 conn.close(0u32.into(), b"forgotten");
@@ -218,7 +285,7 @@ impl Prober {
             Err(e) => {
                 // 连接可能刚断，丢掉它，下一轮重新建
                 debug!(id = %id.fmt_short(), "探测请求失败：{e:#}");
-                self.conns.lock().await.remove(&id);
+                self.conns.lock().unwrap().remove(&id);
                 self.record(id, Seen { state: PresenceState::Offline, path: None, paired: None, sessions: None });
             }
         }
@@ -226,10 +293,9 @@ impl Prober {
 
     /// 复用还活着的探测连接；没有就先问牵线服务器在不在线、拿地址，再连
     async fn connection(&self, id: EndpointId, code: &str) -> Result<Connection, PresenceState> {
-        if let Some(conn) = self.conns.lock().await.get(&id)
-            && conn.close_reason().is_none()
-        {
-            return Ok(conn.clone());
+        let alive = self.conns.lock().unwrap().get(&id).filter(|c| c.close_reason().is_none()).cloned();
+        if let Some(conn) = alive {
+            return Ok(conn);
         }
         let mut addr = EndpointAddr::new(id);
         if let Some(rdv) = &self.rdv
@@ -250,7 +316,8 @@ impl Prober {
         }
         match connect(&self.endpoint, addr).await {
             Ok(conn) => {
-                self.conns.lock().await.insert(id, conn.clone());
+                self.fails.lock().unwrap().remove(&id);
+                self.conns.lock().unwrap().insert(id, conn.clone());
                 Ok(conn)
             }
             Err(ProbeError::OldVersion) => Err(PresenceState::OldVersion),
@@ -267,6 +334,7 @@ impl Prober {
 
     /// 连接历史里每台设备现在的状态；会话列表没有新的就用记住的
     pub fn statuses(&self) -> Vec<DeviceStatus> {
+        let conns = self.conns.lock().unwrap();
         let seen = self.seen.lock().unwrap();
         self.devices()
             .into_iter()
@@ -280,10 +348,15 @@ impl Prober {
                         None => (Vec::new(), false, None),
                     },
                 };
+                let state = s.map_or(PresenceState::Checking, |s| s.state);
+                // 在线就现读连接上的往返时间，是实时的
+                let live_path = (state == PresenceState::Online)
+                    .then(|| conns.get(&id).filter(|c| c.close_reason().is_none()).map(path::current))
+                    .flatten();
                 DeviceStatus {
                     endpoint_id: key,
-                    state: s.map_or(PresenceState::Checking, |s| s.state),
-                    path: s.and_then(|s| s.path.clone()),
+                    state,
+                    path: live_path.or_else(|| s.and_then(|s| s.path.clone())),
                     paired: s.and_then(|s| s.paired),
                     sessions,
                     sessions_live: live,

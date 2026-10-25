@@ -65,6 +65,9 @@ enum Cmd {
         /// 等多少秒再列
         #[arg(long, default_value_t = 8)]
         wait: u64,
+        /// 列完不退出，每 2 秒再列一次，看延迟和在线变化
+        #[arg(long)]
+        watch: bool,
     },
     /// 列出局域网里发现的 P2PCLI 设备
     Nearby {
@@ -186,16 +189,26 @@ async fn main() -> Result<()> {
             node.shutdown().await;
             Ok(())
         }
-        Cmd::Devices { wait } => {
+        Cmd::Devices { wait, watch } => {
             tokio::time::sleep(Duration::from_secs(wait)).await;
-            for d in node.devices() {
-                let path = d.path.map(|p| format!("{:?} {}ms {}", p.kind, p.rtt_ms.unwrap_or(0), p.remote.unwrap_or_default())).unwrap_or_default();
-                let sessions: Vec<String> = d.sessions.iter().map(|s| format!("{}{}", &s.id[..8], if s.attached { "(在用)" } else { "" })).collect();
-                println!(
-                    "{}  {:?}  {}  配对={:?}  会话[{}]{}",
-                    &d.endpoint_id[..10], d.state, path, d.paired, sessions.join(","),
-                    if d.sessions_live { "" } else { "（记住的）" }
-                );
+            let started = Instant::now();
+            loop {
+                for d in node.devices() {
+                    let path = d.path.map(|p| format!("{:?} {}ms {}", p.kind, p.rtt_ms.unwrap_or(0), p.remote.unwrap_or_default())).unwrap_or_default();
+                    let sessions: Vec<String> = d.sessions.iter().map(|s| format!("{}{}", &s.id[..8], if s.attached { "(在用)" } else { "" })).collect();
+                    println!(
+                        "{:>5.1}s  {}  {:?}  {}  配对={:?}  会话[{}]{}",
+                        started.elapsed().as_secs_f32(), &d.endpoint_id[..10], d.state, path, d.paired, sessions.join(","),
+                        if d.sessions_live { "" } else { "（记住的）" }
+                    );
+                }
+                if !watch {
+                    break;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                    _ = tokio::signal::ctrl_c() => break,
+                }
             }
             node.shutdown().await;
             Ok(())

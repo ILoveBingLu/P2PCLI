@@ -291,28 +291,33 @@ impl Host {
     pub async fn handle_presence(self: Arc<Self>, conn: Connection) {
         let remote = conn.remote_id();
         let owner = remote.to_string();
+        // 每个请求一条流，分开处理：读会话列表慢一点也不耽误 ping
         while let Ok((mut send, mut recv)) = conn.accept_bi().await {
-            let Ok(Ok(req)) = timeout(Duration::from_secs(10), read_json::<_, PresenceReq>(&mut recv)).await else {
-                break;
-            };
-            let resp = match req {
-                PresenceReq::Sessions if self.trust.contains(&remote) || self.paired.contains(&remote) => {
-                    match self.terminals.list(&owner).await {
-                        Ok(list) => PresenceResp::Sessions {
-                            sessions: list.into_iter().map(|s| TerminalSession { details: None, ..s }).collect(),
-                        },
-                        Err(e) => {
-                            debug!("探测时读会话列表失败：{e:#}");
-                            PresenceResp::Sessions { sessions: Vec::new() }
+            let host = self.clone();
+            let owner = owner.clone();
+            tokio::spawn(async move {
+                let Ok(Ok(req)) = timeout(Duration::from_secs(10), read_json::<_, PresenceReq>(&mut recv)).await else {
+                    return;
+                };
+                let resp = match req {
+                    PresenceReq::Ping => PresenceResp::Pong,
+                    PresenceReq::Sessions if host.trust.contains(&remote) || host.paired.contains(&remote) => {
+                        match host.terminals.list(&owner).await {
+                            Ok(list) => PresenceResp::Sessions {
+                                sessions: list.into_iter().map(|s| TerminalSession { details: None, ..s }).collect(),
+                            },
+                            Err(e) => {
+                                debug!("探测时读会话列表失败：{e:#}");
+                                PresenceResp::Sessions { sessions: Vec::new() }
+                            }
                         }
                     }
+                    PresenceReq::Sessions => PresenceResp::NotPaired,
+                };
+                if write_json(&mut send, &resp).await.is_ok() {
+                    let _ = send.finish();
                 }
-                PresenceReq::Sessions => PresenceResp::NotPaired,
-            };
-            if write_json(&mut send, &resp).await.is_err() {
-                break;
-            }
-            let _ = send.finish();
+            });
         }
     }
 
