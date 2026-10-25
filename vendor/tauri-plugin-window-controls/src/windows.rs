@@ -43,7 +43,7 @@ use windows_sys::Win32::{
 
 const BUTTON_WIDTH: u32 = 46;
 const BUTTON_COUNT: u32 = 3;
-const SUBCLASS_ID: usize = 0x7462_6f63_6170;
+const SUBCLASS_ID: usize = 0x7462_6f63;
 const ANIMATION_TIMER_ID: usize = 0x7462_6f61;
 const ANIMATION_INTERVAL_MS: u32 = 16;
 const BACKGROUND_TRANSITION_MS: f32 = 120.0;
