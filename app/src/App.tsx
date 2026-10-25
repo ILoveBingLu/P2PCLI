@@ -28,6 +28,7 @@ import {
   type TermStatus,
 } from "./api";
 import { TerminalView } from "./TerminalView";
+import { TerminalStatusbar } from "./components/TerminalStatusbar";
 import { selftestSawOverview } from "./selftest";
 import { ConnectionPopover } from "./components/ConnectionPopover";
 import { ConnectionSidebar } from "./components/ConnectionSidebar";
@@ -544,6 +545,15 @@ export default function App() {
                 </Tabs.Panel>
               ))}
             </div>
+            {activeTab && <TerminalStatusbar
+              key={activeTab.key}
+              connId={activeTab.connId}
+              sessionId={activeTab.sessionId}
+              info={activeTab.info}
+              state={activeTab.state}
+              path={paths[activeTab.connId]}
+              visible={!showSettings && !sessionTarget}
+            />}
           </Tabs>
         ) : (
           <Welcome

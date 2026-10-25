@@ -614,6 +614,48 @@
 .terminal-panel[hidden] {
   display: none;
 }
+.terminal-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  min-height: 28px;
+  flex: none;
+  padding: 3px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  overflow: hidden;
+}
+.terminal-status-detail {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.terminal-status-detail > svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.terminal-status-window,
+.terminal-status-command {
+  max-width: 140px;
+}
+.terminal-status-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.terminal-statusbar > .terminal-status-detail {
+  flex-shrink: 0;
+}
+.terminal-statusbar > .terminal-status-window,
+.terminal-statusbar > .terminal-status-command {
+  flex-shrink: 1;
+}
 .term {
   flex: 1;
   min-height: 0;

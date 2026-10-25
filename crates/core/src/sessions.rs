@@ -9,7 +9,9 @@ use anyhow::{Context, Result, bail};
 use portable_pty::CommandBuilder;
 use tokio::process::Command;
 
-use crate::proto::TerminalSession;
+use crate::proto::{TerminalDetails, TerminalSession};
+
+const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_attached}\t#{window_index}\t#{window_name}\t#{session_windows}\t#{pane_current_command}\t#{pane_current_path}";
 
 pub struct SessionManager {
     namespace: String,
@@ -52,7 +54,7 @@ impl SessionManager {
     }
 
     pub async fn list(&self, owner: &str) -> Result<Vec<TerminalSession>> {
-        let out = self.command(&["list-sessions", "-F", "#{session_name}\t#{session_created}\t#{session_attached}"]).await?;
+        let out = self.command(&["list-sessions", "-F", SESSION_FORMAT]).await?;
         if !out.status.success() {
             let error = String::from_utf8_lossy(&out.stderr).to_lowercase();
             if error.contains("no server") || error.contains("no sessions") ||
@@ -64,14 +66,26 @@ impl SessionManager {
         let prefix = format!("p2pcli-{owner}-");
         let mut sessions = Vec::new();
         for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let mut parts = line.split('\t');
+            let mut parts = line.splitn(8, '\t');
             let Some(id) = parts.next().and_then(|n| n.strip_prefix(&prefix)) else { continue };
             if Self::name(owner, id).is_err() { continue; }
-            sessions.push(TerminalSession {
+            let mut session = TerminalSession {
                 id: id.to_string(),
                 created_at: parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
                 attached: parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0,
-            });
+                details: None,
+            };
+            let details = TerminalDetails {
+                window_index: parts.next().and_then(|v| v.parse().ok()),
+                window_name: status_text(parts.next()),
+                window_count: parts.next().and_then(|v| v.parse().ok()),
+                command: status_text(parts.next()),
+                current_path: status_text(parts.next()),
+            };
+            if details.window_index.is_some() || details.window_name.is_some() || details.command.is_some() || details.current_path.is_some() {
+                session.details = Some(details);
+            }
+            sessions.push(session);
         }
         sessions.sort_by_key(|s| s.created_at);
         Ok(sessions)
@@ -90,6 +104,8 @@ impl SessionManager {
             // Per-session options only: never change the user's unrelated tmux sessions.
             self.checked(&["set-option", "-t", &name, "destroy-unattached", "off"]).await?;
         }
+        // 新建和恢复旧会话都隐藏原生状态栏；只改当前受管会话，不改全局选项。
+        self.checked(&["set-option", "-t", &name, "status", "off"]).await?;
         let mut cmd = CommandBuilder::new(executable(self.program.as_deref())?);
         cmd.args(["-L", &self.namespace, "attach-session", "-t", &name]);
         cmd.env_remove("TMUX");
@@ -107,6 +123,13 @@ impl SessionManager {
         let name = Self::name(owner, id)?;
         self.checked(&["kill-session", "-t", &name]).await
     }
+}
+
+fn status_text(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() || value.starts_with("#{") { return None; }
+    let text: String = value.chars().filter(|c| !c.is_control()).take(2048).collect();
+    (!text.is_empty()).then_some(text)
 }
 
 fn executable(bundled: Option<&Path>) -> Result<PathBuf> {

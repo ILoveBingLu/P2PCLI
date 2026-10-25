@@ -19,6 +19,13 @@ export interface TerminalSession {
   id: string;
   created_at: number;
   attached: boolean;
+  details?: {
+    window_index: number | null;
+    window_name: string | null;
+    window_count: number | null;
+    command: string | null;
+    current_path: string | null;
+  } | null;
 }
 
 export interface OpenedTerminal { term_id: number; session_id: string }

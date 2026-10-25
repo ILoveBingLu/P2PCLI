@@ -107,7 +107,10 @@ mockIPC(
       }
       case "list_terminals":
         // 模拟网络往返，看得出刷新时列表有没有闪
-        return new Promise((r) => setTimeout(() => r(terminalSessions.map((session) => ({ ...session }))), 300));
+        return new Promise((r) => setTimeout(() => r(terminalSessions.map((session) => ({
+          ...session,
+          details: { window_index: 0, window_name: "工作终端", window_count: 1, command: "zsh", current_path: "/Users/demo/Projects/P2PCLI" },
+        }))), 300));
       case "end_terminal": {
         await new Promise((r) => setTimeout(r, 500));
         const index = terminalSessions.findIndex((session) => session.id === args.sessionId);

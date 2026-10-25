@@ -91,6 +91,18 @@ pub struct TerminalSession {
     pub id: String,
     pub created_at: u64,
     pub attached: bool,
+    /// 可选扩展：旧版本设备只返回前三个字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<TerminalDetails>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TerminalDetails {
+    pub window_index: Option<u32>,
+    pub window_name: Option<String>,
+    pub window_count: Option<u32>,
+    pub command: Option<String>,
+    pub current_path: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -170,6 +182,15 @@ pub async fn read_msg<R: AsyncRead + Unpin>(r: &mut R) -> Result<Msg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_terminal_session_has_no_details() {
+        let session: TerminalSession = serde_json::from_str(
+            r#"{"id":"old-session","created_at":123,"attached":true}"#,
+        ).unwrap();
+        assert!(session.details.is_none());
+        assert!(serde_json::to_value(session).unwrap().get("details").is_none());
+    }
 
     #[tokio::test]
     async fn roundtrip() {
