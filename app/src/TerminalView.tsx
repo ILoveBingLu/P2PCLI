@@ -80,9 +80,18 @@ interface Props {
   onReady: (termId: number, sessionId: string) => void;
   onHandle?: (handle: TerminalHandle | null) => void;
   onPromptReady?: (ready: boolean) => void;
+  /** 对面的会话在 tmux 里（macOS、Linux）：滚轮交给它翻历史。Windows 的 psmux 没验证过，还是 xterm 自己的做法 */
+  tmuxWheel?: boolean;
 }
 
-export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle, onPromptReady }: Props) {
+/** tmux 开了 mouse 会要本机进这几种鼠标模式，见下面的说明 */
+const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
+/** 滚轮一格是 3 行，和被控端 sessions.rs 的 WHEEL_BINDINGS 对上 */
+const WHEEL_LINES = 3;
+/** 中键按下再松开：对面在复制模式就退出，不在就什么都不做 */
+const LEAVE_COPY_MODE = "\x1b[<1;1;1M\x1b[<1;1;1m";
+
+export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle, onPromptReady, tmuxWheel = false }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const resizeFrameRef = useRef<ReturnType<typeof terminalResizeFrame> | null>(null);
@@ -174,11 +183,48 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     };
     const canLaunch = () => { const p = prompt(); return guard.ready(p.signature, p.empty); };
     const reportPrompt = () => cb.current.onPromptReady?.(canLaunch());
+    // 滚轮交给对面的 tmux：shell 里翻它的历史，全屏程序要了鼠标就转给程序，less 这类转成上下键，规则在被控端 sessions.rs 的 WHEEL_BINDINGS。
+    // tmux 开了 mouse 会要本机进鼠标模式，不答应：点击、拖选、右键都留在本机，只把滚轮按 3 行一格换成 tmux 认的滚轮序列发过去。
+    // 往上滚过以后对面可能停在复制模式，那里按键是复制模式的命令；所以打字前先发一下中键退出来，字照常进 shell
+    let maybeCopyMode = false;
+    let wheelRest = 0;
     const send = (data: string, binary = false) => {
       guard.input(prompt().signature);
       cb.current.onPromptReady?.(false);
+      if (maybeCopyMode) {
+        maybeCopyMode = false;
+        data = LEAVE_COPY_MODE + data;
+      }
       if (termId != null) invoke("term_input", { termId, data, binary });
     };
+    if (tmuxWheel) {
+      term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) =>
+        params.length > 0 && params.every((p) => typeof p === "number" && MOUSE_MODES.has(p)));
+      term.attachCustomWheelEventHandler((e) => {
+        // 没接上 tmux 时（普通屏幕）照常滚本机的回滚区
+        if (term.buffer.active.type !== "alternate" || e.deltaY === 0) return true;
+        e.preventDefault();
+        const rect = (el.querySelector(".xterm-screen") ?? el).getBoundingClientRect();
+        const cellHeight = rect.height / term.rows;
+        const cellWidth = rect.width / term.cols;
+        const delta = e.deltaMode === 1 ? e.deltaY * cellHeight : e.deltaMode === 2 ? e.deltaY * rect.height : e.deltaY;
+        // 换方向就从头攒，免得触控板回弹时先抵掉一截
+        if (Math.sign(delta) !== Math.sign(wheelRest)) wheelRest = 0;
+        wheelRest += delta;
+        const step = cellHeight * WHEEL_LINES;
+        const col = Math.min(term.cols, Math.max(1, Math.floor((e.clientX - rect.left) / cellWidth) + 1));
+        const row = Math.min(term.rows, Math.max(1, Math.floor((e.clientY - rect.top) / cellHeight) + 1));
+        let out = "";
+        while (Math.abs(wheelRest) >= step) {
+          const up = wheelRest < 0;
+          out += `\x1b[<${up ? 64 : 65};${col};${row}M`;
+          wheelRest += up ? step : -step;
+          if (up) maybeCopyMode = true;
+        }
+        if (out && termId != null) invoke("term_input", { termId, data: out, binary: false });
+        return false;
+      });
+    }
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;

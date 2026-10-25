@@ -699,6 +699,7 @@ export default function App() {
                   <TerminalView
                     connId={t.connId}
                     sessionId={t.sessionId}
+                    tmuxWheel={t.info.platform !== "windows"}
                     active={!showSettings && !sessionTarget && t.key === activeKey}
                     onReady={(termId, sessionId) =>
                       setTabs((ts) =>

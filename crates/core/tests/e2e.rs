@@ -313,6 +313,42 @@ async fn read_until(input: &mut p2pcli_core::client::TermInput, output: &mut p2p
     }).await.expect("persistent terminal did not respond");
 }
 
+/// 滚轮翻历史：客户端发的和界面一样（tmux 认的滚轮序列、打字前的中键），被控端开好 tmux 的 mouse 和绑定后，
+/// 往上滚进复制模式翻 shell 的历史，之后打字先退出复制模式、命令照常执行。要真的起 tmux，默认不跑
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux on macOS/Linux"]
+async fn wheel_scrolls_tmux_history() {
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig {
+        data_dir: temp_dir("wheel-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("wheel-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let (mut input, mut output) = remote.open_terminal(80, 20).await.unwrap();
+    let id = output.session_id.clone();
+    input.write(b"seq 1 300 | sed 's/^/line-/'\r").await.unwrap();
+    read_until(&mut input, &mut output, "line-300").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // 往上滚三格，每格 3 行：复制模式右上角显示翻到第 9 行
+    for _ in 0..3 {
+        input.write(b"\x1b[<64;10;5M").await.unwrap();
+    }
+    read_until(&mut input, &mut output, "[9/").await;
+    // 打字前先发中键退出复制模式，字照常进 shell
+    input.write(b"\x1b[<1;1;1M\x1b[<1;1;1mecho whe''el-ok\r").await.unwrap();
+    read_until(&mut input, &mut output, "wheel-ok").await;
+
+    remote.end_terminal(id).await.unwrap();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
 /// Explicit opt-in: this starts a real detached tmux/psmux server on the test machine.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires tmux on macOS/Linux or psmux on Windows"]

@@ -18,6 +18,23 @@ const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_att
 const HEALTH_FORMAT: &str = "#{session_name}\t#{pid}\t#{socket_path}";
 const LAUNCHER_FORMAT: &str = "#{pane_pid}\t#{pane_current_command}\t#{cursor_x}\t#{cursor_y}\t#{alternate_on}\t#{pane_in_mode}";
 
+/// 滚轮交给 tmux：本机终端只把滚轮（还有退出复制模式用的中键）发过来，点击、拖选、右键都留在本机。
+/// shell 里往上滚进复制模式翻历史，滚回底部自动退出；全屏程序要了鼠标就转给它；在备用屏幕又没要鼠标的（less、man）转成上下键。
+/// 每一格 3 行，本机按 3 行的距离发一格。中键在复制模式里是退出：本机打字前先发一下，翻完历史直接打字也能进 shell；
+/// 不在复制模式时什么都不做，也不转给程序。按键绑定在 P2PCLI 自己的 tmux 服务（-L）里，不碰用户别的 tmux
+const WHEEL_BINDINGS: &[&[&str]] = &[
+    &["bind-key", "-n", "WheelUpPane", "if-shell", "-F", "#{||:#{pane_in_mode},#{mouse_any_flag}}", "send-keys -M",
+        "if-shell -F '#{alternate_on}' 'send-keys -N 3 Up' 'copy-mode -e ; send-keys -X -N 3 scroll-up'"],
+    &["bind-key", "-n", "WheelDownPane", "if-shell", "-F", "#{||:#{pane_in_mode},#{mouse_any_flag}}", "send-keys -M",
+        "if-shell -F '#{alternate_on}' 'send-keys -N 3 Down'"],
+    &["bind-key", "-T", "copy-mode", "WheelUpPane", "send-keys", "-X", "-N", "3", "scroll-up"],
+    &["bind-key", "-T", "copy-mode", "WheelDownPane", "send-keys", "-X", "-N", "3", "scroll-down"],
+    &["bind-key", "-T", "copy-mode-vi", "WheelUpPane", "send-keys", "-X", "-N", "3", "scroll-up"],
+    &["bind-key", "-T", "copy-mode-vi", "WheelDownPane", "send-keys", "-X", "-N", "3", "scroll-down"],
+    &["bind-key", "-n", "MouseDown2Pane", "if-shell", "-F", "#{pane_in_mode}", "send-keys -X cancel"],
+    &["bind-key", "-n", "MouseUp2Pane", "select-pane"],
+];
+
 #[derive(Default)]
 struct Health {
     sessions: BTreeMap<String, String>,
@@ -84,6 +101,15 @@ impl SessionManager {
             tracing::warn!(namespace = %self.namespace, operation = args[0], status = %out.status,
                 stderr = %String::from_utf8_lossy(&out.stderr).trim(), "会话管理命令失败");
             bail!("会话操作失败：{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    /// 只开这个会话的 mouse，绑定见 WHEEL_BINDINGS
+    async fn enable_wheel(&self, name: &str) -> Result<()> {
+        self.checked(&["set-option", "-t", name, "mouse", "on"]).await?;
+        for args in WHEEL_BINDINGS {
+            self.checked(args).await?;
         }
         Ok(())
     }
@@ -189,6 +215,12 @@ impl SessionManager {
         }
         // 新建和恢复旧会话都隐藏原生状态栏；只改当前受管会话，不改全局选项。
         self.hide_status(&name).await?;
+        // psmux 的鼠标和复制模式没验证过，Windows 上先不开；开不了也不影响用终端
+        if !cfg!(windows)
+            && let Err(error) = self.enable_wheel(&name).await
+        {
+            tracing::warn!(namespace = %self.namespace, terminal = %name, %error, "滚轮翻历史没开成");
+        }
         let mut cmd = CommandBuilder::new(executable(self.program.as_deref())?);
         cmd.args(["-L", &self.namespace, "attach-session", "-t", &name]);
         cmd.env_remove("TMUX");
