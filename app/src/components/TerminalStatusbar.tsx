@@ -1,9 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { CircleAlert, Folder, Layers, SquareTerminal } from "lucide-react";
+import { CircleAlert, Folder, Layers } from "lucide-react";
 import { api, pathLabel, type PathInfo, type RemoteInfo, type TerminalSession } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
-import { AGENT_STATE_TEXT, AgentIcon, AgentStateLabel } from "./Agent";
-import { sessionLabels } from "./sessionText";
+import { AGENT_STATE_TEXT, AgentIcon, AgentQuotaLabel, AgentStateLabel } from "./Agent";
 
 function Detail({ tip, children, className = "" }: { tip: string; children: ReactNode; className?: string }) {
   return <Tooltip content={tip}><TooltipTrigger className={`terminal-status-detail ${className}`}>{children}</TooltipTrigger></Tooltip>;
@@ -17,7 +16,7 @@ export function TerminalStatusbar({ connId, sessionId, info, state, path, visibl
   path?: PathInfo;
   visible: boolean;
 }) {
-  const [snapshot, setSnapshot] = useState<{ session: TerminalSession; label: string } | null>(null);
+  const [snapshot, setSnapshot] = useState<{ session: TerminalSession } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,7 +28,7 @@ export function TerminalStatusbar({ connId, sessionId, info, state, path, visibl
         const sessions = await api.listTerminals(connId);
         if (disposed) return;
         const session = sessions.find((entry) => entry.id === sessionId);
-        setSnapshot(session ? { session, label: sessionLabels(sessions).get(sessionId) ?? "会话" } : null);
+        setSnapshot(session ? { session } : null);
         setError(session ? null : "会话已结束或暂时不可用");
       } catch {
         if (!disposed) setError("状态暂时无法更新，显示上次读取的信息");
@@ -48,8 +47,6 @@ export function TerminalStatusbar({ connId, sessionId, info, state, path, visibl
   const windowText = details?.window_name
     ? `${details.window_index == null ? "" : `${details.window_index}: `}${details.window_name}`
     : details?.window_index != null ? `窗口 ${details.window_index}` : null;
-  const created = snapshot?.session.created_at
-    ? new Date(snapshot.session.created_at * 1000).toLocaleString("zh-CN") : null;
 
   return (
     <footer className="terminal-statusbar" aria-label="当前终端状态">
@@ -57,16 +54,14 @@ export function TerminalStatusbar({ connId, sessionId, info, state, path, visibl
         <span className="status-dot" data-kind={state === "open" ? path?.kind ?? "unknown" : "off"} />
         <span>{stateText}</span>
       </Detail>
-      <Detail tip={created ? `创建于 ${created}` : "后台会话"}>
-        <SquareTerminal /><span>{snapshot?.label ?? "会话"}</span>
-      </Detail>
       {windowText && <Detail tip={details?.window_count ? `当前窗口 · 共 ${details.window_count} 个窗口` : "当前窗口"} className="terminal-status-window">
         <Layers /><span className="truncate">{windowText}</span>
       </Detail>}
       {/* 认出是命令行 AI 就显示它和它的状态；Claude Code 的程序名是版本号，直接显示看不懂 */}
-      {agent ? <Detail tip={`${agent.name} · ${AGENT_STATE_TEXT[agent.state]}`} className="terminal-status-command">
-        <AgentIcon kind={agent.kind} /><span className="truncate">{agent.name}</span>
+      {agent ? <Detail tip={`${agent.name} · ${AGENT_STATE_TEXT[agent.state]}`} className="terminal-status-agent">
+        <AgentIcon kind={agent.kind} className="size-3.5 shrink-0" /><span>{agent.name}</span>
         <AgentStateLabel agent={agent} />
+        {agent.quota && <AgentQuotaLabel quota={agent.quota} />}
       </Detail> : details?.command && details.command !== details.window_name && <Detail tip="当前程序" className="terminal-status-command">
         <span className="truncate">{details.command}</span>
       </Detail>}

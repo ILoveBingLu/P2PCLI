@@ -37,6 +37,20 @@ export interface AgentInfo {
   kind: string;
   name: string;
   state: AgentState;
+  /** 那台电脑上这种 AI 账号的额度；读不到就没有 */
+  quota?: AgentQuota | null;
+}
+export interface AgentQuota {
+  windows: QuotaWindow[];
+  /** 数据是什么时候记下的（秒） */
+  at: number;
+}
+export interface QuotaWindow {
+  /** 窗口多长：5 小时是 300，7 天是 10080 */
+  minutes: number;
+  used_percent: number;
+  /** 什么时候重置（秒） */
+  resets_at: number | null;
 }
 
 export interface OpenedTerminal { term_id: number; session_id: string }

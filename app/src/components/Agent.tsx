@@ -1,39 +1,14 @@
 import { Bot } from "lucide-react";
-import Amp from "@lobehub/icons/es/Amp/components/Color.js";
-import ClaudeCode from "@lobehub/icons/es/ClaudeCode/components/Color.js";
-import CodeBuddy from "@lobehub/icons/es/CodeBuddy/components/Color.js";
-import Codex from "@lobehub/icons/es/Codex/components/Color.js";
-import Cursor from "@lobehub/icons/es/Cursor/components/Mono.js";
-import GeminiCLI from "@lobehub/icons/es/GeminiCLI/components/Color.js";
-import GithubCopilot from "@lobehub/icons/es/GithubCopilot/components/Mono.js";
-import Goose from "@lobehub/icons/es/Goose/components/Mono.js";
-import Kimi from "@lobehub/icons/es/Kimi/components/Color.js";
-import Kiro from "@lobehub/icons/es/Kiro/components/Color.js";
-import OpenCode from "@lobehub/icons/es/OpenCode/components/Mono.js";
-import Qoder from "@lobehub/icons/es/Qoder/components/Color.js";
-import Qwen from "@lobehub/icons/es/Qwen/components/Color.js";
-import Trae from "@lobehub/icons/es/Trae/components/Color.js";
-import type { AgentInfo, AgentState } from "../api";
+import type { AgentInfo, AgentQuota, AgentState } from "../api";
 import { cn } from "@/lib/utils";
 
-// 直接导入所需的 React 图标，避免加载各品牌的 Avatar、Combine 等组件。
-// 新增 CLI 时，在这里按后端 agents.rs 的 kind 添加映射；未收录的保留通用图标。
-const ICONS: Readonly<Partial<Record<string, typeof ClaudeCode>>> = {
-  amp: Amp,
-  claude: ClaudeCode,
-  codebuddy: CodeBuddy,
-  codex: Codex,
-  copilot: GithubCopilot,
-  cursor: Cursor,
-  gemini: GeminiCLI,
-  goose: Goose,
-  kimi: Kimi,
-  kiro: Kiro,
-  opencode: OpenCode,
-  qoder: Qoder,
-  qwen: Qwen,
-  trae: Trae,
-};
+// 各家命令行 AI 的图标取自 Lobe Icons（MIT）的静态 SVG，放在 assets/agents，见那里的 LICENSE。
+// 按图片显示，不内嵌、不引 @lobehub/icons：那个包会带进整套 Lobe UI，而且新版本常常刚发布、过不了 pnpm 的发布时间检查。
+// 新增 CLI 时，按后端 agents.rs 的 kind 放一个同名 SVG；没收录的显示通用图标
+const files = import.meta.glob<string>("../assets/agents/*.svg", { query: "?url", import: "default", eager: true });
+const ICONS: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(files).map(([path, url]) => [path.slice(path.lastIndexOf("/") + 1, -4), url]),
+);
 
 export const AGENT_STATE_TEXT: Record<AgentState, string> = {
   working: "干活中",
@@ -43,9 +18,9 @@ export const AGENT_STATE_TEXT: Record<AgentState, string> = {
 
 /** AI 的图标；没有收录图标的用通用的机器人图标 */
 export function AgentIcon({ kind, className }: { kind: string; className?: string }) {
-  const Icon = Object.hasOwn(ICONS, kind) ? ICONS[kind] : undefined;
-  if (!Icon) return <Bot className={cn("agent-icon", className)} aria-hidden="true" />;
-  return <span className={cn("agent-icon", className)} aria-hidden="true"><Icon /></span>;
+  const url = Object.hasOwn(ICONS, kind) ? ICONS[kind] : undefined;
+  if (!url) return <Bot className={cn("agent-icon", className)} aria-hidden="true" />;
+  return <img className={cn("agent-icon", className)} src={url} alt="" aria-hidden="true" draggable={false} />;
 }
 
 /** 状态点加文字：干活中蓝色带呼吸，等你确认黄色，空闲灰色 */
@@ -68,5 +43,47 @@ export function AgentTabTitle({ name, agent }: { name: string; agent: AgentInfo 
         <span className="agent-tab-state" data-state={agent.state} aria-label={AGENT_STATE_TEXT[agent.state]} />
       )}
     </>
+  );
+}
+
+/** 额度用到这么多变黄、变红 */
+const QUOTA_WARN = 75;
+export const QUOTA_ALERT = 90;
+
+/** 300 分钟叫“5 小时”，10080 叫“7 天” */
+export function quotaWindowLabel(minutes: number) {
+  if (minutes <= 0) return "额度";
+  if (minutes % 1440 === 0) return `${minutes / 1440} 天`;
+  if (minutes % 60 === 0) return `${minutes / 60} 小时`;
+  return `${minutes} 分钟`;
+}
+
+/** 今天 18:30、明天 07:00、10月27日 07:00 */
+export function resetText(secs: number | null | undefined) {
+  if (!secs) return "重置时间不详";
+  const at = new Date(secs * 1000);
+  const hm = at.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  const today = new Date();
+  const tomorrow = new Date(Date.now() + 86400000);
+  if (at.toDateString() === today.toDateString()) return `今天 ${hm} 重置`;
+  if (at.toDateString() === tomorrow.toDateString()) return `明天 ${hm} 重置`;
+  return `${at.getMonth() + 1}月${at.getDate()}日 ${hm} 重置`;
+}
+
+/** 额度：“5 小时 35% · 7 天 75%”，用到 75% 变黄、90% 变红，悬停看重置时间 */
+export function AgentQuotaLabel({ quota }: { quota: AgentQuota }) {
+  const ago = Math.max(0, Math.round((Date.now() / 1000 - quota.at) / 60));
+  const tip = [
+    ...quota.windows.map((w) => `${quotaWindowLabel(w.minutes)}额度已用 ${Math.round(w.used_percent)}%，${resetText(w.resets_at)}`),
+    ago < 1 ? "刚刚读到的" : `${ago} 分钟前的数据`,
+  ].join("\n");
+  return (
+    <span className="agent-quota" title={tip}>
+      {quota.windows.map((w) => (
+        <span key={w.minutes} data-level={w.used_percent >= QUOTA_ALERT ? "high" : w.used_percent >= QUOTA_WARN ? "warn" : undefined}>
+          {quotaWindowLabel(w.minutes)} {Math.round(w.used_percent)}%
+        </span>
+      ))}
+    </span>
   );
 }

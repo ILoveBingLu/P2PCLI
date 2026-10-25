@@ -78,8 +78,11 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "c".repeat(32), created_at: now - 90, attached: false },
 ] : s === "agents" ? [
   // s=agents：会话里跑着几种命令行 AI，最后一个是普通终端
-  { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false, agent: { kind: "claude", name: "Claude Code", state: "working" } },
-  { id: "b".repeat(32), created_at: now - 40 * 60, attached: true, agent: { kind: "codex", name: "Codex", state: "waiting" } },
+  { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false, agent: { kind: "claude", name: "Claude Code", state: "working",
+    quota: { at: now - 120, windows: [{ minutes: 300, used_percent: 35, resets_at: now + 2 * 3600 }, { minutes: 10080, used_percent: 78, resets_at: now + 2 * 86400 }] } } },
+  // Codex 的 5 小时额度快用完，打开就会提醒一次
+  { id: "b".repeat(32), created_at: now - 40 * 60, attached: true, agent: { kind: "codex", name: "Codex", state: "waiting",
+    quota: { at: now - 30, windows: [{ minutes: 300, used_percent: 92, resets_at: now + 3600 }, { minutes: 10080, used_percent: 41, resets_at: now + 5 * 86400 }] } } },
   { id: "c".repeat(32), created_at: now - 20 * 60, attached: false, agent: { kind: "gemini", name: "Gemini CLI", state: "idle" } },
   { id: "d".repeat(32), created_at: now - 90, attached: false },
 ] : [];

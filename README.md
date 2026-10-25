@@ -61,8 +61,9 @@ p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失
 - 认得：Claude Code、Codex、Gemini CLI、OpenCode、Cursor Agent、Copilot CLI、Qwen Code、Kimi CLI、CodeBuddy、Qoder CLI、iFlow CLI、Kiro CLI、Trae CLI、Amp、Aider、Crush、Droid、Goose、Auggie。被连的电脑顺着会话的进程往下找，看程序名和完整命令行（Node、Python 写的 AI 程序名是 node、python，要看脚本路径），新出的在 `crates/core/src/agents.rs` 的表里加一行
 - 状态：读会话标题和屏幕最后几十行判断，比如屏幕底部有编号选项和“Enter to confirm”就是在等你，有“✻ Cogitating…”或“esc to interrupt”就是在干活。屏幕内容只在被连的电脑上判断用，不发出去；对方只收到是哪个 AI 和它的状态
 - 各家改了界面文字时状态可能判断不准，规则也在 `agents.rs`，测试里放着真实截下来的屏幕
+- 额度：终端底部栏显示那台电脑上 AI 账号的额度，比如“5 小时 35% · 7 天 75%”，用到 90%、用满各提醒一次。Claude Code 读被连电脑上状态栏脚本存下的 `~/.claude/.statusline-ratelimits.json`（Claude Code 只把额度交给状态栏脚本，没配这样的状态栏脚本就读不到）；Codex 读 `~/.codex/sessions` 里最新会话日志最后一次记下的额度。只读本机文件，不联网、不碰登录凭据
 - 两边都要是 0.1.4 以上的版本；连着的设备每 4 秒更新一次状态
-- AI 品牌图标使用 [Lobe Icons](https://github.com/lobehub/lobe-icons)（MIT）的 `@lobehub/icons` React 组件，按需导入并随应用打包，无需联网加载。新增 CLI 图标在 `app/src/components/Agent.tsx` 中添加 `kind` 映射；未收录的显示通用机器人图标。CLI 识别和状态规则仍需在后端单独适配
+- AI 品牌图标是 [Lobe Icons](https://github.com/lobehub/lobe-icons)（MIT）的静态 SVG，放在 `app/src/assets/agents`，按图片显示，见那里的 LICENSE。不引 `@lobehub/icons`：它会带进整套 Lobe UI，新版本又常常刚发布、过不了 pnpm 默认的发布时间检查（24 小时内发布的包不装）。新增 CLI 时按 `agents.rs` 里的 kind 放一个同名 SVG；没收录的显示通用机器人图标
 
 ## 原理
 

@@ -977,6 +977,10 @@
 .terminal-status-command {
   max-width: 140px;
 }
+/* AI 那一格：名字、状态、额度都要看全，不限宽度；挤的时候让目录去缩 */
+.terminal-status-agent {
+  flex-shrink: 0;
+}
 .terminal-status-path {
   min-width: 0;
   flex: 1;
@@ -1474,9 +1478,29 @@
   align-items: center;
   justify-content: center;
 }
-.agent-icon > svg {
-  width: 100%;
-  height: 100%;
+img.agent-icon {
+  object-fit: contain;
+}
+/* 额度：“5 小时 35% · 7 天 75%”，75% 变黄，90% 变红 */
+.agent-quota {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.agent-quota > span + span::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--muted-foreground);
+}
+.agent-quota [data-level="warn"] {
+  color: var(--warning);
+}
+.agent-quota [data-level="high"] {
+  color: var(--danger);
 }
 .agent-state {
   display: inline-flex;

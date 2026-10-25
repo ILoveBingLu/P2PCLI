@@ -6,9 +6,13 @@
 //!
 //! 看状态：读会话标题和屏幕最后几十行。屏幕内容只在本机判断状态用，不发给任何人。
 //! 规则参考了 tmuxcc（MIT）对各家界面的解析；Claude Code、CodeBuddy 的界面用本机真实截下来的屏幕核对过，见下面的测试。
+//!
+//! 看额度：只读 AI 自己留在本机的文件，不联网、不碰登录凭据，见 quota()。
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -33,6 +37,27 @@ pub struct AgentInfo {
     /// 显示的名字，比如 Claude Code
     pub name: String,
     pub state: AgentState,
+    /// 这台电脑上这种 AI 账号的额度；读不到就没有
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota: Option<AgentQuota>,
+}
+
+/// AI 账号的额度：几个滚动窗口各用了多少
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentQuota {
+    pub windows: Vec<QuotaWindow>,
+    /// 这份数据是什么时候记下的（秒）
+    pub at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaWindow {
+    /// 窗口多长，单位分钟：5 小时是 300，7 天是 10080
+    pub minutes: u64,
+    /// 用了百分之几，0 到 100
+    pub used_percent: f64,
+    /// 什么时候重置（秒）
+    pub resets_at: Option<u64>,
 }
 
 struct Known {
@@ -249,6 +274,161 @@ fn spinner_line(line: &str) -> bool {
     chars.as_str().split_whitespace().next().is_some_and(|word| word.ends_with('…') || word.ends_with("..."))
 }
 
+/// 额度读一次能用这么久，几个会话、几个查看方一起问时不重复读盘
+const QUOTA_TTL: Duration = Duration::from_secs(10);
+/// 太久以前的额度快照不显示
+const QUOTA_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+/// Codex 的会话日志只看最后这么多字节，额度每轮都会记一次
+const CODEX_TAIL_BYTES: u64 = 512 * 1024;
+
+/// 各种 AI 额度的缓存
+#[derive(Default)]
+pub struct Quotas {
+    cache: HashMap<String, (Instant, Option<AgentQuota>)>,
+}
+
+impl Quotas {
+    pub fn get(&mut self, kind: &str) -> Option<AgentQuota> {
+        if let Some((at, quota)) = self.cache.get(kind)
+            && at.elapsed() < QUOTA_TTL
+        {
+            return quota.clone();
+        }
+        let quota = quota(kind);
+        self.cache.insert(kind.to_string(), (Instant::now(), quota.clone()));
+        quota
+    }
+}
+
+/// 这台电脑上某种 AI 账号的额度，只读它们自己留在本机的文件：
+/// Claude Code 只把额度交给状态栏脚本，读状态栏脚本存下的快照 ~/.claude/.statusline-ratelimits.json；
+/// Codex 读最近一个会话日志里最后一次记下的 rate_limits
+pub fn quota(kind: &str) -> Option<AgentQuota> {
+    let home = std::env::home_dir()?;
+    let now = now_secs();
+    let quota = match kind {
+        "claude" => claude_quota(&home.join(".claude/.statusline-ratelimits.json")),
+        "codex" => {
+            let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".codex"));
+            codex_quota(&codex_home.join("sessions"))
+        }
+        _ => None,
+    }?;
+    current(quota, now)
+}
+
+/// 去掉已经过了重置时间的窗口（重置以后用了多少不知道），太旧的快照整个不要
+fn current(mut quota: AgentQuota, now: u64) -> Option<AgentQuota> {
+    if now.saturating_sub(quota.at) > QUOTA_MAX_AGE.as_secs() {
+        return None;
+    }
+    quota.windows.retain(|w| w.resets_at.is_none_or(|at| at > now));
+    (!quota.windows.is_empty()).then_some(quota)
+}
+
+/// {"rate_limits":{"five_hour":{"used_percentage":34,"resets_at":…},"seven_day":{…}},"at":"…"}；时间用文件的修改时间
+fn claude_quota(path: &Path) -> Option<AgentQuota> {
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let limits = value.get("rate_limits")?;
+    let windows = [("five_hour", 300), ("seven_day", 10080)]
+        .into_iter()
+        .filter_map(|(key, minutes)| {
+            let w = limits.get(key)?;
+            Some(QuotaWindow {
+                minutes,
+                used_percent: w.get("used_percentage")?.as_f64()?,
+                resets_at: w.get("resets_at").and_then(|v| v.as_u64()),
+            })
+        })
+        .collect::<Vec<_>>();
+    (!windows.is_empty()).then(|| AgentQuota { windows, at: modified_secs(path) })
+}
+
+/// 在 sessions/年/月/日/ 里找最新的会话日志，从后往前找最后一次记下的 rate_limits
+fn codex_quota(sessions: &Path) -> Option<AgentQuota> {
+    let file = newest_rollout(sessions)?;
+    let mut f = std::fs::File::open(&file).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(CODEX_TAIL_BYTES))).ok()?;
+    let mut text = String::new();
+    f.take(CODEX_TAIL_BYTES).read_to_string(&mut text).ok()?;
+    text.lines().rev().find_map(|line| {
+        if !line.contains("rate_limits") {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        let limits = find_key(&value, "rate_limits")?;
+        let windows = ["primary", "secondary"]
+            .into_iter()
+            .filter_map(|key| {
+                let w = limits.get(key)?;
+                Some(QuotaWindow {
+                    minutes: w.get("window_minutes").and_then(|v| v.as_u64()).unwrap_or(0),
+                    used_percent: w.get("used_percent")?.as_f64()?,
+                    resets_at: w.get("resets_at").and_then(|v| v.as_u64()),
+                })
+            })
+            .collect::<Vec<_>>();
+        (!windows.is_empty()).then(|| AgentQuota { windows, at: modified_secs(&file) })
+    })
+}
+
+/// 日志外层的包装以后可能变，直接找 rate_limits 这一段（非空的）
+fn find_key<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    match value {
+        serde_json::Value::Object(map) => map
+            .get(key)
+            .filter(|v| v.is_object())
+            .or_else(|| map.values().find_map(|v| find_key(v, key))),
+        _ => None,
+    }
+}
+
+/// 年、月、日的目录名都是数字，倒着找到第一个有 .jsonl 的日子，取里面最新改过的
+fn newest_rollout(sessions: &Path) -> Option<PathBuf> {
+    fn dirs(path: &Path) -> Vec<PathBuf> {
+        let mut list: Vec<PathBuf> = std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        list.sort();
+        list.reverse();
+        list
+    }
+    for year in dirs(sessions) {
+        for month in dirs(&year) {
+            for day in dirs(&month) {
+                let newest = std::fs::read_dir(&day)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+                    .max_by_key(|p| modified_secs(p));
+                if newest.is_some() {
+                    return newest;
+                }
+            }
+        }
+    }
+    None
+}
+
+fn modified_secs(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs())
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +566,42 @@ mod tests {
 ❯
 ──────────────────────────────────────────────────────
 ";
+
+    #[test]
+    fn reads_quotas_from_local_files() {
+        let dir = std::env::temp_dir().join(format!("p2pcli-quota-{:x}", rand::random::<u64>()));
+        let now = now_secs();
+        // Claude Code 状态栏快照，格式照本机真实存下来的
+        let claude = dir.join("ratelimits.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&claude, format!(
+            r#"{{"rate_limits":{{"five_hour":{{"used_percentage":34,"resets_at":{}}},"seven_day":{{"used_percentage":74,"resets_at":{}}}}},"at":"2026-10-25T14:42:54Z"}}"#,
+            now + 3600, now + 86400)).unwrap();
+        let q = current(claude_quota(&claude).unwrap(), now).unwrap();
+        assert_eq!(q.windows.iter().map(|w| (w.minutes, w.used_percent)).collect::<Vec<_>>(), vec![(300, 34.0), (10080, 74.0)]);
+        // 5 小时窗口已经过了重置时间，只剩 7 天的
+        std::fs::write(&claude, format!(
+            r#"{{"rate_limits":{{"five_hour":{{"used_percentage":95,"resets_at":{}}},"seven_day":{{"used_percentage":74,"resets_at":{}}}}}}}"#,
+            now - 60, now + 86400)).unwrap();
+        let q = current(claude_quota(&claude).unwrap(), now).unwrap();
+        assert_eq!(q.windows.len(), 1);
+        assert_eq!(q.windows[0].minutes, 10080);
+
+        // Codex 会话日志：取最新那天最新的文件里最后一次记下的额度
+        let old = dir.join("sessions/2026/10/24");
+        let new = dir.join("sessions/2026/10/25");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let line = |used: f64| format!(
+            r#"{{"timestamp":"2026-10-25T10:00:00Z","type":"event_msg","payload":{{"type":"token_count","info":null,"rate_limits":{{"limit_id":null,"primary":{{"used_percent":{used},"window_minutes":300,"resets_at":{}}},"secondary":{{"used_percent":12.0,"window_minutes":10080,"resets_at":{}}}}}}}}}"#,
+            now + 600, now + 90000);
+        std::fs::write(old.join("rollout-a.jsonl"), line(1.0)).unwrap();
+        std::fs::write(new.join("rollout-b.jsonl"), format!("{}\n{}\n{{\"type\":\"response_item\"}}\n", line(40.0), line(42.5))).unwrap();
+        let q = current(codex_quota(&dir.join("sessions")).unwrap(), now).unwrap();
+        assert_eq!(q.windows.iter().map(|w| (w.minutes, w.used_percent)).collect::<Vec<_>>(), vec![(300, 42.5), (10080, 12.0)]);
+        assert_eq!(codex_quota(&dir.join("nothing")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn reads_state_from_real_screens() {
