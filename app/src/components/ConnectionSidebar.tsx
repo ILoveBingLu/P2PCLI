@@ -4,6 +4,7 @@ import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, Plus, Radar, Refr
 import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
 import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
@@ -283,10 +284,22 @@ function PresenceLabel({ status, connected, path }: { status?: DeviceStatus; con
     const p = connected ? path : status?.path;
     const label = connected ? "已连接" : "在线";
     const tip = `${label} · ${connected ? "终端连接" : "后台探测"} · ${pathLabel(p)}${p?.remote ? ` · ${p.remote}` : ""}`;
-    return <span className="presence-label" data-kind={p?.kind ?? "unknown"} title={tip}>{p?.rtt_ms != null && p.kind !== "unknown" ? `${p.rtt_ms} ms` : label}</span>;
+    return (
+      <Tooltip content={tip}>
+        <TooltipTrigger<"span"> render={(props) => <span {...props} />}
+          role="presentation" tabIndex={-1} className="presence-label" data-kind={p?.kind ?? "unknown"}>
+          {p?.rtt_ms != null && p.kind !== "unknown" ? `${p.rtt_ms} ms` : label}
+        </TooltipTrigger>
+      </Tooltip>
+    );
   }
   if (!status) return null;
-  if (status.state === "offline") return <span className="presence-label" data-kind="off" title="离线">离线</span>;
-  if (status.state === "old_version") return <span className="presence-label" title="对方的 P2PCLI 版本旧，升级后能显示延迟和会话">需更新</span>;
+  if (status.state === "offline") return <span className="presence-label" data-kind="off">离线</span>;
+  if (status.state === "old_version") return (
+    <Tooltip content="对方的 P2PCLI 版本旧，升级后能显示延迟和会话">
+      <TooltipTrigger<"span"> render={(props) => <span {...props} />}
+        role="presentation" tabIndex={-1} className="presence-label">需更新</TooltipTrigger>
+    </Tooltip>
+  );
   return null;
 }

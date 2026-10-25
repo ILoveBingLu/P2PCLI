@@ -1,4 +1,4 @@
-import { useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Dropdown, Label, dropdownVariants } from "@heroui/react";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +38,7 @@ export function useContextMenu() {
     setState({ x, y, actions });
   };
 
-  const close = () => setState(null);
+  const close = useCallback(() => setState(null), []);
 
   const element = (
     <>
@@ -50,6 +50,9 @@ export function useContextMenu() {
       {state && (
         <Dropdown.Popover
           isOpen
+          // 右键菜单不能遮住背后的操作区域，否则再次右键会落到透明遮罩上。
+          isNonModal
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
           onOpenChange={(open) => !open && close()}
           triggerRef={anchor}
           placement="bottom start"

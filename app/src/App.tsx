@@ -739,7 +739,6 @@ export default function App() {
               key={activeTab.key}
               onShowComposer={activeAgent && composerHidden ? () => { hideComposer(false); window.requestAnimationFrame(() => composerRef.current?.focus()); } : undefined}
               sessionId={activeTab.sessionId}
-              info={activeTab.info}
               state={activeTab.state}
               path={paths[activeTab.connId]}
               snapshot={liveSessions[activeTab.connId]}

@@ -1,11 +1,14 @@
 // 一个远程终端标签页：xterm.js 画面，字节经 Rust 端走 iroh 连接
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MouseEvent } from "react";
+import { ClipboardPaste, Copy, TextSelect } from "lucide-react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import type { TermStatus, OpenedTerminal } from "./api";
+import { useContextMenu } from "./components/ContextMenu";
+import { toast } from "./components/ui/toast";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -75,8 +78,47 @@ interface Props {
 export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const inputReady = useRef(false);
+  const menu = useContextMenu();
   const cb = useRef({ onStatus, onReady, onHandle });
   cb.current = { onStatus, onReady, onHandle };
+
+  const openContextMenu = (e: MouseEvent<HTMLDivElement>) => {
+    // 在捕获阶段拦截，避免 xterm 的隐藏输入框弹出 WebView 原生菜单。
+    e.preventDefault();
+    e.stopPropagation();
+    const term = termRef.current;
+    if (!term) return;
+    // 菜单获取焦点前保存选区，复制不受菜单打开后的焦点变化影响。
+    const selected = term.getSelection();
+    const focus = () => { if (termRef.current === term) term.focus(); };
+    menu.open(e, [
+      {
+        id: "copy", label: "复制", icon: <Copy className="size-4" />, disabled: !selected,
+        onAction: () => {
+          void navigator.clipboard.writeText(selected)
+            .catch((error) => toast.error(`复制失败：${String(error)}`))
+            .finally(focus);
+        },
+      },
+      {
+        id: "paste", label: "粘贴", icon: <ClipboardPaste className="size-4" />, disabled: !inputReady.current,
+        onAction: () => {
+          void navigator.clipboard.readText().then((text) => {
+            if (termRef.current === term && inputReady.current) term.paste(text);
+          }).catch((error) => toast.error(`粘贴失败：${String(error)}`)).finally(focus);
+        },
+      },
+      {
+        id: "select-all", label: "全选", icon: <TextSelect className="size-4" />, separated: true,
+        onAction: () => { term.selectAll(); focus(); },
+      },
+    ]);
+  };
+
+  useEffect(() => {
+    if (!active) menu.close();
+  }, [active, menu.close]);
 
   useEffect(() => {
     const el = box.current!;
@@ -144,7 +186,9 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     const output = new Channel<ArrayBuffer>();
     output.onmessage = (buf) => { if (!disposed) term.write(new Uint8Array(buf)); };
     const status = new Channel<TermStatus>();
-    status.onmessage = (s) => { if (!disposed) cb.current.onStatus(s); };
+    status.onmessage = (s) => {
+      if (!disposed) { inputReady.current = false; cb.current.onStatus(s); }
+    };
 
     // Let StrictMode's setup/cleanup rehearsal finish before creating a persistent session.
     const openTimer = window.setTimeout(() => {
@@ -156,6 +200,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
           return;
         }
         termId = id;
+        inputReady.current = true;
         cb.current.onReady(id, session_id);
         // 打开期间窗口可能变过大小
         invoke("term_resize", { termId: id, cols: term.cols, rows: term.rows });
@@ -186,6 +231,8 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     return () => {
       disposed = true;
       cb.current.onHandle?.(null);
+      inputReady.current = false;
+      if (termRef.current === term) termRef.current = null;
       window.clearTimeout(openTimer);
       window.clearTimeout(resizeTimer);
       ro.disconnect();
@@ -205,5 +252,9 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     return () => cancelAnimationFrame(id);
   }, [active]);
 
-  return <div className="term" ref={box} style={{ display: active ? "block" : "none" }} />;
+  return <>
+    <div className="term" ref={box} style={{ display: active ? "block" : "none" }}
+      onContextMenuCapture={openContextMenu} />
+    {active && menu.element}
+  </>;
 }
