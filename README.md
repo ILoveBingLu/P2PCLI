@@ -62,7 +62,7 @@ p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失
 - 状态：读会话标题和屏幕最后几十行判断，比如屏幕底部有编号选项和“Enter to confirm”就是在等你，有“✻ Cogitating…”或“esc to interrupt”就是在干活。屏幕内容只在被连的电脑上判断用，不发出去；对方只收到是哪个 AI 和它的状态
 - 各家改了界面文字时状态可能判断不准，规则也在 `agents.rs`，测试里放着真实截下来的屏幕
 - 两边都要是 0.1.4 以上的版本；连着的设备每 4 秒更新一次状态
-- 图标来自 [Lobe Icons](https://github.com/lobehub/lobe-icons)（MIT），见 `app/src/assets/agents/LICENSE`
+- AI 品牌图标使用 [Lobe Icons](https://github.com/lobehub/lobe-icons)（MIT）的 `@lobehub/icons` React 组件，按需导入并随应用打包，无需联网加载。新增 CLI 图标在 `app/src/components/Agent.tsx` 中添加 `kind` 映射；未收录的显示通用机器人图标。CLI 识别和状态规则仍需在后端单独适配
 
 ## 原理
 

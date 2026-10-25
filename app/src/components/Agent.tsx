@@ -1,13 +1,39 @@
 import { Bot } from "lucide-react";
+import Amp from "@lobehub/icons/es/Amp/components/Color.js";
+import ClaudeCode from "@lobehub/icons/es/ClaudeCode/components/Color.js";
+import CodeBuddy from "@lobehub/icons/es/CodeBuddy/components/Color.js";
+import Codex from "@lobehub/icons/es/Codex/components/Color.js";
+import Cursor from "@lobehub/icons/es/Cursor/components/Mono.js";
+import GeminiCLI from "@lobehub/icons/es/GeminiCLI/components/Color.js";
+import GithubCopilot from "@lobehub/icons/es/GithubCopilot/components/Mono.js";
+import Goose from "@lobehub/icons/es/Goose/components/Mono.js";
+import Kimi from "@lobehub/icons/es/Kimi/components/Color.js";
+import Kiro from "@lobehub/icons/es/Kiro/components/Color.js";
+import OpenCode from "@lobehub/icons/es/OpenCode/components/Mono.js";
+import Qoder from "@lobehub/icons/es/Qoder/components/Color.js";
+import Qwen from "@lobehub/icons/es/Qwen/components/Color.js";
+import Trae from "@lobehub/icons/es/Trae/components/Color.js";
 import type { AgentInfo, AgentState } from "../api";
 import { cn } from "@/lib/utils";
 
-// 各家命令行 AI 的图标来自 Lobe Icons（MIT），见 assets/agents/LICENSE。
-// 按文本导入、内嵌渲染：单色图标用的是 currentColor，当图片引用会变成黑色
-const files = import.meta.glob<string>("../assets/agents/*.svg", { query: "?raw", import: "default", eager: true });
-const ICONS: Record<string, string> = Object.fromEntries(
-  Object.entries(files).map(([path, svg]) => [path.slice(path.lastIndexOf("/") + 1, -4), svg]),
-);
+// 直接导入所需的 React 图标，避免加载各品牌的 Avatar、Combine 等组件。
+// 新增 CLI 时，在这里按后端 agents.rs 的 kind 添加映射；未收录的保留通用图标。
+const ICONS: Readonly<Partial<Record<string, typeof ClaudeCode>>> = {
+  amp: Amp,
+  claude: ClaudeCode,
+  codebuddy: CodeBuddy,
+  codex: Codex,
+  copilot: GithubCopilot,
+  cursor: Cursor,
+  gemini: GeminiCLI,
+  goose: Goose,
+  kimi: Kimi,
+  kiro: Kiro,
+  opencode: OpenCode,
+  qoder: Qoder,
+  qwen: Qwen,
+  trae: Trae,
+};
 
 export const AGENT_STATE_TEXT: Record<AgentState, string> = {
   working: "干活中",
@@ -17,9 +43,9 @@ export const AGENT_STATE_TEXT: Record<AgentState, string> = {
 
 /** AI 的图标；没有收录图标的用通用的机器人图标 */
 export function AgentIcon({ kind, className }: { kind: string; className?: string }) {
-  const svg = ICONS[kind];
-  if (!svg) return <Bot className={cn("agent-icon", className)} aria-hidden="true" />;
-  return <span className={cn("agent-icon", className)} aria-hidden="true" dangerouslySetInnerHTML={{ __html: svg }} />;
+  const Icon = Object.hasOwn(ICONS, kind) ? ICONS[kind] : undefined;
+  if (!Icon) return <Bot className={cn("agent-icon", className)} aria-hidden="true" />;
+  return <span className={cn("agent-icon", className)} aria-hidden="true"><Icon /></span>;
 }
 
 /** 状态点加文字：干活中蓝色带呼吸，等你确认黄色，空闲灰色 */
