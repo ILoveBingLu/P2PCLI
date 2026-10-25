@@ -1,9 +1,8 @@
-// Prepare before starting Tauri, not in its asynchronous Vite hook: an
-// already-running dev server must not race Cargo's sidecar validation.
+// Validate the checked-in sidecar before starting Tauri. No download or compilation.
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { main as prepare } from "./prepare-session-tools.mjs";
+import { main as check } from "./check-session-tools.mjs";
 
 const args = process.argv.slice(2);
 let target;
@@ -12,7 +11,7 @@ for (let i = 0; i < args.length && args[i] !== "--"; i++) {
   else if (args[i].startsWith("--target=")) target = args[i].slice(9);
 }
 try {
-  if (!args.includes("--help") && !args.includes("-h")) await prepare(target ? ["--target", target] : []);
+  if (!args.includes("--help") && !args.includes("-h")) await check(target ? ["--target", target] : []);
   const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
   const child = spawn(process.execPath, [cli, "dev", ...args], {
     cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: "inherit", windowsHide: true,

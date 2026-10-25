@@ -10,6 +10,7 @@
     "dev:web": "vite app",
     "check": "tsc --project app/tsconfig.json --noEmit",
     "build:web": "tsc --project app/tsconfig.json --noEmit && vite build app",
+    "check:session-tools": "node scripts/check-session-tools.mjs",
     "prepare:session-tools": "node scripts/prepare-session-tools.mjs"
   },
   "dependencies": {

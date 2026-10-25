@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm run dev:web",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run prepare:session-tools && pnpm run build:web",
+    "beforeBuildCommand": "pnpm run check:session-tools && pnpm run build:web",
     "frontendDist": "../dist"
   },
   "app": {
@@ -39,7 +39,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "15.0"
     },
     "windows": {
       "nsis": {

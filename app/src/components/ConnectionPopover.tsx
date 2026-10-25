@@ -1,4 +1,4 @@
-import { Popover } from "@heroui/react";
+import { InputOTP, Popover, REGEXP_ONLY_DIGITS } from "@heroui/react";
 import { ArrowUpRight, LoaderCircle, LockKeyhole, Plus } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
   connection: ReturnType<typeof useConnection>;
 }) {
   const { target, setTarget, password, setPassword, busy, error, pwRef, doConnect } = connection;
+  const isDeviceCodeComplete = /^\d{9}$/.test(target);
 
   return (
     <Popover isOpen={open} onOpenChange={onOpenChange}>
@@ -21,7 +22,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
       <Popover.Content
         placement="bottom end"
         offset={8}
-        className="w-80 max-w-[calc(100vw-24px)]"
+        className="w-[26rem] max-w-[calc(100vw-24px)]"
       >
         <Popover.Arrow />
         <Popover.Dialog aria-label="连接远程设备" className="max-h-[calc(100dvh-72px)] overflow-y-auto">
@@ -33,23 +34,39 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                if (!isDeviceCodeComplete) return;
                 void doConnect(target, password);
               }}
             >
               <FieldGroup className="gap-3">
                 <Field data-disabled={busy}>
                   <FieldLabel htmlFor="remote-code">设备码</FieldLabel>
-                  <Input
+                  <InputOTP
                     id="remote-code"
+                    className="gap-3"
                     variant="secondary"
                     autoFocus
-                    placeholder="例如 123 456 789"
+                    aria-label="设备码，9 位数字"
+                    maxLength={9}
+                    minLength={9}
+                    required
+                    pattern={REGEXP_ONLY_DIGITS}
+                    inputMode="numeric"
                     value={target}
-                    onChange={(e) => setTarget(e.target.value)}
-                    disabled={busy}
+                    onChange={setTarget}
+                    pasteTransformer={(text) => text.replace(/[\s-]/g, "")}
+                    isDisabled={busy}
                     spellCheck={false}
                     autoComplete="off"
-                  />
+                  >
+                    {[0, 3, 6].map((start) => (
+                      <InputOTP.Group key={start} className="flex-1">
+                        {[0, 1, 2].map((offset) => (
+                          <InputOTP.Slot key={offset} index={start + offset} />
+                        ))}
+                      </InputOTP.Group>
+                    ))}
+                  </InputOTP>
                 </Field>
                 <Field data-disabled={busy}>
                   <FieldLabel htmlFor="remote-password">临时密码</FieldLabel>
@@ -74,7 +91,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={busy || !target.trim()}
+                  disabled={busy || !isDeviceCodeComplete}
                 >
                   {busy ? (
                     <LoaderCircle

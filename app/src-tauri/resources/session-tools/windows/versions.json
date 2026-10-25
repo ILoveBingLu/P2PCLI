@@ -1,0 +1,27 @@
+{
+  "tool": "psmux",
+  "version": "3.4.0",
+  "binaries": {
+    "x86_64-pc-windows-msvc": {
+      "file": "psmux-x86_64-pc-windows-msvc.exe",
+      "sha256": "bbe825a30f7cddc91b043084049143a381aba5f7e9e36e4d0bb587e296d262ca",
+      "size": 9907824,
+      "source": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x64.zip",
+      "archiveSha256": "a66b6be7c13c6fa0dc3660a267b9e34eaa91a4eb7f07fbd55a0468018bd0f721"
+    },
+    "aarch64-pc-windows-msvc": {
+      "file": "psmux-aarch64-pc-windows-msvc.exe",
+      "sha256": "3ad6cd432322fd613ca5acb2140fd06357598caf06f2e33f193bf19ef34b12e2",
+      "size": 8076400,
+      "source": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-arm64.zip",
+      "archiveSha256": "b123398e3b37408032bc268b4da6e7a6eab5b56461e0c3414914513a57a7a5cf"
+    },
+    "i686-pc-windows-msvc": {
+      "file": "psmux-i686-pc-windows-msvc.exe",
+      "sha256": "f78fde921c547e059343d8c7a6f1accab19942da714699f38bc31a094037225d",
+      "size": 7476336,
+      "source": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x86.zip",
+      "archiveSha256": "b1d5f037befaa4dca94280bf0559531d9bbbc2d03e66cbb4f47961f82a8fc0c1"
+    }
+  }
+}

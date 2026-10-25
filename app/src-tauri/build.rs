@@ -10,7 +10,7 @@ fn main() {
     if let Some(sidecar) = sidecar {
         println!("cargo:rerun-if-changed={sidecar}");
         assert!(std::path::Path::new(&sidecar).is_file(),
-            "Bundled session component is missing. Run pnpm run prepare:session-tools --target {target} before Cargo, or use pnpm run dev/build.");
+            "Bundled session component is missing. Restore {sidecar} from Git, then run pnpm run check:session-tools --target {target}.");
     }
     println!("cargo:rerun-if-changed=windows-app-manifest.xml");
     let windows = tauri_build::WindowsAttributes::new()

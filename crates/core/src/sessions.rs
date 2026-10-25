@@ -114,7 +114,7 @@ fn executable(bundled: Option<&Path>) -> Result<PathBuf> {
     // switch to an unrelated executable on PATH if the installation is damaged.
     if let Some(path) = bundled {
         if !path.is_absolute() || !path.is_file() {
-            bail!("内置会话组件缺失，请重新安装 P2PCLI；开发环境请运行 pnpm run prepare:session-tools：{}", path.display());
+            bail!("内置会话组件缺失，请重新安装 P2PCLI；开发环境请恢复仓库的 binaries 组件文件并重新启动开发模式：{}", path.display());
         }
         return Ok(path.to_path_buf());
     }

@@ -1,43 +1,65 @@
 {
+  "schemaVersion": 2,
   "windows": {
+    "tool": "psmux",
     "version": "3.4.0",
-    "archives": {
-      "x86_64": {
-        "url": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x64.zip",
-        "sha256": "a66b6be7c13c6fa0dc3660a267b9e34eaa91a4eb7f07fbd55a0468018bd0f721"
+    "binaries": {
+      "x86_64-pc-windows-msvc": {
+        "file": "psmux-x86_64-pc-windows-msvc.exe",
+        "sha256": "bbe825a30f7cddc91b043084049143a381aba5f7e9e36e4d0bb587e296d262ca",
+        "size": 9907824,
+        "source": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x64.zip",
+        "archiveSha256": "a66b6be7c13c6fa0dc3660a267b9e34eaa91a4eb7f07fbd55a0468018bd0f721"
       },
-      "aarch64": {
-        "url": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-arm64.zip",
-        "sha256": "b123398e3b37408032bc268b4da6e7a6eab5b56461e0c3414914513a57a7a5cf"
+      "aarch64-pc-windows-msvc": {
+        "file": "psmux-aarch64-pc-windows-msvc.exe",
+        "sha256": "3ad6cd432322fd613ca5acb2140fd06357598caf06f2e33f193bf19ef34b12e2",
+        "size": 8076400,
+        "source": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-arm64.zip",
+        "archiveSha256": "b123398e3b37408032bc268b4da6e7a6eab5b56461e0c3414914513a57a7a5cf"
       },
-      "i686": {
-        "url": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x86.zip",
-        "sha256": "b1d5f037befaa4dca94280bf0559531d9bbbc2d03e66cbb4f47961f82a8fc0c1"
+      "i686-pc-windows-msvc": {
+        "file": "psmux-i686-pc-windows-msvc.exe",
+        "sha256": "f78fde921c547e059343d8c7a6f1accab19942da714699f38bc31a094037225d",
+        "size": 7476336,
+        "source": "https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x86.zip",
+        "archiveSha256": "b1d5f037befaa4dca94280bf0559531d9bbbc2d03e66cbb4f47961f82a8fc0c1"
       }
     }
   },
   "macos": {
+    "tool": "tmux",
     "version": "3.7c",
-    "minimumSystemVersion": "11.0",
-    "sources": {
-      "tmux": {
-        "url": "https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz",
-        "sha256": "7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf",
-        "directory": "tmux-3.7c",
-        "license": "COPYING"
+    "minimumSystemVersion": "15.0",
+    "binaries": {
+      "aarch64-apple-darwin": {
+        "file": "tmux-aarch64-apple-darwin",
+        "sha256": "b4ef8b3be8e727c9d8b36e485cc5baeb7e4b373569b14e11673a7a7a282f1e0b",
+        "size": 1694408,
+        "source": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-macos-arm64.tar.gz",
+        "archiveSha256": "0a763dd0380aa980d239509654da1bc7455843706a3c050f6709c8cd2e13d12d"
       },
-      "libevent": {
-        "url": "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz",
-        "sha256": "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb",
-        "directory": "libevent-2.1.12-stable",
-        "license": "LICENSE"
+      "x86_64-apple-darwin": {
+        "file": "tmux-x86_64-apple-darwin",
+        "sha256": "2e3a3db47d04cc1c990e0e562994bdb299a100514227e719f1c549e4a53712fd",
+        "size": 1735464,
+        "source": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-macos-x86_64.tar.gz",
+        "archiveSha256": "1c21f9ade964e4a539be05ffe3a4e95854ab76a0a9c4c05d0ffbe7fc6c4d783f"
       },
-      "utf8proc": {
-        "url": "https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v2.10.0.tar.gz",
-        "sha256": "6f4f1b639daa6dca9f80bc5db1233e9cbaa31a67790887106160b33ef743f136",
-        "directory": "utf8proc-2.10.0",
-        "license": "LICENSE.md"
+      "universal-apple-darwin": {
+        "file": "tmux-universal-apple-darwin",
+        "sha256": "bb4a879efed70a02ce29150ec67eed41370207ba1dbf325d1631dd32ff4d2b0b",
+        "size": 3455784,
+        "slices": [
+          "aarch64-apple-darwin",
+          "x86_64-apple-darwin"
+        ],
+        "note": "FAT container of the unchanged official thin binaries; no recompilation or deployment-target patching."
       }
+    },
+    "licenseSource": {
+      "url": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/LICENSES.tar.gz",
+      "sha256": "094905d3ba42397c65fecd817dc29736dd14bd35e75600441403a365125f47d1"
     }
   }
 }

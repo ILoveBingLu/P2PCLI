@@ -5,13 +5,13 @@
 - 直连优先：IPv6 直连 > IPv4 打洞 > 中继兜底，全程端到端加密，中继只转发看不到内容
 - 像远程桌面软件一样配对：9 位设备码 + 6 位临时密码，密码对了还要被连方在弹窗里点允许
 - 终端嵌在软件里：支持多标签切换，终端占满主工作区
-- 很小：Tauri 2 + React + xterm.js，macOS 安装包约 8 MB，Windows 安装包约 6 MB
+- Tauri 2 + React + xterm.js，安装包仅携带当前平台和架构的会话组件
 
 ## 下载和安装
 
 到 [Releases](../../releases) 下载：
 
-- macOS（Apple 芯片）：`P2PCLI_x.y.z_aarch64.dmg`
+- macOS 15 及以上（Apple 芯片）：`P2PCLI_x.y.z_aarch64.dmg`
 - Windows：`P2PCLI_x.y.z_x64-setup.exe`
 
 安装包没有付费签名，第一次打开会被系统拦一下：
@@ -178,7 +178,7 @@ MIT，见 [LICENSE](LICENSE)。
 桌面端终端由被连设备上的独立后台进程托管：macOS/Linux 使用 tmux，Windows 使用原生 ConPTY 的 [psmux](https://github.com/psmux/psmux)，不需要 WSL。
 
 - Windows 与 macOS 发行版内置会话管理器，用户无需安装 tmux、psmux、Homebrew 或 WSL，首次启动也不联网下载组件。
-- 按打包目标系统和 CPU 架构选择组件：Windows 只带对应架构的 psmux 3.4.0；Mac 只带对应架构的 tmux 3.7c。不会把另一系统的二进制放进安装包。Apple Silicon 和 Intel 分包；仅显式选择 universal 时合并两种 Mac 架构。
+- 按打包目标系统和 CPU 架构选择组件：Windows 只带对应架构的 psmux 3.4.0；Mac 只带对应架构的 tmux 3.7c。不会把另一系统的二进制放进安装包。Apple Silicon 和 Intel 分包；仅显式选择 universal 时使用已提交的双架构 Mac 文件。
 - 桌面端通过应用目录中的绝对路径调用组件，不依赖用户 PATH。若安装内容损坏则提示重新安装，不会悄悄调用系统中其他版本。独立 core/CLI 仍可使用自行安装的工具。
 - 连接设备后显示后台会话列表，可新建、恢复或明确结束会话；终端工具栏的会话按钮可再次打开列表。
 - 断线、关闭标签和退出 P2PCLI 只断开附着客户端。再次连接同一设备，可恢复原进程、工作目录、变量和终端画面。
@@ -189,23 +189,28 @@ MIT，见 [LICENSE](LICENSE)。
 预览页 `preview.html?s=sessions` 提供后台会话模拟数据。真实会话恢复回归用例为 `persistent_session_survives_disconnect_and_host_restart`，默认忽略，开发者可用 `P2PCLI_TEST_SESSION_PROGRAM` 指定准备好的组件绝对路径后显式运行，无需全局安装；测试会起独立的测试命名空间。
 
 
-### 内置会话组件的打包准备
+### 仓库内置的预编译会话组件
 
-`pnpm run dev` 会先完成组件准备再启动 Tauri（避免与 Cargo 并发）；`pnpm run build` 的 Tauri 前置步骤会自动准备当前目标的会话组件。日常命令保持不变；`pnpm run dev:web` 只预览前端，不准备原生工具。
+Windows 的 psmux 3.4.0 和 macOS 的 tmux 3.7c 已作为真实二进制文件纳入 Git，许可证一并提交。拉取完整仓库后即可使用，无需另装 tmux、psmux 或 Homebrew；开发启动、打包和应用首次启动都不会下载或编译这些组件。项目本身仍需正常安装 Node/Rust 开发依赖。
 
-- Windows：下载固定版本的官方便携包，校验 SHA-256 和 PE 架构，仅提取 `psmux.exe` 与许可。支持 x64、ARM64、x86 目标。
-- macOS：在 Mac 打包机上用 Xcode Command Line Tools 的 clang/make/yacc，从锁定源码生成目标架构的 tmux；libevent 和 utf8proc 静态链接，只保留 macOS 自带动态库，部署目标为 macOS 11。现成官方 tmux 二进制要求 macOS 15，故不直接采用。无需 Homebrew。首次准备耗时，之后复用源码和成品缓存。
-- 下载版本、地址及 SHA-256 在 `scripts/session-tools.json`；准备脚本会校验架构、Mac 最低系统版本和动态库路径。失败会中止打包，避免发布缺少组件的安装包。
-- Tauri `externalBin` 在开发时复制组件到可执行文件旁，发行时只复制指定目标的 sidecar，并参与 Mac 应用签名。许可文件随对应平台资源打包。正式发布仍按 Tauri 的正常签名、公证流程进行。
-- 下载及编译缓存位于 `.cache/session-tools`，生成组件位于 `app/src-tauri/binaries`，许可位于 `app/src-tauri/resources/session-tools`；均不提交 Git，也不会将整个缓存打进应用。
+- Windows 提供官方 x64、ARM64、x86 便携包中的 `psmux.exe`。
+- Mac 提供官方 Apple Silicon、Intel 预编译版，最低支持 **macOS 15**。只依赖系统动态库，不需要额外安装 libevent 等库。
+- Mac 通用版也已提交；它是两份未修改的官方二进制切片组成的 FAT 文件，没有重新编译或修改最低系统版本。
+- `pnpm run dev` 启动前、`pnpm run build` 的前置步骤仅检查本地文件的大小、SHA-256、CPU 架构、Mac 最低系统版本和动态库路径。缺失或损坏时中止并提示恢复仓库文件。
+- `app/src-tauri/binaries` 保存可执行文件；`app/src-tauri/resources/session-tools` 保存对应平台许可和来源记录；`scripts/session-tools.json` 锁定官方来源、归档及文件 SHA-256。
+- Tauri 的平台配置只引用该平台的 `externalBin` 和许可目录，再按目标架构选择单份二进制。仓库包含所有版本，安装包不会携带另一平台或无关架构的组件。Mac 通用包只在显式指定 `universal-apple-darwin` 时使用。
+- Tauri 在开发时将组件复制到可执行文件旁，Mac 发行包中的组件参与正常的签名、公证流程。Git 已保留 Mac 文件的可执行权限。
 
-可单独准备或查看目标，不构建应用：
+可单独校验或查看目标，不构建应用：
 
 ```sh
-pnpm run prepare:session-tools
-pnpm run prepare:session-tools --target aarch64-pc-windows-msvc
-pnpm run prepare:session-tools --target aarch64-apple-darwin --print-plan
-node --test scripts/prepare-session-tools.test.mjs
+pnpm run check:session-tools
+pnpm run check:session-tools --all
+pnpm run check:session-tools --target aarch64-pc-windows-msvc
+pnpm run check:session-tools --target aarch64-apple-darwin --print-plan
+node --test scripts/check-session-tools.test.mjs
 ```
 
-默认使用 Tauri 传入的 `TAURI_ENV_TARGET_TRIPLE`（因此 `pnpm run build --target ...` 自动适配），手动准备时可指定 `--target`，否则使用 Rust 主机目标。Mac 的 `universal-apple-darwin` 只应在需要通用包时显式选择。直接使用 Cargo 或绕过根目录脚本执行 `tauri dev` 的开发者需要先运行准备命令；`build.rs` 本身不联网。`--download-only` 仅缓存所选平台的官方源码/归档，不编译、不生成安装包。
+默认使用 Tauri 传入的 `TAURI_ENV_TARGET_TRIPLE`，因此 `pnpm run build --target ...` 自动适配；手动校验可指定 `--target`，否则读取 Rust 主机目标。旧命令 `pnpm run prepare:session-tools` 保留为本地校验兼容入口，已移除下载和源码编译流程。历史 `.cache/session-tools` 缓存不再使用，也不参与打包。
+
+维护者升级组件时应从清单中的官方项目获取发布文件，核对发布归档哈希，将二进制、许可证与清单一并更新，并运行全平台校验；不要在开发启动脚本中添加下载或编译逻辑。

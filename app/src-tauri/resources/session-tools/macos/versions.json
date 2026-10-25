@@ -1,0 +1,35 @@
+{
+  "tool": "tmux",
+  "version": "3.7c",
+  "minimumSystemVersion": "15.0",
+  "binaries": {
+    "aarch64-apple-darwin": {
+      "file": "tmux-aarch64-apple-darwin",
+      "sha256": "b4ef8b3be8e727c9d8b36e485cc5baeb7e4b373569b14e11673a7a7a282f1e0b",
+      "size": 1694408,
+      "source": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-macos-arm64.tar.gz",
+      "archiveSha256": "0a763dd0380aa980d239509654da1bc7455843706a3c050f6709c8cd2e13d12d"
+    },
+    "x86_64-apple-darwin": {
+      "file": "tmux-x86_64-apple-darwin",
+      "sha256": "2e3a3db47d04cc1c990e0e562994bdb299a100514227e719f1c549e4a53712fd",
+      "size": 1735464,
+      "source": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-macos-x86_64.tar.gz",
+      "archiveSha256": "1c21f9ade964e4a539be05ffe3a4e95854ab76a0a9c4c05d0ffbe7fc6c4d783f"
+    },
+    "universal-apple-darwin": {
+      "file": "tmux-universal-apple-darwin",
+      "sha256": "bb4a879efed70a02ce29150ec67eed41370207ba1dbf325d1631dd32ff4d2b0b",
+      "size": 3455784,
+      "slices": [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin"
+      ],
+      "note": "FAT container of the unchanged official thin binaries; no recompilation or deployment-target patching."
+    }
+  },
+  "licenseSource": {
+    "url": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/LICENSES.tar.gz",
+    "sha256": "094905d3ba42397c65fecd817dc29736dd14bd35e75600441403a365125f47d1"
+  }
+}

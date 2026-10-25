@@ -4,8 +4,6 @@
 node_modules/
 /app/src-tauri/gen/
 /.cache/session-tools/
-/app/src-tauri/binaries/
-/app/src-tauri/resources/session-tools/
 
 # Cloudflare 本地运行状态（里面有本地测试的设备库）和本地密钥
 .wrangler/

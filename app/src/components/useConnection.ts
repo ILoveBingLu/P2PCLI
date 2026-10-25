@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { api, formatCode, type ConnectFail, type PathInfo, type RemoteInfo } from "../api";
+import { api, type ConnectFail, type PathInfo, type RemoteInfo } from "../api";
 
 interface Options {
   onConnected: (connId: number, info: RemoteInfo, code: string | null, path: PathInfo) => void;
@@ -29,7 +29,7 @@ export function useConnection({ onConnected, onOpenChange }: Options) {
       setError(f.message ?? String(e));
       onOpenChange(true);
       if (f.reject === "need_password" || f.reject === "bad_password") {
-        setTarget(formatCode(t.replace(/\D/g, "")) || t);
+        setTarget(t.replace(/\D/g, ""));
         window.setTimeout(() => pwRef.current?.focus(), 0);
       }
     } finally {
