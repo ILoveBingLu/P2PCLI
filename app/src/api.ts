@@ -101,7 +101,6 @@ export interface SettingsView {
   relay: string | null;
   effective_server: string | null;
   effective_relay: string | null;
-  data_dir: string;
 }
 
 export type NatKind = "none" | "cone" | "symmetric" | "unknown";

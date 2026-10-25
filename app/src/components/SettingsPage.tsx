@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Check, Globe2, Network, LoaderCircle, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, Globe2, Network, LoaderCircle, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { Tabs, Checkbox, Description } from "@heroui/react";
 import { api, platformLabel, type Overview, type SettingsView } from "../api";
 import { toast } from "@/components/ui/toast";
@@ -7,17 +7,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { PlatformIcon } from "./PlatformIcon";
 
 export function SettingsPage({
   ov,
-  onClose,
   onChanged,
 }: {
   ov: Overview;
-  onClose: () => void;
   onChanged: () => void;
 }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
@@ -80,9 +77,6 @@ export function SettingsPage({
     <section className="settings-page" aria-labelledby="settings-title">
       <div className="settings-page-inner">
         <header className="flex items-center gap-3">
-          <Button variant="ghost" size="icon-sm" aria-label="返回工作区" title="返回工作区" onClick={onClose} disabled={saving}>
-            <ArrowLeft />
-          </Button>
           <div>
             <h1 id="settings-title" className="text-lg font-semibold">设置</h1>
             <p className="text-sm text-muted-foreground">管理本机、网络代理和受信设备。</p>
@@ -169,13 +163,6 @@ export function SettingsPage({
                       直连失败时转发加密数据，多个地址用逗号分隔。
                     </FieldDescription>
                   </Field>
-                  <Separator />
-                  <div className="settings-details">
-                    <span>数据目录</span>
-                    <code>{settings.data_dir}</code>
-                    <span>本机公钥</span>
-                    <code>{ov.endpoint_id}</code>
-                  </div>
                 </FieldGroup>
               )}
             </Tabs.Panel>
@@ -265,13 +252,10 @@ export function SettingsPage({
         )}
         <footer className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-5">
           <span className="mr-auto text-xs text-muted-foreground">保存后即时生效。代理或中继变更会重连网络，后台终端会话保留。</span>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
-            返回工作区
-          </Button>
           <Button onClick={save} disabled={loading || !settings || saving || (proxyEnabled && !proxy.trim())}>
-            {saving && (
+            {saving ? (
               <LoaderCircle data-icon="inline-start" className="animate-spin" />
-            )}
+            ) : <Save data-icon="inline-start" />}
             保存设置
           </Button>
         </footer>

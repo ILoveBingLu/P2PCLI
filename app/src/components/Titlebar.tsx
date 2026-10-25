@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { ReactNode } from "react";
-import { PanelLeftClose, PanelLeftOpen, Settings, Wifi } from "lucide-react";
+import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Settings, Wifi } from "lucide-react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ export function Titlebar({
   onSettings,
   settingsEnabled,
   sidebarOpen,
+  onBack,
   onToggleSidebar,
 }: {
   ov: Overview | null;
@@ -27,6 +28,7 @@ export function Titlebar({
   onSettings: () => void;
   settingsEnabled: boolean;
   sidebarOpen: boolean;
+  onBack?: () => void;
   onToggleSidebar: () => void;
 }) {
   const nativeMac = isTauri() && /Macintosh/.test(navigator.userAgent);
@@ -37,25 +39,25 @@ export function Titlebar({
       className={`app-titlebar${nativeMac ? " titlebar-macos" : ""}${nativeWindows ? " titlebar-windows" : ""}`}
       aria-label="应用标题栏"
     >
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="titlebar-sidebar-toggle"
-        aria-label={sidebarOpen ? "收起侧边栏" : "展开侧边栏"}
-        aria-expanded={sidebarOpen}
-        aria-controls="connection-sidebar"
-        title={`${sidebarOpen ? "收起" : "展开"}侧边栏（${sidebarShortcut}）`}
-        onPress={onToggleSidebar}
-      >
-        {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
-      </Button>
       <div className="titlebar-brand titlebar-drag" data-tauri-drag-region>
         <img className="brand-symbol" src={appIcon} alt="" draggable={false} />
         <div className="flex items-center gap-1.5">
           <strong>P2PCLI</strong>
-          <Badge variant="secondary">Beta</Badge>
+          <Badge className="bg-accent text-accent-foreground">Beta</Badge>
         </div>
       </div>
+      <Button
+        variant={onBack ? "secondary" : "ghost"}
+        size={onBack ? "sm" : "icon-sm"}
+        className={onBack ? "titlebar-sidebar-toggle gap-1.5 rounded-full px-2.5" : "titlebar-sidebar-toggle"}
+        aria-label={onBack ? "返回工作区" : sidebarOpen ? "收起侧边栏" : "展开侧边栏"}
+        aria-expanded={onBack ? undefined : sidebarOpen}
+        aria-controls={onBack ? undefined : "connection-sidebar"}
+        title={onBack ? "返回工作区" : `${sidebarOpen ? "收起" : "展开"}侧边栏（${sidebarShortcut}）`}
+        onPress={onBack ?? onToggleSidebar}
+      >
+        {onBack ? <><ArrowLeft data-icon="inline-start" /><span>返回</span></> : sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+      </Button>
       <div className="titlebar-spacer titlebar-drag" data-tauri-drag-region />
       <div className="titlebar-actions">
         <Badge variant="outline">{terminalCount} 个终端</Badge>

@@ -481,7 +481,6 @@ struct SettingsView {
     relay: Option<String>,
     effective_server: Option<String>,
     effective_relay: Option<String>,
-    data_dir: String,
 }
 
 #[tauri::command]
@@ -494,7 +493,6 @@ fn get_settings(state: State<'_, AppState>) -> SettingsView {
         server: s.server,
         device_name: s.device_name,
         relay: s.relay,
-        data_dir: state.data_dir.display().to_string(),
     }
 }
 

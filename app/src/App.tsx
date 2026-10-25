@@ -219,6 +219,7 @@ export default function App() {
         onSettings={() => setShowSettings(true)}
         settingsEnabled={!!ov}
         sidebarOpen={sidebar.open}
+        onBack={showSettings ? () => setShowSettings(false) : undefined}
         onToggleSidebar={sidebar.toggle}
         connectionAction={
           <ConnectionPopover
@@ -228,14 +229,14 @@ export default function App() {
           />
         }
       />
-      <ConnectionSidebar
+      {!showSettings && <ConnectionSidebar
         ov={ov}
         busy={connection.busy}
         open={sidebar.open}
         onConnect={(code) => void connection.doConnect(code, connection.password)}
         onRefresh={refresh}
-      />
-      <main className="workspace">
+      />}
+      <main className={cn("workspace", showSettings && "workspace-full-width")}>
         {overviewError && (
           <div className="workspace-notice">
             <Alert variant="destructive">
@@ -286,7 +287,7 @@ export default function App() {
         )}
 
         {showSettings && ov && (
-          <SettingsPage ov={ov} onClose={() => setShowSettings(false)} onChanged={refresh} />
+          <SettingsPage ov={ov} onChanged={refresh} />
         )}
         {!showSettings && sessionTarget && (
           <RemoteSessions
@@ -464,7 +465,7 @@ export default function App() {
 
         </div>
       </main>
-      {showDiag && <DiagDialog onClose={() => setShowDiag(false)} />}
+      {showDiag && <DiagDialog publicKey={ov?.endpoint_id ?? null} onClose={() => setShowDiag(false)} />}
       {requests.length > 0 && (
         <ApproveDialog
           key={requests[0].id}

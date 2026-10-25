@@ -182,7 +182,7 @@ export function ApproveDialog({
   );
 }
 
-export function DiagDialog({ onClose }: { onClose: () => void }) {
+export function DiagDialog({ onClose, publicKey }: { onClose: () => void; publicKey: string | null }) {
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -286,6 +286,15 @@ export function DiagDialog({ onClose }: { onClose: () => void }) {
               </p>
             </div>
           )}
+          <section className="mt-5" aria-labelledby="diagnosis-details-title">
+            <h3 id="diagnosis-details-title" className="mb-3 text-sm font-medium">详细信息</h3>
+            <dl className="network-details">
+              <div>
+                <dt>本机公钥</dt>
+                <dd><code className="select-text break-all">{publicKey ?? "未获取到"}</code></dd>
+              </div>
+            </dl>
+          </section>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={run} disabled={busy}>

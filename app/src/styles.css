@@ -152,21 +152,21 @@
   pointer-events: none;
 }
 .titlebar-sidebar-toggle {
-  margin-left: 10px;
+  margin-right: 8px;
 }
 .titlebar-brand {
   flex: none;
   gap: 10px;
-  padding-inline: 6px 18px;
+  padding-inline: 14px 10px;
 }
 .titlebar-brand strong {
   font-size: 13px;
   font-weight: 650;
   letter-spacing: -0.3px;
 }
-/* 原生按钮由系统绘制；macOS 配置的 y=22 与 44px 标题栏中线对齐。侧边栏按钮紧跟在红绿灯分隔线后。 */
-.titlebar-macos .titlebar-sidebar-toggle {
-  margin-left: 86px;
+/* 为 macOS 原生红绿灯及分隔线留出空间，标题后接侧边栏开关。 */
+.titlebar-macos .titlebar-brand {
+  padding-left: 90px;
 }
 /* 插件按钮宽 46 × 3 逻辑像素；额外留 2px 容纳非整数 DPI 舍入。 */
 .titlebar-windows {
@@ -397,6 +397,9 @@
   display: flex;
   flex-direction: column;
   background: var(--background);
+}
+.workspace-full-width {
+  grid-column: 1 / -1;
 }
 .workspace-notice {
   padding: 12px 16px 0;
@@ -687,18 +690,6 @@
   color: var(--muted-foreground);
   font-size: 11px;
   line-height: 1.7;
-}
-.settings-details {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  font-size: 10px;
-  color: var(--muted-foreground);
-}
-.settings-details code {
-  font-family: var(--font-mono);
-  overflow-wrap: anywhere;
-  margin-bottom: 5px;
 }
 .trusted-list {
   display: flex;
