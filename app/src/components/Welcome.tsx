@@ -1,5 +1,5 @@
 import { ArrowRight, LoaderCircle, Monitor, Radar } from "lucide-react";
-import appIcon from "../../src-tauri/icons/128x128.png";
+import logo from "@/assets/logo.svg";
 import type { Overview } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ export function Welcome({
     <div className="welcome-scroll">
       <Empty className="welcome">
         <img
-          src={appIcon}
+          src={logo}
           className="size-14 shrink-0 object-contain"
           alt="P2PCLI"
           draggable={false}

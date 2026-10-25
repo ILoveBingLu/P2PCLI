@@ -1,7 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { ReactNode } from "react";
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Settings, Wifi } from "lucide-react";
-import appIcon from "../../src-tauri/icons/128x128.png";
+import logo from "@/assets/logo.svg";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -45,7 +45,7 @@ export function Titlebar({
       aria-label="应用标题栏"
     >
       <div className="titlebar-brand titlebar-drag" data-tauri-drag-region>
-        <img className="brand-symbol" src={appIcon} alt="" draggable={false} />
+        <img className="brand-symbol" src={logo} alt="" draggable={false} />
         <div className="flex items-center gap-1.5">
           <strong>P2PCLI</strong>
           <Badge className="border border-[#b78c3f]/50 bg-[#17130c] text-[#e7c477]">Beta</Badge>
