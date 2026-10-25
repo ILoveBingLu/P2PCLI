@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, LoaderCircle, Plus, RefreshCw, Terminal } from "lucide-react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { ArrowUpRight, LoaderCircle, SquareArrowOutUpRight, Terminal, Trash2 } from "lucide-react";
 import { api, type RemoteInfo, type TerminalSession } from "../api";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { toast } from "@/components/ui/toast";
+import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 import { sessionLabels } from "./sessionText";
 
@@ -14,21 +17,23 @@ export interface SidebarTab {
   state: "opening" | "open" | "exited" | "closed";
 }
 
-export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onConnect, onOpen, onSelect }: {
+export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onConnect, onOpen, onSelect, onEnded, openMenu }: {
   target?: SessionTarget;
   tabs: SidebarTab[];
+  /** 会话增减时变，变了就在后台重读 */
   sessionsRev: number;
   activeKey: number | null;
   busy: boolean;
   onConnect: () => void;
   onOpen: (target: SessionTarget, sessionId?: string) => void;
   onSelect: (key: number) => void;
+  onEnded: (sessionId: string) => void;
+  openMenu: (e: MouseEvent, actions: MenuAction[]) => void;
 }) {
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [loading, setLoading] = useState(!!target);
   const [error, setError] = useState<string | null>(null);
-  const [revision, setRevision] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
+  const [ending, setEnding] = useState<{ id: string; label: string } | null>(null);
   // 只有第一次读的时候显示“读取会话…”，之后在后台刷新，列表不闪
   const loaded = useRef(false);
   const tabRevision = tabs.map((tab) => `${tab.key}:${tab.sessionId}:${tab.state}`).join("|");
@@ -48,13 +53,13 @@ export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onC
         if (alive) setError(String(e));
       } finally {
         pending = false;
-        if (alive) { setLoading(false); setRefreshing(false); }
+        if (alive) setLoading(false);
       }
     };
     void load();
     const timer = window.setInterval(() => void load(), 5000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [connId, tabRevision, revision, sessionsRev]);
+  }, [connId, tabRevision, sessionsRev]);
 
   const listed = new Set(sessions.map((session) => session.id));
   const labels = sessionLabels(sessions);
@@ -74,13 +79,46 @@ export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onC
     });
   }
 
+  const openRow = (row: (typeof rows)[number]) =>
+    row.tab ? onSelect(row.tab.key) : target && onOpen(target, row.sessionId);
+
+  const end = async () => {
+    const session = ending;
+    if (!session || connId == null) return;
+    setEnding(null);
+    // 先从列表里拿掉，失败了下次刷新会放回来
+    setSessions((list) => list.filter((s) => s.id !== session.id));
+    try {
+      await api.endTerminal(connId, session.id);
+      onEnded(session.id);
+    } catch (e) {
+      toast.error(`结束会话失败：${String(e)}`);
+    }
+  };
+
+  // 会话行的右键菜单；设备本身的菜单在侧边栏那一层
+  const onContextMenu = (e: MouseEvent) => {
+    const id = (e.target as HTMLElement).closest<HTMLElement>("[data-session-row]")?.dataset.sessionRow;
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+    openMenu(e, [
+      { id: "open", label: row.tab ? "切换过去" : "打开", icon: <SquareArrowOutUpRight className="size-4" />, disabled: !row.tab && !target, onAction: () => openRow(row) },
+      {
+        id: "end", label: "结束会话", icon: <Trash2 className="size-4" />, danger: true, separated: true,
+        disabled: !row.sessionId || !target || !listed.has(row.sessionId),
+        onAction: () => setEnding({ id: row.sessionId, label: row.label }),
+      },
+    ]);
+  };
+
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1" onContextMenu={onContextMenu}>
       {rows.map((row) => (
         <Button key={row.id} variant={row.tab?.key === activeKey ? "secondary" : "ghost"}
+          data-session-row={row.id}
           className="h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
           aria-current={row.tab?.key === activeKey ? "true" : undefined}
-          onClick={() => row.tab ? onSelect(row.tab.key) : target && onOpen(target, row.sessionId)}>
+          onClick={() => openRow(row)}>
           <Terminal className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate text-left">{row.label}</span>
           <span className="shrink-0 text-[10px] text-muted-foreground">{row.status}</span>
@@ -88,16 +126,25 @@ export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onC
       ))}
       {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
       {error && <p className="px-2 py-1 text-xs text-destructive break-words" role="alert">{error}</p>}
-      {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
-      {target ? (
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" className="h-8 min-w-0 flex-1 justify-start px-2 text-xs" disabled={loading || !!error} onClick={() => onOpen(target)}><Plus className="size-3.5" />新建会话</Button>
-          <Button variant="ghost" size="icon-sm" title="刷新会话" aria-label="刷新会话" disabled={loading || refreshing} onClick={() => { setRefreshing(true); setRevision((value) => value + 1); }}><RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
-        </div>
-      ) : (
+      {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话，右键设备可以新建</p>}
+      {!target && (
         <Button variant="ghost" className="h-8 w-full justify-start px-2 text-xs" disabled={busy} onClick={onConnect}>
           {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowUpRight className="size-3.5" />}连接以查看会话
         </Button>
+      )}
+      {ending && (
+        <AlertDialog open>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>结束{ending.label}？</AlertDialogTitle>
+              <AlertDialogDescription>会话里正在跑的程序会被结束，没保存的内容可能丢失。只是想暂时离开的话，关掉终端标签就行。</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button variant="outline" onClick={() => setEnding(null)}>取消</Button>
+              <Button variant="destructive" onClick={end}>结束会话</Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </div>
   );

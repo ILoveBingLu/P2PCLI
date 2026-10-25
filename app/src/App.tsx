@@ -202,6 +202,14 @@ export default function App() {
     }
   };
 
+  /** 某台设备的会话被结束了：关掉对应的标签，各处会话列表重读 */
+  const sessionEnded = (endpointId: string, id: string) => {
+    setSessionsRev((v) => v + 1);
+    const rest = tabs.filter((t) => t.info.endpoint_id !== endpointId || t.sessionId !== id);
+    setTabs(rest);
+    if (!rest.some((t) => t.key === activeKey)) setActiveKey(rest.at(-1)?.key ?? null);
+  };
+
   const closeTab = (key: number) => {
     const tab = tabs.find((t) => t.key === key);
     const rest = tabs.filter((t) => t.key !== key);
@@ -268,6 +276,8 @@ export default function App() {
       {!showSettings && <ConnectionSidebar
         ov={ov}
         sessionsRev={sessionsRev}
+        onSessionEnded={sessionEnded}
+        onSessionsChanged={() => setSessionsRev((v) => v + 1)}
         busy={connection.busy}
         open={sidebar.open}
         scanning={scanningNearby}
@@ -373,6 +383,7 @@ export default function App() {
           <RemoteSessions
             key={sessionTarget.connId}
             target={sessionTarget}
+            sessionsRev={sessionsRev}
             openSessions={new Set(tabs
               .filter((t) => t.info.endpoint_id === sessionTarget.info.endpoint_id && (t.state === "open" || t.state === "opening") && t.sessionId)
               .map((t) => t.sessionId!))}
@@ -382,12 +393,7 @@ export default function App() {
                 void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
               setSessionTarget(null);
             }}
-            onEnded={(id) => {
-              setSessionsRev((v) => v + 1);
-              const rest = tabs.filter((t) => t.info.endpoint_id !== sessionTarget.info.endpoint_id || t.sessionId !== id);
-              setTabs(rest);
-              if (!rest.some((t) => t.key === activeKey)) setActiveKey(rest.at(-1)?.key ?? null);
-            }}
+            onEnded={(id) => sessionEnded(sessionTarget.info.endpoint_id, id)}
           />
         )}
         <div className="workspace-content" hidden={showSettings || !!sessionTarget}>

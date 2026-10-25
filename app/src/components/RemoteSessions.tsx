@@ -12,8 +12,10 @@ import { relativeTime, sessionLabels } from "./sessionText";
 
 export interface SessionTarget { connId: number; info: RemoteInfo; code: string | null }
 
-export function RemoteSessions({ target, openSessions, onOpen, onBack, onEnded }: {
+export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBack, onEnded }: {
   target: SessionTarget;
+  /** 别处（比如侧边栏）结束了会话时变，变了就在后台重读 */
+  sessionsRev: number;
   /** 本机标签里正开着的会话 */
   openSessions: Set<string>;
   onOpen: (id?: string) => void;
@@ -48,7 +50,7 @@ export function RemoteSessions({ target, openSessions, onOpen, onBack, onEnded }
     void load();
     const timer = window.setInterval(() => void load(), 5000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [load, sessionsRev]);
 
   useEffect(() => {
     const tick = () => api.pathInfo(target.connId).then(setPath).catch(() => {});

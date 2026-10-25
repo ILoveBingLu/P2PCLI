@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { History, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowUpRight, Copy, History, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { api, formatCode, type NearbyDevice, type Overview } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,9 +8,10 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
 import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
+import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 
-export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearbyReveal, onScanNearby, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab }: {
+export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearbyReveal, onScanNearby, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab, onSessionEnded, onSessionsChanged }: {
   ov: Overview | null;
   /** 会话被结束时变，设备下面的会话列表跟着刷新 */
   sessionsRev: number;
@@ -28,7 +29,12 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   onRefresh: () => void;
   onOpenSession: (target: SessionTarget, sessionId?: string) => void;
   onSelectTab: (key: number) => void;
+  /** 侧边栏里结束了某台设备的会话 */
+  onSessionEnded: (endpointId: string, sessionId: string) => void;
+  /** 要所有会话列表重读一遍 */
+  onSessionsChanged: () => void;
 }) {
+  const menu = useContextMenu();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["nearby", "history"]));
   useEffect(() => {
@@ -63,8 +69,56 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   );
   const lanOnline = new Set(nearby.filter((d) => d.online).map((d) => d.endpoint_id));
 
+  // 正连着就拿到连接，没连着就按局域网或设备码去连
+  const targetFor = (endpointId: string) =>
+    sessionTarget?.info.endpoint_id === endpointId
+      ? sessionTarget
+      : tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.state !== "closed");
+  const connectDevice = (device: { endpoint_id: string; name: string; platform: string; code: string }) =>
+    lanOnline.has(device.endpoint_id)
+      ? onConnectLan({ endpoint_id: device.endpoint_id, name: device.name, platform: device.platform, online: true })
+      : onConnect(device.code);
+  const forget = async (endpointId: string) => {
+    try {
+      for (const entry of ov?.recent.filter((item) => item.endpoint_id === endpointId) ?? []) await api.forgetRecent(entry.code);
+      onRefresh();
+    } catch (error) { toast.error(String(error)); }
+  };
+  const copyCode = (code: string) =>
+    navigator.clipboard.writeText(code).then(() => toast.success("设备码已复制"), () => toast.error("复制失败"));
+
+  // 设备和附近设备的右键菜单；会话行的菜单在 DeviceSessions 里，先接到就不会冒泡到这里
+  const onContextMenu = (e: MouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("[data-menu]");
+    if (!el) return;
+    const [kind, endpointId] = (el.dataset.menu ?? "").split(":");
+    let actions: MenuAction[] = [];
+    if (kind === "device") {
+      const device = devices.find((d) => d.endpoint_id === endpointId);
+      if (!device) return;
+      const target = targetFor(endpointId);
+      actions = [
+        target
+          ? { id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }
+          : { id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy, onAction: () => connectDevice(device) },
+        ...(target ? [{ id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged }] : []),
+        { id: "copy", label: "复制设备码", icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
+        { id: "forget", label: "从连接历史移除", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => void forget(endpointId) },
+      ];
+    } else if (kind === "nearby") {
+      const device = nearby.find((d) => d.endpoint_id === endpointId);
+      if (!device) return;
+      const target = targetFor(endpointId);
+      actions = target
+        ? [{ id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
+        : [{ id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
+    }
+    if (actions.length) menu.open(e, actions);
+  };
+
   return (
-    <aside id="connection-sidebar" className="connection-sidebar" data-collapsed={open ? undefined : ""} aria-label="连接历史">
+    <aside id="connection-sidebar" className="connection-sidebar" data-collapsed={open ? undefined : ""} aria-label="连接历史" onContextMenu={onContextMenu}>
+      {menu.element}
       <div className="connection-sidebar-inner">
         <Accordion hideSeparator allowsMultipleExpanded expandedKeys={expandedSections}
           onExpandedChange={(keys) => setExpandedSections(new Set([...keys].map(String)))}>
@@ -90,6 +144,7 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
             <div className="flex flex-col">
               {nearby.map((device) => (
                 <Button key={device.endpoint_id} variant="ghost" disabled={busy || !device.online}
+                  data-menu={`nearby:${device.endpoint_id}`}
                   className="h-auto w-full min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
                   aria-label={`${device.name}${connected.has(device.endpoint_id) ? "（已连接）" : device.online ? "" : "（离线）"}`}
                   title={device.online ? `连接 ${device.name}` : `${device.name} · 离线`} onClick={() => onConnectLan(device)}>
@@ -125,7 +180,7 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
                 return (
                   <Accordion.Item id={device.endpoint_id} key={device.endpoint_id}>
                     <Accordion.Heading>
-                      <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-xs">
+                      <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-xs" data-menu={`device:${device.endpoint_id}`}>
                         {deviceIcon(device.endpoint_id, device.platform)}
                         <span className="min-w-0 flex-1 truncate">{device.name}</span>
                         {lanOnline.has(device.endpoint_id) && <Badge variant="success" title="在同一个局域网里，连接不经过牵线服务器">局域网</Badge>}
@@ -134,24 +189,16 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
                     </Accordion.Heading>
                     <Accordion.Panel>
                       <div className="mb-2 ml-4 min-w-0 border-l border-border pl-2">
-                        <div className="flex items-center justify-between gap-1 pl-2">
+                        <div className="flex h-6 items-center pl-2" data-menu={`device:${device.endpoint_id}`}>
                           <span className="font-mono text-[10px] text-muted-foreground">{formatCode(device.code)}</span>
-                          <Button variant="ghost" size="icon-sm" className="size-6 min-w-0"
-                            aria-label={`移除 ${device.name} 的连接历史`} title="从连接历史移除"
-                            onClick={async () => {
-                              try {
-                                for (const entry of ov?.recent.filter((item) => item.endpoint_id === device.endpoint_id) ?? []) await api.forgetRecent(entry.code);
-                                onRefresh();
-                              } catch (error) { toast.error(String(error)); }
-                            }}><Trash2 className="size-3" /></Button>
                         </div>
                         {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
                           key={target?.connId ?? "disconnected"} target={target} tabs={deviceTabs} sessionsRev={sessionsRev}
                           activeKey={sessionTarget ? null : activeKey} busy={busy}
-                          onConnect={() => lanOnline.has(device.endpoint_id)
-                            ? onConnectLan({ endpoint_id: device.endpoint_id, name: device.name, platform: device.platform, online: true })
-                            : onConnect(device.code)}
-                          onOpen={onOpenSession} onSelect={onSelectTab} />}
+                          onConnect={() => connectDevice(device)}
+                          onOpen={onOpenSession} onSelect={onSelectTab}
+                          onEnded={(id) => onSessionEnded(device.endpoint_id, id)}
+                          openMenu={menu.open} />}
                       </div>
                     </Accordion.Panel>
                   </Accordion.Item>

@@ -468,6 +468,21 @@
   box-shadow: 0 0 0 2px var(--sidebar);
 }
 
+/* 右键菜单里分组的分隔线 */
+.context-menu-separated {
+  position: relative;
+  margin-top: 7px;
+}
+.context-menu-separated::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: -4px;
+  height: 1px;
+  background: var(--border);
+}
+
 .workspace {
   flex: 1;
   min-width: 0;
