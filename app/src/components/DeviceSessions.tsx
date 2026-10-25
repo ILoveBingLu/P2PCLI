@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, LoaderCircle, Plus, RefreshCw, Terminal } from "lucide-react";
 import { api, type RemoteInfo, type TerminalSession } from "../api";
 import { Button } from "@/components/ui/button";
 import type { SessionTarget } from "./RemoteSessions";
+import { sessionLabels } from "./sessionText";
 
 export interface SidebarTab {
   key: number;
@@ -13,9 +14,10 @@ export interface SidebarTab {
   state: "opening" | "open" | "exited" | "closed";
 }
 
-export function DeviceSessions({ target, tabs, activeKey, busy, onConnect, onOpen, onSelect }: {
+export function DeviceSessions({ target, tabs, sessionsRev, activeKey, busy, onConnect, onOpen, onSelect }: {
   target?: SessionTarget;
   tabs: SidebarTab[];
+  sessionsRev: number;
   activeKey: number | null;
   busy: boolean;
   onConnect: () => void;
@@ -26,37 +28,41 @@ export function DeviceSessions({ target, tabs, activeKey, busy, onConnect, onOpe
   const [loading, setLoading] = useState(!!target);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  // 只有第一次读的时候显示“读取会话…”，之后在后台刷新，列表不闪
+  const loaded = useRef(false);
   const tabRevision = tabs.map((tab) => `${tab.key}:${tab.sessionId}:${tab.state}`).join("|");
   const connId = target?.connId;
 
   useEffect(() => {
     if (connId == null) return;
     let alive = true, pending = false;
-    const load = async (foreground = false) => {
+    const load = async () => {
       if (pending) return;
       pending = true;
-      if (foreground) setLoading(true);
+      if (!loaded.current) setLoading(true);
       try {
         const value = await api.listTerminals(connId);
-        if (alive) { setSessions(value); setError(null); }
+        if (alive) { setSessions(value); setError(null); loaded.current = true; }
       } catch (e) {
-        if (alive) { setError(String(e)); setSessions([]); }
+        if (alive) setError(String(e));
       } finally {
         pending = false;
-        if (alive) setLoading(false);
+        if (alive) { setLoading(false); setRefreshing(false); }
       }
     };
-    void load(true);
+    void load();
     const timer = window.setInterval(() => void load(), 5000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [connId, tabRevision, revision]);
+  }, [connId, tabRevision, revision, sessionsRev]);
 
   const listed = new Set(sessions.map((session) => session.id));
-  const rows = sessions.map((session) => ({
+  const labels = sessionLabels(sessions);
+  const rows = [...sessions].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id)).map((session) => ({
     id: session.id,
     sessionId: session.id,
     tab: tabs.find((tab) => tab.sessionId === session.id && (tab.state === "open" || tab.state === "opening")),
-    label: `会话 ${session.id.slice(0, 8)}`,
+    label: labels.get(session.id) ?? "会话",
     status: session.attached ? "已连接" : "后台运行",
   }));
   for (const tab of tabs) {
@@ -86,7 +92,7 @@ export function DeviceSessions({ target, tabs, activeKey, busy, onConnect, onOpe
       {target ? (
         <div className="flex items-center gap-1">
           <Button variant="ghost" className="h-8 min-w-0 flex-1 justify-start px-2 text-xs" disabled={loading || !!error} onClick={() => onOpen(target)}><Plus className="size-3.5" />新建会话</Button>
-          <Button variant="ghost" size="icon-sm" title="刷新会话" aria-label="刷新会话" disabled={loading} onClick={() => setRevision((value) => value + 1)}><RefreshCw className="size-3.5" /></Button>
+          <Button variant="ghost" size="icon-sm" title="刷新会话" aria-label="刷新会话" disabled={loading || refreshing} onClick={() => { setRefreshing(true); setRevision((value) => value + 1); }}><RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
         </div>
       ) : (
         <Button variant="ghost" className="h-8 w-full justify-start px-2 text-xs" disabled={busy} onClick={onConnect}>

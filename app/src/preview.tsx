@@ -51,7 +51,12 @@ const previewSettings: SettingsView = {
 if (s === "custom-server") previewSettings.server = "b840307fdbdff2aa164308932575e8f7396b7fd539bd7cfd1927b2456b3fc8a8@rdv.example.com:7788";
 let termSeq = 0;
 let scanSeq = 0;
-const terminalSessions: TerminalSession[] = s === "sessions" ? [{ id: "a".repeat(32), created_at: Math.floor(Date.now() / 1000) - 3600, attached: false }] : [];
+const now = Math.floor(Date.now() / 1000);
+const terminalSessions: TerminalSession[] = s === "sessions" ? [
+  { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false },
+  { id: "b".repeat(32), created_at: now - 40 * 60, attached: true },
+  { id: "c".repeat(32), created_at: now - 90, attached: false },
+] : [];
 const attachments = new Map<number, { sessionId: string; status: any }>();
 
 const sample = [
@@ -68,7 +73,7 @@ const sample = [
 
 mockWindows("main");
 mockIPC(
-  (cmd, args: any) => {
+  async (cmd, args: any) => {
     switch (cmd) {
       case "overview":
         return ov;
@@ -101,8 +106,10 @@ mockIPC(
         );
       }
       case "list_terminals":
-        return terminalSessions.map((session) => ({ ...session }));
+        // 模拟网络往返，看得出刷新时列表有没有闪
+        return new Promise((r) => setTimeout(() => r(terminalSessions.map((session) => ({ ...session }))), 300));
       case "end_terminal": {
+        await new Promise((r) => setTimeout(r, 500));
         const index = terminalSessions.findIndex((session) => session.id === args.sessionId);
         if (index >= 0) terminalSessions.splice(index, 1);
         for (const [id, attachment] of attachments) {

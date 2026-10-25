@@ -73,6 +73,8 @@ export default function App() {
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
+  /** 会话页里结束了会话就加一，侧边栏的会话列表跟着在后台刷新 */
+  const [sessionsRev, setSessionsRev] = useState(0);
   const [showConnect, setShowConnect] = useState(false);
   const [showLocalDevice, setShowLocalDevice] = useState(false);
   const [scanningNearby, setScanningNearby] = useState(false);
@@ -265,6 +267,7 @@ export default function App() {
       />
       {!showSettings && <ConnectionSidebar
         ov={ov}
+        sessionsRev={sessionsRev}
         busy={connection.busy}
         open={sidebar.open}
         scanning={scanningNearby}
@@ -370,6 +373,9 @@ export default function App() {
           <RemoteSessions
             key={sessionTarget.connId}
             target={sessionTarget}
+            openSessions={new Set(tabs
+              .filter((t) => t.info.endpoint_id === sessionTarget.info.endpoint_id && (t.state === "open" || t.state === "opening") && t.sessionId)
+              .map((t) => t.sessionId!))}
             onOpen={(id) => addTab(sessionTarget.connId, sessionTarget.info, sessionTarget.code, id)}
             onBack={() => {
               if (!tabs.some((t) => t.connId === sessionTarget.connId))
@@ -377,6 +383,7 @@ export default function App() {
               setSessionTarget(null);
             }}
             onEnded={(id) => {
+              setSessionsRev((v) => v + 1);
               const rest = tabs.filter((t) => t.info.endpoint_id !== sessionTarget.info.endpoint_id || t.sessionId !== id);
               setTabs(rest);
               if (!rest.some((t) => t.key === activeKey)) setActiveKey(rest.at(-1)?.key ?? null);

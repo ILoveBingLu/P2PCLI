@@ -10,8 +10,10 @@ import { PlatformIcon } from "./PlatformIcon";
 import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
 import type { SessionTarget } from "./RemoteSessions";
 
-export function ConnectionSidebar({ ov, busy, open, scanning, nearbyReveal, onScanNearby, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab }: {
+export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearbyReveal, onScanNearby, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab }: {
   ov: Overview | null;
+  /** 会话被结束时变，设备下面的会话列表跟着刷新 */
+  sessionsRev: number;
   busy: boolean;
   open: boolean;
   scanning: boolean;
@@ -50,6 +52,15 @@ export function ConnectionSidebar({ ov, busy, open, scanning, nearbyReveal, onSc
     return true;
   });
   const nearby = ov?.nearby ?? [];
+  // 正连着的设备：开着的标签，或者正在看它的会话页
+  const connected = new Set(tabs.filter((t) => t.state === "open" || t.state === "opening").map((t) => t.info.endpoint_id));
+  if (sessionTarget) connected.add(sessionTarget.info.endpoint_id);
+  const deviceIcon = (endpointId: string, platform: string) => (
+    <span className="device-icon">
+      <PlatformIcon platform={platform} decorative />
+      {connected.has(endpointId) && <><span className="connected-dot" /><span className="sr-only">（已连接）</span></>}
+    </span>
+  );
   const lanOnline = new Set(nearby.filter((d) => d.online).map((d) => d.endpoint_id));
 
   return (
@@ -80,9 +91,9 @@ export function ConnectionSidebar({ ov, busy, open, scanning, nearbyReveal, onSc
               {nearby.map((device) => (
                 <Button key={device.endpoint_id} variant="ghost" disabled={busy || !device.online}
                   className="h-auto w-full min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
-                  aria-label={`${device.name}${device.online ? "" : "（离线）"}`}
+                  aria-label={`${device.name}${connected.has(device.endpoint_id) ? "（已连接）" : device.online ? "" : "（离线）"}`}
                   title={device.online ? `连接 ${device.name}` : `${device.name} · 离线`} onClick={() => onConnectLan(device)}>
-                  <PlatformIcon platform={device.platform} decorative />
+                  {deviceIcon(device.endpoint_id, device.platform)}
                   <span className="min-w-0 flex-1 truncate text-left">{device.name}</span>
                 </Button>
               ))}
@@ -115,7 +126,7 @@ export function ConnectionSidebar({ ov, busy, open, scanning, nearbyReveal, onSc
                   <Accordion.Item id={device.endpoint_id} key={device.endpoint_id}>
                     <Accordion.Heading>
                       <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-xs">
-                        <PlatformIcon platform={device.platform} decorative />
+                        {deviceIcon(device.endpoint_id, device.platform)}
                         <span className="min-w-0 flex-1 truncate">{device.name}</span>
                         {lanOnline.has(device.endpoint_id) && <Badge variant="success" title="在同一个局域网里，连接不经过牵线服务器">局域网</Badge>}
                         <Accordion.Indicator className="size-3.5" />
@@ -135,7 +146,7 @@ export function ConnectionSidebar({ ov, busy, open, scanning, nearbyReveal, onSc
                             }}><Trash2 className="size-3" /></Button>
                         </div>
                         {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
-                          key={target?.connId ?? "disconnected"} target={target} tabs={deviceTabs}
+                          key={target?.connId ?? "disconnected"} target={target} tabs={deviceTabs} sessionsRev={sessionsRev}
                           activeKey={sessionTarget ? null : activeKey} busy={busy}
                           onConnect={() => lanOnline.has(device.endpoint_id)
                             ? onConnectLan({ endpoint_id: device.endpoint_id, name: device.name, platform: device.platform, online: true })

@@ -373,6 +373,101 @@
   line-height: 1.6;
 }
 
+/* 连上一台设备后右边的会话页：上面是设备卡片，下面是会话列表 */
+.remote-device {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 14px 8px;
+  border-radius: 16px;
+  background: var(--muted-surface);
+}
+.remote-device-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 12px;
+  background: var(--default);
+}
+.remote-device-icon .platform-icon {
+  width: 22px;
+  height: 22px;
+}
+/* 已连接：图标右下角的绿点 */
+.connected-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 100%;
+  background: var(--success);
+  box-shadow: 0 0 0 2.5px var(--muted-surface);
+}
+.remote-device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+  margin-top: 2px;
+  font-size: 12px;
+}
+.remote-device-meta .status-dot {
+  margin-right: -4px;
+}
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 14px;
+  background: var(--muted-surface);
+  transition: background-color 120ms ease;
+}
+.session-row:hover {
+  background: color-mix(in oklab, var(--muted-surface), var(--foreground) 4%);
+}
+.session-row-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--default);
+  color: var(--muted-foreground);
+}
+.session-row-icon svg {
+  width: 17px;
+  height: 17px;
+}
+.session-empty {
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+}
+/* 侧边栏里已连接的设备：平台图标右下角一个绿点 */
+.device-icon {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.device-icon .connected-dot {
+  right: -3px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2px var(--sidebar);
+}
+
 .workspace {
   flex: 1;
   min-width: 0;
