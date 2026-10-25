@@ -148,7 +148,8 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "overview":
-        return ov;
+        // s=signal 会改设备状态，返回新对象界面才会重画
+        return s === "signal" ? { ...ov, devices: ov.devices.map((d) => ({ ...d })) } : ov;
       case "scan_nearby":
         return new Promise((resolve, reject) => setTimeout(() => {
           if (s === "lan-scan-error") return reject("局域网扫描启动失败");
@@ -328,4 +329,16 @@ if (s === "file-request") {
 }
 if (s === "request") {
   setTimeout(() => emit("host-request", { id: 9, remote: "f9bb5fbc3f0a1b2c3d4e5f60718293a4", name: "小王的 ThinkPad", platform: "windows" }), 300);
+}
+// s=signal：第一台设备每 2.5 秒换一档延迟再到离线，看信号格在原地变
+if (s === "signal") {
+  const steps = [12, 99, 180, 420, null];
+  let step = 0;
+  window.setInterval(() => {
+    const rtt = steps[++step % steps.length];
+    const d = ov.devices[0];
+    d.state = rtt == null ? "offline" : "online";
+    d.path = rtt == null ? null : { kind: rtt < 150 ? "ipv6" : "relay", rtt_ms: rtt, remote: null };
+    void emit("server-status", {});
+  }, 2500);
 }

@@ -509,27 +509,40 @@
 .presence-label {
   flex: none;
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 4px;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
+  transition: color 0.3s ease;
 }
-/* 信号格：四格暗着打底，亮的那几格叠在上面，颜色跟着文字（直连绿、中继黄、离线灰） */
+/* 文字栏固定宽度、靠右：“12 ms” 变 “420 ms” 时信号格和设备名都不动 */
+.presence-text {
+  min-width: 36px;
+  text-align: right;
+}
+/* 信号格：没亮的格暗着打底，亮几格看延迟，换档时原地淡入淡出 */
 .signal-bars {
-  position: relative;
   flex: none;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
 }
-.signal-bars svg {
-  position: absolute;
-  inset: 0;
-  width: 12px;
-  height: 12px;
-}
-.signal-bars .signal-track {
+.signal-bars path + path {
   opacity: 0.25;
+  transition: opacity 0.3s ease;
+}
+.signal-bars path[data-on] {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .presence-label,
+  .signal-bars path + path {
+    transition: none;
+  }
 }
 .presence-label[data-kind="ipv6"],
 .presence-label[data-kind="ipv4"] {
