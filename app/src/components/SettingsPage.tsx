@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Globe2, Network, LoaderCircle, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, Download, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { Tabs, Checkbox, Description, Radio, RadioGroup } from "@heroui/react";
 import { api, platformLabel, type Overview, type SettingsView } from "../api";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { PlatformIcon } from "./PlatformIcon";
+import { progressText, type useUpdater } from "./useUpdater";
 
 /** 牵线服务器选“自定义”时的取值，预设项的取值就是它的地址 */
 const CUSTOM_SERVER = "custom";
@@ -17,9 +18,11 @@ const CUSTOM_SERVER = "custom";
 export function SettingsPage({
   ov,
   onChanged,
+  updater,
 }: {
   ov: Overview;
   onChanged: () => void;
+  updater: ReturnType<typeof useUpdater>;
 }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [serverChoice, setServerChoice] = useState(CUSTOM_SERVER);
@@ -111,6 +114,11 @@ export function SettingsPage({
             <Tabs.Tab id="trusted">
               <ShieldCheck />
               受信设备（{ov.trusted.length}）
+              <Tabs.Indicator />
+            </Tabs.Tab>
+            <Tabs.Tab id="about">
+              <Info />
+              关于
               <Tabs.Indicator />
             </Tabs.Tab>
           </Tabs.List>
@@ -289,6 +297,45 @@ export function SettingsPage({
                   ))}
                 </div>
               )}
+            </Tabs.Panel>
+            <Tabs.Panel id="about" className="pt-5">
+              <FieldGroup className="gap-4">
+                <div className="flex flex-col gap-1">
+                  <span className="text-sm font-medium">P2PCLI {updater.version ? `v${updater.version}` : ""}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {updater.installing
+                      ? progressText(updater.progress)
+                      : updater.checking
+                        ? "正在检查更新…"
+                        : updater.error
+                          ? updater.error
+                          : updater.update
+                            ? `发现新版本 v${updater.update.version}`
+                            : updater.checkedAt
+                              ? "已经是最新版本"
+                              : "启动后会自动检查更新，之后每 6 小时检查一次。"}
+                  </span>
+                </div>
+                {updater.update?.notes && !updater.installing && (
+                  <p className="whitespace-pre-line text-xs text-muted-foreground">{updater.update.notes}</p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {updater.update ? (
+                    <Button size="sm" onClick={updater.install} disabled={updater.installing}>
+                      {updater.installing
+                        ? <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                        : <Download data-icon="inline-start" />}
+                      更新并重启
+                    </Button>
+                  ) : null}
+                  <Button variant="outline" size="sm" onClick={() => void updater.check()} disabled={updater.checking || updater.installing}>
+                    {updater.checking
+                      ? <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                      : <RefreshCw data-icon="inline-start" />}
+                    检查更新
+                  </Button>
+                </div>
+              </FieldGroup>
             </Tabs.Panel>
           </div>
         </Tabs>

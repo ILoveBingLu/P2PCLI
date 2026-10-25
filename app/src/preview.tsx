@@ -128,6 +128,15 @@ mockIPC(
         if (session) session.attached = [...attachments.values()].some((a) => a.sessionId === session.id);
         return null;
       }
+      case "plugin:app|version":
+        return "0.1.0";
+      // s=update：发布页上有新版本
+      case "check_update":
+        return s === "update"
+          ? { version: "0.1.1", current_version: "0.1.0", notes: "局域网发现更稳定\n修复连接面板偶尔不弹出" }
+          : null;
+      case "install_update":
+        return new Promise(() => {});
       case "set_password_fixed":
         ov.password_fixed = !!args.fixed;
         return null;

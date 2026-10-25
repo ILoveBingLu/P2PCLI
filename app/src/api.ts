@@ -1,5 +1,5 @@
 // 和 Rust 端对应的类型与调用
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type PathKind = "ipv6" | "ipv4" | "relay" | "unknown";
 export interface PathInfo {
@@ -117,6 +117,17 @@ export interface SettingsView {
   lan_visible: boolean;
 }
 
+/** 发布页上比本机新的版本 */
+export interface UpdateView {
+  version: string;
+  current_version: string;
+  notes: string | null;
+}
+
+export type UpdateProgress =
+  | { event: "downloading"; downloaded: number; total: number | null }
+  | { event: "installing" };
+
 export interface ServerPreset {
   address: string;
   label: string;
@@ -144,6 +155,13 @@ export const api = {
   diagnose: () => invoke<Diagnosis>("diagnose"),
   refreshPassword: () => invoke<string>("refresh_password"),
   setPasswordFixed: (fixed: boolean) => invoke("set_password_fixed", { fixed }),
+  checkUpdate: () => invoke<UpdateView | null>("check_update"),
+  /** 下载、安装并重启；成功时软件会直接重启，不会返回 */
+  installUpdate: (onProgress: (p: UpdateProgress) => void) => {
+    const progress = new Channel<UpdateProgress>();
+    progress.onmessage = onProgress;
+    return invoke("install_update", { progress });
+  },
   respond: (id: number, allow: boolean, trust: boolean) => invoke("respond_request", { id, allow, trust }),
   kick: (session: number) => invoke<boolean>("kick", { session }),
   removeTrusted: (endpointId: string) => invoke("remove_trusted", { endpointId }),

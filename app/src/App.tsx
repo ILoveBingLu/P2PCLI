@@ -7,6 +7,7 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
+  Download,
   LoaderCircle,
   History,
   Plus,
@@ -32,6 +33,7 @@ import { ConnectionPopover } from "./components/ConnectionPopover";
 import { ConnectionSidebar } from "./components/ConnectionSidebar";
 import { useConnection } from "./components/useConnection";
 import { useSidebar } from "./components/useSidebar";
+import { progressText, useUpdater } from "./components/useUpdater";
 import {
   ApproveDialog,
   DiagDialog,
@@ -178,6 +180,7 @@ export default function App() {
 
   const connection = useConnection({ onConnected, onOpenChange: setShowConnect });
   const sidebar = useSidebar();
+  const updater = useUpdater();
   const scanNearby = async (reveal = false) => {
     if (reveal) {
       sidebar.show();
@@ -281,6 +284,36 @@ export default function App() {
         onRefresh={refresh}
       />}
       <main className={cn("workspace", showSettings && "workspace-full-width")}>
+        {updater.notify && updater.update && (
+          <div className="workspace-notice">
+            <Alert>
+              <Download />
+              <AlertTitle>发现新版本 v{updater.update.version}</AlertTitle>
+              <AlertDescription>
+                {updater.installing ? (
+                  <span>{progressText(updater.progress)}</span>
+                ) : (
+                  <>
+                    {updater.update.notes && (
+                      <span className="line-clamp-3 whitespace-pre-line">{updater.update.notes}</span>
+                    )}
+                    <span>更新后软件会自动重启，正在进行的远程连接需要重新连。</span>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" onClick={updater.install}>
+                        <Download data-icon="inline-start" />
+                        更新并重启
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={updater.dismiss}>
+                        稍后
+                      </Button>
+                    </div>
+                  </>
+                )}
+                {updater.error && <span className="text-danger">{updater.error}</span>}
+              </AlertDescription>
+            </Alert>
+          </div>
+        )}
         {overviewError && (
           <div className="workspace-notice">
             <Alert variant="destructive">
@@ -331,7 +364,7 @@ export default function App() {
         )}
 
         {showSettings && ov && (
-          <SettingsPage ov={ov} onChanged={refresh} />
+          <SettingsPage ov={ov} onChanged={refresh} updater={updater} />
         )}
         {!showSettings && sessionTarget && (
           <RemoteSessions

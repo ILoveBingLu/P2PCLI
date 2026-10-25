@@ -1,5 +1,7 @@
 //! 桌面端：把核心库包成界面能调的命令，管弹窗、托盘和窗口。
 
+mod update;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -263,6 +265,17 @@ async fn diagnose(state: State<'_, AppState>) -> Result<p2pcli_core::diag::Diagn
 #[tauri::command]
 fn refresh_password(state: State<'_, AppState>) -> String {
     state.node().host.regenerate_password()
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle, state: State<'_, AppState>) -> Result<Option<update::UpdateView>, String> {
+    let proxy = state.settings.lock().unwrap().proxy.clone();
+    update::check(&app, proxy).await
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle, progress: Channel<update::UpdateProgress>) -> Result<(), String> {
+    update::install(&app, progress).await
 }
 
 #[tauri::command]
@@ -671,6 +684,8 @@ pub fn run() {
             show_main(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::PendingUpdate::default())
         .setup(|app| {
             // 数据目录可以用环境变量指定，方便一台机器上开两份做测试
             let data_dir = match std::env::var_os("P2PCLI_DATA_DIR") {
@@ -710,6 +725,8 @@ pub fn run() {
                 terms: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
             });
+
+            update::auto_install_for_test(app.handle());
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -777,6 +794,8 @@ pub fn run() {
             diagnose,
             refresh_password,
             set_password_fixed,
+            check_update,
+            install_update,
             respond_request,
             kick,
             remove_trusted,
