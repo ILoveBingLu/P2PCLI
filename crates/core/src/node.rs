@@ -15,6 +15,7 @@ use crate::client::{self, ConnectError, RemoteHost};
 use crate::host::{Host, HostDelegate};
 use crate::identity::{DeviceInfo, load_or_create_key};
 use crate::lan::{Lan, NearbyDevice};
+use crate::proto::RejectCode;
 use crate::rendezvous::{RdvClient, RdvPush, RdvResponse, normalize_code, parse_rdv_server};
 use crate::store::{RecentDevice, RecentStore, now_secs};
 use crate::{ALPN_PUNCH, ALPN_TERM, v6};
@@ -233,7 +234,9 @@ impl Node {
         let addr = addr.filter(|a| a.id == id).unwrap_or_else(|| EndpointAddr::new(id));
         debug!(?addr, "按设备码查到对方地址");
         let conn = self.dial(rdv, &code, addr).await?;
-        let remote = client::handshake(conn, &self.me, password).await?;
+        let remote = self
+            .with_saved_password(id, password, |pw| client::handshake(conn, &self.me, pw))
+            .await?;
         if let Err(e) = self.recent.upsert(RecentDevice {
             code,
             endpoint_id: id.to_string(),
@@ -302,12 +305,45 @@ impl Node {
         if id == self.id() {
             return Err(anyhow!("这是本机").into());
         }
-        let remote = client::connect(&self.endpoint, EndpointAddr::new(id), &self.me, password).await?;
+        let remote = self
+            .with_saved_password(id, password, |pw| client::connect(&self.endpoint, EndpointAddr::new(id), &self.me, pw))
+            .await?;
         // 只更新已有的历史记录：局域网广播里的信息没法核实，不拿它新建记录
         if let Err(e) = self.recent.touch(&id.to_string(), &remote.info.name, &remote.info.platform) {
             warn!("更新连接历史失败：{e:#}");
         }
         Ok(remote)
+    }
+
+    /// 没填密码就用上次连上时记住的；连上了就记住这次的密码。
+    /// 记住的密码被拒（对方换了密码）就忘掉它，按“需要密码”返回，让用户重新输。
+    async fn with_saved_password<F, Fut>(&self, id: EndpointId, given: Option<String>, connect: F) -> Result<RemoteHost, ConnectError>
+    where
+        F: FnOnce(Option<String>) -> Fut,
+        Fut: std::future::Future<Output = Result<RemoteHost, ConnectError>>,
+    {
+        let key = id.to_string();
+        let saved = if given.is_none() { self.recent.password(&key) } else { None };
+        let used_saved = saved.is_some();
+        let password = given.or(saved);
+        match connect(password.clone()).await {
+            Ok(remote) => {
+                if let Some(p) = &password
+                    && let Err(e) = self.recent.save_password(&key, p)
+                {
+                    warn!("记住配对密码失败：{e:#}");
+                }
+                Ok(remote)
+            }
+            Err(ConnectError::Rejected(RejectCode::BadPassword)) if used_saved => {
+                info!(id = %id.fmt_short(), "记住的配对密码对方不认了，忘掉它");
+                if let Err(e) = self.recent.forget_password(&key) {
+                    warn!("删除记住的配对密码失败：{e:#}");
+                }
+                Err(ConnectError::Rejected(RejectCode::NeedPassword))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// 直接用对方公钥（加可选地址）连，开发和测试用

@@ -106,19 +106,25 @@ pub struct RecentDevice {
     pub last_used: u64,
 }
 
-/// 连接方记的最近设备，按设备码索引
+/// 连接方记的最近设备，按设备码索引；连上过的配对密码另存一个文件，按设备公钥索引，只给后端用
 pub struct RecentStore {
     path: PathBuf,
     map: Mutex<BTreeMap<String, RecentDevice>>,
+    passwords_path: PathBuf,
+    passwords: Mutex<BTreeMap<String, String>>,
 }
 
 impl RecentStore {
     pub fn open(data_dir: &Path) -> Self {
         let path = data_dir.join("recent.json");
         let map = load_json(&path);
+        let passwords_path = data_dir.join("saved_passwords.json");
+        let passwords = load_json(&passwords_path);
         Self {
             path,
             map: Mutex::new(map),
+            passwords_path,
+            passwords: Mutex::new(passwords),
         }
     }
 
@@ -132,10 +138,40 @@ impl RecentStore {
         write_private(&self.path, &serde_json::to_vec_pretty(&*map)?)
     }
 
+    /// 从历史里删掉；这台设备没有别的记录了，记住的密码也一起删
     pub fn remove(&self, code: &str) -> Result<()> {
         let mut map = self.map.lock().unwrap();
-        map.remove(code);
-        write_private(&self.path, &serde_json::to_vec_pretty(&*map)?)
+        let removed = map.remove(code);
+        write_private(&self.path, &serde_json::to_vec_pretty(&*map)?)?;
+        if let Some(dev) = removed
+            && !map.values().any(|d| d.endpoint_id == dev.endpoint_id)
+        {
+            drop(map);
+            self.forget_password(&dev.endpoint_id)?;
+        }
+        Ok(())
+    }
+
+    /// 连上过的配对密码，下次没填密码时自动带上
+    pub fn password(&self, endpoint_id: &str) -> Option<String> {
+        self.passwords.lock().unwrap().get(endpoint_id).cloned()
+    }
+
+    pub fn save_password(&self, endpoint_id: &str, password: &str) -> Result<()> {
+        let mut map = self.passwords.lock().unwrap();
+        if map.get(endpoint_id).map(String::as_str) == Some(password) {
+            return Ok(());
+        }
+        map.insert(endpoint_id.to_string(), password.to_string());
+        write_private(&self.passwords_path, &serde_json::to_vec_pretty(&*map)?)
+    }
+
+    pub fn forget_password(&self, endpoint_id: &str) -> Result<()> {
+        let mut map = self.passwords.lock().unwrap();
+        if map.remove(endpoint_id).is_some() {
+            write_private(&self.passwords_path, &serde_json::to_vec_pretty(&*map)?)?;
+        }
+        Ok(())
     }
 
     /// 按公钥连上以后，更新同一台设备已有的历史记录；没有记录就不动
