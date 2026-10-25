@@ -680,12 +680,11 @@
 .terminal-statusbar > .terminal-status-command {
   flex-shrink: 1;
 }
-/* 四周只留一点空。用 margin 不用 padding：xterm 按父元素算行列，padding 会被算进去，最下面一行会被挤掉。
-   全屏程序会把屏幕刷成自己的底色，留得太宽就像嵌了个框。 */
+/* 终端铺满，不留边：全屏程序会把屏幕刷成自己的底色，留边就会露出一圈框。
+   要加空也别用 padding：xterm 按父元素算行列，padding 会被算进去，最下面一行会被挤掉。 */
 .term {
   flex: 1;
   min-height: 0;
-  margin: 6px 4px 4px 8px;
 }
 .term-overlay {
   position: absolute;
