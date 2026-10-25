@@ -16,6 +16,7 @@ use crate::proto::{TerminalDetails, TerminalSession};
 // 标题放最后：里面可能有制表符，分割时多出来的都归它
 const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_attached}\t#{status}\t#{window_index}\t#{window_name}\t#{session_windows}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_title}";
 const HEALTH_FORMAT: &str = "#{session_name}\t#{pid}\t#{socket_path}";
+const LAUNCHER_FORMAT: &str = "#{pane_pid}\t#{pane_current_command}\t#{cursor_x}\t#{cursor_y}\t#{alternate_on}\t#{pane_in_mode}";
 
 #[derive(Default)]
 struct Health {
@@ -35,6 +36,7 @@ pub struct SessionManager {
     quotas: std::sync::Mutex<Quotas>,
     /// 会话里 AI 现在的模型、强度、权限模式
     settings: std::sync::Mutex<Settings>,
+    installed: tokio::sync::Mutex<Option<(std::time::Instant, Vec<crate::launchers::InstalledAgent>)>>,
 }
 
 impl SessionManager {
@@ -49,6 +51,7 @@ impl SessionManager {
             processes: Default::default(),
             quotas: Default::default(),
             settings: Default::default(),
+            installed: Default::default(),
         }
     }
 
@@ -124,6 +127,7 @@ impl SessionManager {
                 self.hide_status(&Self::name(owner, id)?).await?;
             }
             let details = TerminalDetails {
+                shell_ready: false,
                 window_index: parts.next().and_then(|v| v.parse().ok()),
                 window_name: status_text(parts.next()),
                 window_count: parts.next().and_then(|v| v.parse().ok()),
@@ -136,6 +140,13 @@ impl SessionManager {
             let pane_pid = parts.next().and_then(|v| v.trim().parse().ok());
             let title = parts.next().unwrap_or_default();
             session.agent = self.agent(&Self::name(owner, id)?, pane_pid, title).await;
+            if session.agent.is_none() {
+                if let Some(details) = session.details.as_mut() {
+                    if details.command.as_deref().is_some_and(crate::launchers::is_shell) {
+                        details.shell_ready = self.shell_ready(&Self::name(owner, id)?, false).await.unwrap_or(false);
+                    }
+                }
+            }
             sessions.push(session);
         }
         sessions.sort_by_key(|s| s.created_at);
@@ -197,6 +208,50 @@ impl SessionManager {
         self.checked(&["kill-session", "-t", &name]).await?;
         self.health.lock().unwrap().sessions.remove(&name);
         tracing::info!(namespace = %self.namespace, terminal = %name, "后台会话已按请求结束");
+        Ok(())
+    }
+
+    pub async fn installed_agents(&self, refresh: bool) -> Result<Vec<crate::launchers::InstalledAgent>> {
+        let mut cache = self.installed.lock().await;
+        if !refresh {
+            if let Some((at, agents)) = cache.as_ref() {
+                if at.elapsed() < Duration::from_secs(300) { return Ok(agents.clone()); }
+            }
+        }
+        let agents = crate::launchers::scan().await?;
+        *cache = Some((std::time::Instant::now(), agents.clone()));
+        Ok(agents)
+    }
+
+    async fn shell_ready(&self, name: &str, fresh: bool) -> Result<bool> {
+        let out = self.command(&["display-message", "-p", "-t", name, LAUNCHER_FORMAT]).await?;
+        if !out.status.success() { return Ok(false); }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let fields: Vec<_> = text.trim_end().split('\t').collect();
+        if fields.len() != 6 || fields[4] != "0" || fields[5] != "0" { return Ok(false); }
+        let (Ok(pid), Ok(x), Ok(y)) = (fields[0].parse::<u32>(), fields[2].parse::<usize>(), fields[3].parse::<usize>()) else { return Ok(false) };
+        if !self.processes.lock().unwrap().idle_shell(pid, fields[1], fresh) { return Ok(false); }
+        let screen = self.command(&["capture-pane", "-p", "-t", name]).await?;
+        if !screen.status.success() { return Ok(false); }
+        let text = String::from_utf8_lossy(&screen.stdout);
+        let Some(line) = text.lines().nth(y) else { return Ok(false) };
+        // 宽字符占多列；光标必须在整行文字之后，不能位于已输入命令的中间。
+        Ok(x >= line.trim_end().chars().count() && crate::launchers::empty_prompt(line))
+    }
+
+    pub async fn launch_agent(&self, owner: &str, id: &str, kind: &str, allow_bypass: bool) -> Result<()> {
+        let name = Self::name(owner, id)?;
+        let agents = self.installed_agents(false).await?;
+        let agent = agents.iter().find(|agent| agent.kind == kind).context("该 AI 未检测到安装，请刷新列表")?;
+        if allow_bypass && kind != "claude" { bail!("该启动选项仅适用于 Claude Code"); }
+        let _gate = self.gate.lock().await;
+        // 客户端的轮询结果可能过期；必须在被控端临启动前再次检查。
+        if !self.shell_ready(&name, true).await? {
+            bail!("终端不在空闲提示符，请先完成当前输入或退出正在运行的程序");
+        }
+        let command = format!("{}{}", agent.command, if allow_bypass { " --allow-dangerously-skip-permissions" } else { "" });
+        self.checked(&["send-keys", "-t", &name, "-l", &command]).await?;
+        self.checked(&["send-keys", "-t", &name, "Enter"]).await?;
         Ok(())
     }
 

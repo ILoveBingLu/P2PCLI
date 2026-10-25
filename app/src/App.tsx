@@ -46,6 +46,7 @@ import { useAgentAlerts } from "./components/useAgentAlerts";
 import { AgentTabTitle } from "./components/Agent";
 import { GlobalContextMenu } from "./components/GlobalContextMenu";
 import { AgentComposer, isMac } from "./components/AgentComposer";
+import { AgentLauncher } from "./components/AgentLauncher";
 import { AgentSettingsBar, CLAUDE_EFFORTS, CLAUDE_MODELS, choiceLabel, modeChoices, type AgentSetting } from "./components/AgentSettingsBar";
 import {
   ApproveDialog,
@@ -106,6 +107,7 @@ export default function App() {
   /** 会话页里结束了会话就加一，各处共享的会话快照跟着在后台刷新 */
   const [sessionsRev, setSessionsRev] = useState(0);
   const [liveSessions, setLiveSessions] = useState<Record<number, TerminalSessionSnapshot>>({});
+  const [promptReady, setPromptReady] = useState<Record<number, boolean>>({});
   const [showConnect, setShowConnect] = useState(false);
   const [showLocalDevice, setShowLocalDevice] = useState(false);
   const [scanningNearby, setScanningNearby] = useState(false);
@@ -708,11 +710,24 @@ export default function App() {
                       )
                     }
                     onStatus={(s) => setTabState(t.key, s)}
+                    onPromptReady={(ready) => setPromptReady((current) => current[t.key] === ready ? current : { ...current, [t.key]: ready })}
                     onHandle={(handle) => {
                       if (handle) termHandles.current.set(t.key, handle);
                       else termHandles.current.delete(t.key);
                     }}
                   />
+                  {t.state === "open" && t.sessionId && (
+                    <AgentLauncher key={`${t.connId}:${t.sessionId}`} connId={t.connId} sessionId={t.sessionId}
+                      visible={!showSettings && !sessionTarget && t.key === activeKey && !!promptReady[t.key]
+                        && !liveSessions[t.connId]?.error && !tabAgent(t)
+                        && liveSessions[t.connId]?.sessions?.find((s) => s.id === t.sessionId)?.details?.shell_ready === true}
+                      canLaunch={() => termHandles.current.get(t.key)?.canLaunch() ?? false}
+                      onFocus={() => termHandles.current.get(t.key)?.focus()}
+                      onLaunched={() => {
+                        setPromptReady((current) => ({ ...current, [t.key]: false }));
+                        setSessionsRev((rev) => rev + 1);
+                      }} />
+                  )}
                   {t.state === "opening" && (
                     <div className="terminal-loading" role="status">
                       <LoaderCircle className="animate-spin" />

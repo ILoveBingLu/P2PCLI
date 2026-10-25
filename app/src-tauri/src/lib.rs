@@ -618,6 +618,16 @@ async fn end_terminal(state: State<'_, AppState>, conn_id: u64, session_id: Stri
 }
 
 #[tauri::command]
+async fn installed_agents(state: State<'_, AppState>, conn_id: u64, refresh: bool) -> Result<Vec<p2pcli_core::launchers::InstalledAgent>, String> {
+    state.remote(conn_id)?.installed_agents(refresh).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn launch_agent(state: State<'_, AppState>, conn_id: u64, session_id: String, kind: String, allow_bypass: bool) -> Result<(), String> {
+    state.remote(conn_id)?.launch_agent(session_id, kind, allow_bypass).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 async fn open_terminal(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1065,6 +1075,8 @@ pub fn run() {
             path_info,
             open_terminal,
             list_terminals,
+            installed_agents,
+            launch_agent,
             end_terminal,
             term_input,
             term_resize,

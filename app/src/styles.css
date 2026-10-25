@@ -947,6 +947,32 @@
 .terminal-home-panel {
   background: var(--background);
 }
+.agent-launcher {
+  position: absolute;
+  z-index: 2;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  max-height: 110px;
+  overflow-y: auto;
+}
+.agent-launcher-pill[data-slot="button"] {
+  gap: 7px;
+  height: 30px;
+  min-height: 30px;
+  padding-inline: 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--terminal) 88%, white);
+  box-shadow: 0 2px 8px #0003;
+}
 .terminal-statusbar {
   display: flex;
   align-items: center;

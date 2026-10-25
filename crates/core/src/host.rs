@@ -501,6 +501,14 @@ impl Host {
         };
         let result: Result<()> = async {
             match request {
+                Msg::ListInstalledAgents { refresh } => {
+                    let agents = self.terminals.installed_agents(refresh).await?;
+                    write_msg(&mut send, &Msg::InstalledAgents { agents }).await?;
+                }
+                Msg::LaunchAgent { session_id, kind, allow_bypass } => {
+                    self.terminals.launch_agent(&owner, &session_id, &kind, allow_bypass).await?;
+                    write_msg(&mut send, &Msg::AgentLaunched).await?;
+                }
                 Msg::ListTerminals => {
                     let sessions = self.terminals.list(&owner).await?;
                     write_msg(&mut send, &Msg::Terminals { sessions }).await?;

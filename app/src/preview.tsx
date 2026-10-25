@@ -98,6 +98,10 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
     kind: "opencode", name: "OpenCode",
     state: s === "opencode-working" ? "working" : s === "opencode-waiting" ? "waiting" : "idle",
   } },
+] : s.startsWith("launcher") ? [
+  { id: "f".repeat(32), created_at: now - 60, attached: false, details: {
+    window_index: 0, window_name: "zsh", window_count: 1, command: "zsh", current_path: "/Users/demo/Projects/demo", shell_ready: true,
+  } },
 ] : [];
 // 工作室 Mac mini 的后台探测结果用同一份会话，连上前后编号对得上
 ov.devices[0].sessions = terminalSessions.map((session) => ({ ...session }));
@@ -112,7 +116,31 @@ if (s === "agents") {
   step("waiting", 4000);
   step("idle", 9000);
 }
-const attachments = new Map<number, { sessionId: string; status: any }>();
+const attachments = new Map<number, { sessionId: string; status: any; output: any }>();
+const shellPrompt = "me@preview ~/Projects/demo % ";
+const shellDrafts = new Map<number, string>();
+function previewWrite(output: any, text: string) { output.onmessage(new TextEncoder().encode(text).buffer); }
+function fakeLauncherInput(termId: number, data: string) {
+  if (!s.startsWith("launcher")) return;
+  const attachment = attachments.get(termId);
+  const session = terminalSessions.find((x) => x.id === attachment?.sessionId);
+  if (!attachment || !session?.details) return;
+  if (data.includes("\x04") && session.agent) {
+    session.agent = undefined;
+    session.details.command = "zsh";
+    session.details.shell_ready = true;
+    previewWrite(attachment.output, "\r\n" + shellPrompt);
+  } else if (!session.agent) {
+    let draft = shellDrafts.get(termId) ?? "";
+    for (const ch of data) {
+      if (ch === "\x03" || ch === "\r") { draft = ""; previewWrite(attachment.output, "\r\n" + shellPrompt); }
+      else if (ch === "\x7f") { if (draft) { draft = draft.slice(0, -1); previewWrite(attachment.output, "\b \b"); } }
+      else if (ch >= " ") { draft += ch; previewWrite(attachment.output, ch); }
+    }
+    shellDrafts.set(termId, draft);
+    session.details.shell_ready = !draft;
+  }
+}
 
 // s=agents：Claude Code、ZCode 收到 /model、/effort 和 Shift+Tab 时像真的一样改设置；Shift+Tab 的顺序照本机真实的
 const fakeModels: Record<string, string> = { opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5", fable: "Fable 5.1" };
@@ -227,10 +255,29 @@ mockIPC(
         // 模拟网络往返，看得出刷新时列表有没有闪
         return new Promise((r) => setTimeout(() => r(terminalSessions.map((session) => ({
           ...session,
-          details: changed
+          details: session.details ?? (changed
             ? { window_index: 1, window_name: "编辑器", window_count: 2, command: "vim", current_path: "/Users/demo/Projects/updated" }
-            : { window_index: 0, window_name: "工作终端", window_count: 1, command: "zsh", current_path: "/Users/demo/Projects/P2PCLI" },
+            : { window_index: 0, window_name: "工作终端", window_count: 1, command: "zsh", current_path: "/Users/demo/Projects/P2PCLI" }),
         }))), 300));
+      }
+      case "installed_agents":
+        if (s === "launcher-error") throw new Error("模拟检测失败");
+        return s === "launcher-empty" ? [] : [
+          { kind: "claude", name: "Claude Code", command: "claude" },
+          { kind: "codex", name: "Codex", command: "codex" },
+          { kind: "opencode", name: "OpenCode", command: "opencode" },
+        ];
+      case "launch_agent": {
+        const session = terminalSessions.find((x) => x.id === args.sessionId);
+        if (!session?.details?.shell_ready) throw new Error("终端不在空闲提示符");
+        session.agent = { kind: args.kind, name: { claude: "Claude Code", codex: "Codex", opencode: "OpenCode" }[args.kind as string] ?? args.kind, state: "idle" };
+        session.details.command = args.kind;
+        session.details.shell_ready = false;
+        console.info("Launcher preview", args.kind, { allowBypass: args.allowBypass });
+        for (const attachment of attachments.values()) {
+          if (attachment.sessionId === session.id) previewWrite(attachment.output, args.kind + "\r\n\r\n" + session.agent.name + "\r\n> ");
+        }
+        return null;
       }
       case "end_terminal": {
         await new Promise((r) => setTimeout(r, 500));
@@ -248,9 +295,9 @@ mockIPC(
         session.attached = true;
         const termId = ++termSeq;
         if (!statusStartedAt) statusStartedAt = Date.now();
-        attachments.set(termId, { sessionId: session.id, status: args.status });
+        attachments.set(termId, { sessionId: session.id, status: args.status, output: args.output });
         ((window as any).__outs ??= []).push(args.output);
-        const screen = session.agent?.kind === "opencode"
+        const screen = s.startsWith("launcher") ? shellPrompt : session.agent?.kind === "opencode"
           ? "\x1b[1;36mOpenCode\x1b[0m\r\n\r\nBuild · 模型由当前供应商配置提供\r\n\r\n这是界面预览；控制按键记录在浏览器控制台。\r\n"
           : sample;
         setTimeout(() => args.output.onmessage(new TextEncoder().encode(screen).buffer), 100);
@@ -348,6 +395,7 @@ mockIPC(
         ((window as any).__inputs ??= []).push(args.data);
         if (s.startsWith("opencode")) console.info("OpenCode preview input", JSON.stringify(args.data));
         fakeAgentInput(args.termId, args.data);
+        fakeLauncherInput(args.termId, args.data);
         return null;
       case "selftest_config":
         return null;

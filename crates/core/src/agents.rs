@@ -125,6 +125,11 @@ const KNOWN: &[Known] = &[
     Known { kind: "zcode", name: "ZCode", names: &["zcode"], markers: &["zcode-app-cli"] },
 ];
 
+/// 安装检测复用识别名单，只探测固定命令名，不运行 AI、不读取登录信息。
+pub fn launcher_candidates() -> Vec<(&'static str, &'static str, &'static [&'static str])> {
+    KNOWN.iter().map(|a| (a.kind, a.name, a.names)).collect()
+}
+
 /// 进程表刷新一次后几秒内的查询都用它，几个会话、几个查看方一起问时不重复扫
 const PROCESS_TTL: Duration = Duration::from_millis(1500);
 /// 从 shell 往下最多看这么多个进程，防止异常的进程树拖慢查询
@@ -146,6 +151,16 @@ impl Default for Processes {
 }
 
 impl Processes {
+    pub fn idle_shell(&mut self, root: u32, command: &str, fresh: bool) -> bool {
+        if fresh { self.at = None; }
+        self.refresh();
+        let pid = Pid::from_u32(root);
+        let Some(process) = self.sys.process(pid) else { return false };
+        crate::launchers::is_shell(command)
+            && crate::launchers::is_shell(&process.name().to_string_lossy())
+            && self.children.get(&pid).is_none_or(|children| children.is_empty())
+    }
+
     fn refresh(&mut self) {
         if self.at.is_some_and(|at| at.elapsed() < PROCESS_TTL) {
             return;

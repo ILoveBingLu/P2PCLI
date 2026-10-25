@@ -156,6 +156,20 @@ impl RemoteHost {
         }
     }
 
+    pub async fn installed_agents(&self, refresh: bool) -> Result<Vec<crate::launchers::InstalledAgent>> {
+        match self.session_request(Msg::ListInstalledAgents { refresh }).await? {
+            Msg::InstalledAgents { agents } => Ok(agents),
+            other => bail!("检测 AI 失败（对方可能需要更新）：{other:?}"),
+        }
+    }
+
+    pub async fn launch_agent(&self, session_id: String, kind: String, allow_bypass: bool) -> Result<()> {
+        match self.session_request(Msg::LaunchAgent { session_id, kind, allow_bypass }).await? {
+            Msg::AgentLaunched => Ok(()),
+            other => bail!("启动 AI 失败：{other:?}"),
+        }
+    }
+
     async fn session_request(&self, msg: Msg) -> Result<Msg> {
         let (mut send, mut recv) = self.conn.open_bi().await?;
         write_msg(&mut send, &msg).await?;

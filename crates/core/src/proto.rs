@@ -73,6 +73,10 @@ pub enum Msg {
     Terminals { sessions: Vec<TerminalSession> },
     EndTerminal { session_id: String },
     TerminalEnded,
+    ListInstalledAgents { refresh: bool },
+    InstalledAgents { agents: Vec<crate::launchers::InstalledAgent> },
+    LaunchAgent { session_id: String, kind: String, allow_bypass: bool },
+    AgentLaunched,
     Resize {
         cols: u16,
         rows: u16,
@@ -102,6 +106,9 @@ pub struct TerminalSession {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TerminalDetails {
+    /// 旧设备不提供时默认不允许快捷启动。
+    #[serde(default)]
+    pub shell_ready: bool,
     pub window_index: Option<u32>,
     pub window_name: Option<String>,
     pub window_count: Option<u32>,

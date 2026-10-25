@@ -10,6 +10,7 @@ import type { TermStatus, OpenedTerminal } from "./api";
 import { useContextMenu } from "./components/ContextMenu";
 import { toast } from "./components/ui/toast";
 import { terminalResizeFrame } from "./lib/terminalResizeFrame";
+import { emptyShellPrompt, promptGuard } from "./lib/launcherPrompt";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -68,6 +69,7 @@ export interface TerminalHandle {
   /** 原样发几个按键，比如 Shift+Tab 是 \x1b[Z */
   keys: (data: string) => void;
   focus: () => void;
+  canLaunch: () => boolean;
 }
 
 interface Props {
@@ -77,16 +79,17 @@ interface Props {
   onStatus: (s: TermStatus) => void;
   onReady: (termId: number, sessionId: string) => void;
   onHandle?: (handle: TerminalHandle | null) => void;
+  onPromptReady?: (ready: boolean) => void;
 }
 
-export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle }: Props) {
+export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle, onPromptReady }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const resizeFrameRef = useRef<ReturnType<typeof terminalResizeFrame> | null>(null);
   const inputReady = useRef(false);
   const menu = useContextMenu();
-  const cb = useRef({ onStatus, onReady, onHandle });
-  cb.current = { onStatus, onReady, onHandle };
+  const cb = useRef({ onStatus, onReady, onHandle, onPromptReady });
+  cb.current = { onStatus, onReady, onHandle, onPromptReady };
 
   const openContextMenu = (e: MouseEvent<HTMLDivElement>) => {
     // 在捕获阶段拦截，避免 xterm 的隐藏输入框弹出 WebView 原生菜单。
@@ -157,7 +160,23 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     let termId: number | null = null;
     let disposed = false;
     let resizeTimer: number | undefined;
+    const guard = promptGuard();
+    const prompt = () => {
+      const buffer = term.buffer.active;
+      const row = buffer.baseY + buffer.cursorY;
+      const line = buffer.getLine(row);
+      const before = line?.translateToString(false, 0, buffer.cursorX) ?? "";
+      const after = line?.translateToString(true, buffer.cursorX) ?? "";
+      return {
+        signature: `${buffer.type}:${row}:${buffer.cursorX}:${line?.translateToString(true) ?? ""}`,
+        empty: inputReady.current && buffer.type === "normal" && !line?.isWrapped && !after.trim() && emptyShellPrompt(before),
+      };
+    };
+    const canLaunch = () => { const p = prompt(); return guard.ready(p.signature, p.empty); };
+    const reportPrompt = () => cb.current.onPromptReady?.(canLaunch());
     const send = (data: string, binary = false) => {
+      guard.input(prompt().signature);
+      cb.current.onPromptReady?.(false);
       if (termId != null) invoke("term_input", { termId, data, binary });
     };
 
@@ -190,13 +209,14 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       enter: () => send("\r"),
       keys: (data) => send(data),
       focus: () => term.focus(),
+      canLaunch,
     });
 
     const output = new Channel<ArrayBuffer>();
     output.onmessage = (buf) => { if (!disposed) resizeFrame.write(new Uint8Array(buf)); };
     const status = new Channel<TermStatus>();
     status.onmessage = (s) => {
-      if (!disposed) { inputReady.current = false; cb.current.onStatus(s); }
+      if (!disposed) { inputReady.current = false; cb.current.onPromptReady?.(false); cb.current.onStatus(s); }
     };
 
     // Let StrictMode's setup/cleanup rehearsal finish before creating a persistent session.
@@ -210,6 +230,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
         }
         termId = id;
         inputReady.current = true;
+        reportPrompt();
         cb.current.onReady(id, session_id);
         // 打开期间窗口可能变过大小
         invoke("term_resize", { termId: id, cols: term.cols, rows: term.rows });
@@ -222,6 +243,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     }, 0);
 
     const subs = [
+      term.onWriteParsed(reportPrompt),
       term.onData((d) => send(d)),
       term.onBinary((d) => send(d, true)),
       term.onResize(({ cols, rows }) => {
@@ -242,6 +264,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     return () => {
       disposed = true;
       cb.current.onHandle?.(null);
+      cb.current.onPromptReady?.(false);
       inputReady.current = false;
       if (termRef.current === term) termRef.current = null;
       window.clearTimeout(openTimer);

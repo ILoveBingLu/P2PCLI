@@ -20,6 +20,7 @@ export interface TerminalSession {
   created_at: number;
   attached: boolean;
   details?: {
+    shell_ready?: boolean;
     window_index: number | null;
     window_name: string | null;
     window_count: number | null;
@@ -29,6 +30,8 @@ export interface TerminalSession {
   /** 会话里跑着的命令行 AI；没认出来、或者对方是旧版本时没有 */
   agent?: AgentInfo | null;
 }
+
+export interface InstalledAgent { kind: string; name: string; command: string }
 
 /** 同一条连接共享的会话快照；读取失败后不能再把旧 AI 状态当成实时状态。 */
 export interface TerminalSessionSnapshot {
@@ -302,6 +305,9 @@ export const api = {
   disconnect: (connId: number) => invoke("disconnect", { connId }),
   pathInfo: (connId: number) => invoke<PathInfo>("path_info", { connId }),
   listTerminals: (connId: number) => invoke<TerminalSession[]>("list_terminals", { connId }),
+  installedAgents: (connId: number, refresh = false) => invoke<InstalledAgent[]>("installed_agents", { connId, refresh }),
+  launchAgent: (connId: number, sessionId: string, kind: string, allowBypass = false) =>
+    invoke<void>("launch_agent", { connId, sessionId, kind, allowBypass }),
   endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
   saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null, lanVisible: boolean) =>

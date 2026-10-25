@@ -6,6 +6,7 @@ import { chmodSync, copyFileSync, mkdtempSync, readFileSync, writeFileSync } fro
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { emptyShellPrompt } from "../app/src/lib/launcherPrompt.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const windows = process.platform === "win32";
@@ -39,6 +40,16 @@ function hidden() {
 const source = readFileSync(path.join(root, "crates/core/src/sessions.rs"), "utf8");
 const format = JSON.parse(source.match(/const SESSION_FORMAT: &str = ("[^"\r\n]*");/)[1]);
 const healthFormat = JSON.parse(source.match(/const HEALTH_FORMAT: &str = ("[^"\r\n]*");/)[1]);
+const launcherFormat = JSON.parse(source.match(/const LAUNCHER_FORMAT: &str = ("[^"\r\n]*");/)[1]);
+function emptyPrompt() {
+  const fields = run("display-message", "-p", "-t", "check", launcherFormat).split("\t");
+  assert.equal(fields.length, 6);
+  assert(Number(fields[0]) > 0);
+  assert.equal(fields[4], "0");
+  assert.equal(fields[5], "0");
+  const line = run("capture-pane", "-p", "-t", "check").split(/\r?\n/)[Number(fields[3])] ?? "";
+  return Number(fields[2]) >= [...line.trimEnd()].length && emptyShellPrompt(line);
+}
 function details() {
   const values = run("list-sessions", "-F", format).split("\t");
   assert(values.length >= 11, `expected 11 fields, got ${values.length}`);
@@ -99,6 +110,18 @@ try {
   run("send-keys", "-t", "check", windows ? "Write-Output capture-probe-42" : "echo capture-probe-42", "Enter");
   await eventually(() => assert.match(run("capture-pane", "-p", "-t", "check"), /capture-probe-42/));
   console.log("PASS: pane PID, title and screen capture are available for AI detection");
+  await eventually(() => assert(emptyPrompt(), "shell must be at an empty prompt"));
+  run("send-keys", "-t", "check", "-l", "launcher-draft");
+  await eventually(() => assert(!emptyPrompt(), "typed input must block the launcher"));
+  run("send-keys", "-t", "check", "C-c");
+  await eventually(() => assert(emptyPrompt(), "cleared input must restore the launcher"));
+  run("send-keys", "-t", "check", "-l", windows ? "Write-Output launcher-probe-42" : "echo launcher-probe-42");
+  run("send-keys", "-t", "check", "Enter");
+  await eventually(() => {
+    assert.match(run("capture-pane", "-p", "-t", "check"), /launcher-probe-42/);
+    assert(emptyPrompt());
+  });
+  console.log("PASS: launcher detects empty prompts, blocks drafts, recovers and sends literal commands");
   run("set-option", "-t", "check", "status", "on");
   run("set-option", "-t", "check", "status", "off");
   hidden();
