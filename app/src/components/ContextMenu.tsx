@@ -25,15 +25,16 @@ export function useContextMenu() {
   const [state, setState] = useState<{ x: number; y: number; actions: MenuAction[] } | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
 
-  const open = (e: MouseEvent, actions: MenuAction[]) => {
+  const open = (e: MouseEvent | globalThis.MouseEvent, actions: MenuAction[]) => {
     e.preventDefault();
     e.stopPropagation();
-    // 键盘上的菜单键触发时没有鼠标位置，就弹在元素左下角
+    // 键盘上的菜单键触发时没有鼠标位置，就弹在元素左下角；挂在 document 上的监听拿不到元素，用事件落在的那个
     let { clientX: x, clientY: y } = e;
     if (x === 0 && y === 0) {
-      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      x = r.left + 12;
-      y = r.bottom;
+      const el = e.currentTarget instanceof Element ? e.currentTarget : e.target instanceof Element ? e.target : null;
+      const r = el?.getBoundingClientRect();
+      x = (r?.left ?? 0) + 12;
+      y = r?.bottom ?? 0;
     }
     setState({ x, y, actions });
   };

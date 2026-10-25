@@ -44,6 +44,7 @@ import { useUpdater } from "./components/useUpdater";
 import { UpdateIsland } from "./components/UpdateIsland";
 import { useAgentAlerts } from "./components/useAgentAlerts";
 import { AgentTabTitle } from "./components/Agent";
+import { GlobalContextMenu } from "./components/GlobalContextMenu";
 import { AgentComposer, isMac } from "./components/AgentComposer";
 import { AgentSettingsBar, CLAUDE_EFFORTS, CLAUDE_MODELS, choiceLabel, modeChoices, type AgentSetting } from "./components/AgentSettingsBar";
 import {
@@ -849,6 +850,7 @@ export default function App() {
         </div>
       )}
       <Toaster />
+      <GlobalContextMenu />
     </div>
   );
 }
