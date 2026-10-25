@@ -333,7 +333,7 @@ impl Host {
         }
     }
 
-    /// 回答在线探测：不弹窗、不开终端。配对过的设备能拿到自己的会话列表（只有编号和状态），
+    /// 回答在线探测：不弹窗、不开终端。配对过的设备能拿到自己的会话列表（只有编号、状态和里面 AI 的种类、状态，不带目录和程序），
     /// 没配对过的只回一句“没配对”，对方从这次握手里也就知道在线和延迟
     pub async fn handle_presence(self: Arc<Self>, conn: Connection) {
         let remote = conn.remote_id();

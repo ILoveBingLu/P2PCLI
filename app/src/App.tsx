@@ -41,6 +41,8 @@ import { useConnection } from "./components/useConnection";
 import { useSidebar } from "./components/useSidebar";
 import { useUpdater } from "./components/useUpdater";
 import { UpdateIsland } from "./components/UpdateIsland";
+import { useAgentAlerts } from "./components/useAgentAlerts";
+import { AgentTabTitle } from "./components/Agent";
 import {
   ApproveDialog,
   DiagDialog,
@@ -154,6 +156,22 @@ export default function App() {
   }, [refresh]);
 
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
+  // 远程会话里的 AI 等你确认、干完活时提醒；正看着的那个会话不打扰
+  useAgentAlerts(
+    ov,
+    (endpointId, sessionId) => !showSettings && !sessionTarget &&
+      activeTab?.info.endpoint_id === endpointId && activeTab.sessionId === sessionId,
+    (endpointId, sessionId) => {
+      const tab = tabs.find((t) => t.info.endpoint_id === endpointId && t.sessionId === sessionId && t.state !== "closed");
+      return tab ? () => { setShowSettings(false); setSessionTarget(null); setActiveKey(tab.key); } : null;
+    },
+  );
+  /** 标签对应的会话里跑着的 AI：用后台探测的结果，探测拿不到最新的就不显示 */
+  const tabAgent = (t: Tab) => {
+    const device = ov?.devices.find((d) => d.endpoint_id === t.info.endpoint_id);
+    if (!t.sessionId || !device?.sessions_live) return null;
+    return device.sessions.find((s) => s.id === t.sessionId)?.agent ?? null;
+  };
   // One path snapshot per live connection, shared by the sidebar and status bar.
   const liveConnectionKey = [...new Set([
     ...tabs.filter((tab) => tab.state !== "closed").map((tab) => tab.connId),
@@ -519,7 +537,7 @@ export default function App() {
                               : "off"
                           }
                         />
-                        <span className="truncate">{t.info.name}</span>
+                        <AgentTabTitle name={t.info.name} agent={tabAgent(t)} />
                       </span>
                     </Tabs.Tab>
                   ))}

@@ -6,7 +6,8 @@ import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFoo
 import { toast } from "@/components/ui/toast";
 import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
-import { relativeTime, sessionLabels } from "./sessionText";
+import { AGENT_STATE_TEXT, AgentIcon, AgentStateLabel } from "./Agent";
+import { relativeTime, sessionLabels, sessionTitles } from "./sessionText";
 
 export interface SidebarTab {
   key: number;
@@ -66,19 +67,23 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
 
   const listed = new Set(sessions.map((session) => session.id));
   const labels = sessionLabels(sessions);
+  const titles = sessionTitles(sessions);
   const rows = [...sessions].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id)).map((session) => ({
     id: session.id,
     sessionId: session.id,
     tab: tabs.find((tab) => tab.sessionId === session.id && (tab.state === "open" || tab.state === "opening")),
-    label: labels.get(session.id) ?? "会话",
+    label: titles.get(session.id) ?? "会话",
+    number: labels.get(session.id) ?? "会话",
     status: session.attached ? "已连接" : "后台运行",
+    agent: session.agent ?? null,
   }));
   for (const tab of tabs) {
     if (tab.sessionId && listed.has(tab.sessionId)) continue;
+    const label = tab.sessionId ? `会话 ${tab.sessionId.slice(0, 8)}` : `终端 ${tab.key}`;
     rows.push({
-      id: `tab-${tab.key}`, sessionId: tab.sessionId ?? "", tab,
-      label: tab.sessionId ? `会话 ${tab.sessionId.slice(0, 8)}` : `终端 ${tab.key}`,
+      id: `tab-${tab.key}`, sessionId: tab.sessionId ?? "", tab, label, number: label,
       status: { opening: "打开中", open: "已连接", exited: "已脱离", closed: "已断开" }[tab.state],
+      agent: null,
     });
   }
 
@@ -125,10 +130,13 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
           data-session-row={row.id}
           className="h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
           aria-current={row.tab?.key === activeKey ? "true" : undefined}
+          title={row.agent ? `${row.number} · ${row.agent.name} ${AGENT_STATE_TEXT[row.agent.state]} · ${row.status}` : undefined}
           onClick={() => openRow(row)}>
-          <Terminal className="size-3.5 shrink-0" />
+          {row.agent ? <AgentIcon kind={row.agent.kind} className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
           <span className="min-w-0 flex-1 truncate text-left">{row.label}</span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">{row.status}</span>
+          {row.agent
+            ? <AgentStateLabel agent={row.agent} className="shrink-0 text-[10px]" />
+            : <span className="shrink-0 text-[10px] text-muted-foreground">{row.status}</span>}
         </Button>
       ))}
       {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
@@ -160,7 +168,7 @@ function OfflineSessions({ status, busy, onConnectOpen, openMenu }: {
   openMenu: (e: MouseEvent, actions: MenuAction[]) => void;
 }) {
   const sessions = [...(status?.sessions ?? [])].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id));
-  const labels = sessionLabels(sessions);
+  const titles = sessionTitles(sessions);
   const stale = !status?.sessions_live;
   const offline = status?.state === "offline";
   const hint = sessions.length
@@ -184,9 +192,11 @@ function OfflineSessions({ status, busy, onConnectOpen, openMenu }: {
           disabled={busy || offline}
           title={offline ? "设备离线" : "连接并打开这个会话"}
           onClick={() => onConnectOpen(s.id)}>
-          <Terminal className="size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-left">{labels.get(s.id) ?? "会话"}</span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">{s.attached ? "在用" : "后台运行"}</span>
+          {s.agent ? <AgentIcon kind={s.agent.kind} className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
+          <span className="min-w-0 flex-1 truncate text-left">{titles.get(s.id) ?? "会话"}</span>
+          {s.agent && !stale && !offline
+            ? <AgentStateLabel agent={s.agent} className="shrink-0 text-[10px]" />
+            : <span className="shrink-0 text-[10px] text-muted-foreground">{s.attached ? "在用" : "后台运行"}</span>}
         </Button>
       ))}
     </div>

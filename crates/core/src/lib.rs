@@ -3,6 +3,7 @@
 //! 连接层是 iroh：QUIC 加密直连，IPv6 优先、IPv4 打洞，打不通走中继。
 //! 桌面端（Tauri）和开发用命令行都只调这里的接口。
 
+pub mod agents;
 pub mod client;
 pub mod control;
 pub mod diag;

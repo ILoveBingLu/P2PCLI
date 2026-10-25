@@ -94,6 +94,10 @@ pub struct TerminalSession {
     /// 可选扩展：旧版本设备只返回前三个字段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<TerminalDetails>,
+    /// 会话里跑着的命令行 AI 和它的状态；没认出来或旧版本设备没有这项。
+    /// 在线探测也带着它（只有程序种类和状态），后台的会话也能提醒
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::agents::AgentInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -41,13 +41,16 @@ const format = JSON.parse(source.match(/const SESSION_FORMAT: &str = ("[^"\r\n]*
 const healthFormat = JSON.parse(source.match(/const HEALTH_FORMAT: &str = ("[^"\r\n]*");/)[1]);
 function details() {
   const values = run("list-sessions", "-F", format).split("\t");
-  assert.equal(values.length, 9);
-  const [name, created, attached, status, index, window, count, command, cwd] = values;
+  assert(values.length >= 11, `expected 11 fields, got ${values.length}`);
+  const [name, created, attached, status, index, window, count, command, cwd, panePid, ...title] = values;
   assert.equal(name, "check");
   assert(Number(created) > 0);
   assert(Number(attached) >= 0);
   assert.match(status, /^(off|0)$/);
-  return { index: Number(index), window, count: Number(count), command, cwd };
+  // 认会话里的命令行 AI 要用：会话 shell 的进程号和会话标题
+  assert(Number(panePid) > 0, `Invalid pane PID: ${panePid}`);
+  assert(!title.join("\t").includes("#{"), "pane_title is not supported");
+  return { index: Number(index), window, count: Number(count), command, cwd, panePid: Number(panePid), title: title.join("\t") };
 }
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function eventually(check) {
@@ -92,6 +95,10 @@ try {
   run("send-keys", "-t", "check", "C-c");
   await eventually(() => assert.match(details().command.toLowerCase(), windows ? /powershell/ : /sh/));
   console.log("PASS: foreground program updates and recovers");
+  // 判断 AI 状态要读会话屏幕
+  run("send-keys", "-t", "check", windows ? "Write-Output capture-probe-42" : "echo capture-probe-42", "Enter");
+  await eventually(() => assert.match(run("capture-pane", "-p", "-t", "check"), /capture-probe-42/));
+  console.log("PASS: pane PID, title and screen capture are available for AI detection");
   run("set-option", "-t", "check", "status", "on");
   run("set-option", "-t", "check", "status", "off");
   hidden();

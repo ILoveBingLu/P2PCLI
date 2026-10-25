@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { CircleAlert, Folder, Layers, SquareTerminal } from "lucide-react";
 import { api, pathLabel, type PathInfo, type RemoteInfo, type TerminalSession } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
+import { AGENT_STATE_TEXT, AgentIcon, AgentStateLabel } from "./Agent";
 import { sessionLabels } from "./sessionText";
 
 function Detail({ tip, children, className = "" }: { tip: string; children: ReactNode; className?: string }) {
@@ -42,6 +43,7 @@ export function TerminalStatusbar({ connId, sessionId, info, state, path, visibl
   }, [connId, sessionId, state, visible]);
 
   const details = snapshot?.session.details;
+  const agent = snapshot?.session.agent;
   const stateText = { opening: "打开中", open: "已连接", exited: "已脱离", closed: "已断开" }[state];
   const windowText = details?.window_name
     ? `${details.window_index == null ? "" : `${details.window_index}: `}${details.window_name}`
@@ -61,7 +63,11 @@ export function TerminalStatusbar({ connId, sessionId, info, state, path, visibl
       {windowText && <Detail tip={details?.window_count ? `当前窗口 · 共 ${details.window_count} 个窗口` : "当前窗口"} className="terminal-status-window">
         <Layers /><span className="truncate">{windowText}</span>
       </Detail>}
-      {details?.command && details.command !== details.window_name && <Detail tip="当前程序" className="terminal-status-command">
+      {/* 认出是命令行 AI 就显示它和它的状态；Claude Code 的程序名是版本号，直接显示看不懂 */}
+      {agent ? <Detail tip={`${agent.name} · ${AGENT_STATE_TEXT[agent.state]}`} className="terminal-status-command">
+        <AgentIcon kind={agent.kind} /><span className="truncate">{agent.name}</span>
+        <AgentStateLabel agent={agent} />
+      </Detail> : details?.command && details.command !== details.window_name && <Detail tip="当前程序" className="terminal-status-command">
         <span className="truncate">{details.command}</span>
       </Detail>}
       <div className="terminal-status-path">

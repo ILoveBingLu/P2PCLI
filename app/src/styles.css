@@ -1462,3 +1462,59 @@
     animation: none;
   }
 }
+
+/* 命令行 AI 的图标和状态：干活中蓝色、圆点呼吸，等你确认黄色，空闲灰色 */
+.agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.agent-icon > svg {
+  width: 100%;
+  height: 100%;
+}
+.agent-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.agent-state-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: currentColor;
+}
+.agent-state[data-state="working"] {
+  color: var(--accent);
+}
+.agent-state[data-state="working"] .agent-state-dot,
+.agent-tab-state[data-state="working"] {
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+.agent-state[data-state="waiting"] {
+  color: var(--warning);
+}
+@keyframes agent-pulse {
+  0%, 100% { opacity: 1; scale: 1; }
+  50% { opacity: 0.35; scale: 0.7; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-state[data-state="working"] .agent-state-dot,
+  .agent-tab-state[data-state="working"] {
+    animation: none;
+  }
+}
+/* 标签上 AI 干活或等你时，名字后面一个小点 */
+.agent-tab-state {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.agent-tab-state[data-state="waiting"] {
+  background: var(--warning);
+}

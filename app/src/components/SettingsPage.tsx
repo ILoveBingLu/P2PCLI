@@ -369,7 +369,7 @@ export function SettingsPage({
                 )}
                 <h3 className="mt-8 mb-1 text-sm font-medium">配对过的设备（{ov.paired.length}）</h3>
                 <p className="detail-note mb-4">
-                  你同意过一次的设备。它们能在后台看到本机在不在线、延迟多少，以及它自己开在本机上的会话（只有编号和状态，看不到目录和程序）。打开终端照常要配对密码和你的同意，受信设备除外。移除后就看不到了，下次你再同意它连接时会重新加进来。
+                  你同意过一次的设备。它们能在后台看到本机在不在线、延迟多少，以及它自己开在本机上的会话（只有编号、状态，和里面的 AI 在干活还是在等它，看不到目录、程序和屏幕内容）。打开终端照常要配对密码和你的同意，受信设备除外。移除后就看不到了，下次你再同意它连接时会重新加进来。
                 </p>
                 {ov.paired.length === 0 ? (
                   <p className="text-xs text-muted-foreground">暂无配对过的设备。</p>

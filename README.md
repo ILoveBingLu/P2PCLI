@@ -6,6 +6,7 @@
 - 像远程桌面软件一样配对：9 位设备码 + 6 位配对密码（可以固定，重启也不变），密码对了还要被连方在弹窗里点允许
 - 终端嵌在软件里：支持多标签切换，终端占满主工作区
 - 设备之间直接传文件：拖进终端、右键发送，或者在终端里用 `p2pcli send`，命令行 AI 也能用
+- 认得会话里跑的命令行 AI：显示是哪个 AI、在干活还是在等你确认，等你确认或干完活时提醒你
 - Tauri 2 + React + xterm.js，安装包仅携带当前平台和架构的会话组件
 
 ## 下载和安装
@@ -52,6 +53,16 @@ p2pcli send 设备名 报告.pdf 项目目录   # 发文件或文件夹；设备
 p2pcli inbox                         # 看最近收到的文件
 p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失败时退出码不是 0
 ```
+
+## 认会话里的 AI
+
+远程会话里跑着命令行 AI 时，侧边栏、终端标签和底部状态栏会显示它的图标和状态：干活中、等你确认、空闲。它停下来等你批准操作，或者干完活时，P2PCLI 会提醒你：窗口在后台发系统通知，在前台但没在看那个会话就弹提示，点“查看”切过去；正看着那个会话就不打扰。
+
+- 认得：Claude Code、Codex、Gemini CLI、OpenCode、Cursor Agent、Copilot CLI、Qwen Code、Kimi CLI、CodeBuddy、Qoder CLI、iFlow CLI、Kiro CLI、Trae CLI、Amp、Aider、Crush、Droid、Goose、Auggie。被连的电脑顺着会话的进程往下找，看程序名和完整命令行（Node、Python 写的 AI 程序名是 node、python，要看脚本路径），新出的在 `crates/core/src/agents.rs` 的表里加一行
+- 状态：读会话标题和屏幕最后几十行判断，比如屏幕底部有编号选项和“Enter to confirm”就是在等你，有“✻ Cogitating…”或“esc to interrupt”就是在干活。屏幕内容只在被连的电脑上判断用，不发出去；对方只收到是哪个 AI 和它的状态
+- 各家改了界面文字时状态可能判断不准，规则也在 `agents.rs`，测试里放着真实截下来的屏幕
+- 两边都要是 0.1.4 以上的版本；连着的设备每 4 秒更新一次状态
+- 图标来自 [Lobe Icons](https://github.com/lobehub/lobe-icons)（MIT），见 `app/src/assets/agents/LICENSE`
 
 ## 原理
 

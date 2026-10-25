@@ -76,9 +76,26 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false },
   { id: "b".repeat(32), created_at: now - 40 * 60, attached: true },
   { id: "c".repeat(32), created_at: now - 90, attached: false },
+] : s === "agents" ? [
+  // s=agents：会话里跑着几种命令行 AI，最后一个是普通终端
+  { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false, agent: { kind: "claude", name: "Claude Code", state: "working" } },
+  { id: "b".repeat(32), created_at: now - 40 * 60, attached: true, agent: { kind: "codex", name: "Codex", state: "waiting" } },
+  { id: "c".repeat(32), created_at: now - 20 * 60, attached: false, agent: { kind: "gemini", name: "Gemini CLI", state: "idle" } },
+  { id: "d".repeat(32), created_at: now - 90, attached: false },
 ] : [];
 // 工作室 Mac mini 的后台探测结果用同一份会话，连上前后编号对得上
 ov.devices[0].sessions = terminalSessions.map((session) => ({ ...session }));
+// s=agents：Claude Code 过一会儿停下来等确认，再过一会儿干完，看提醒
+if (s === "agents") {
+  const claude = terminalSessions[0];
+  const step = (state: "waiting" | "idle", at: number) => window.setTimeout(() => {
+    claude.agent = { ...claude.agent!, state };
+    ov.devices[0].sessions = terminalSessions.map((session) => ({ ...session }));
+    void emit("server-status", {});
+  }, at);
+  step("waiting", 4000);
+  step("idle", 9000);
+}
 const attachments = new Map<number, { sessionId: string; status: any }>();
 
 // 传文件：s=transfers 一开始就有几条在传、传完、失败的；发文件时模拟进度
@@ -132,7 +149,11 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "overview":
-        return ov;
+        // s=agents 会改设备状态，返回新对象界面才会重画
+        return s === "agents" ? { ...ov, devices: ov.devices.map((d) => ({ ...d })) } : ov;
+      case "notify":
+        console.info("系统通知", args.title, args.body);
+        return null;
       case "scan_nearby":
         return new Promise((resolve, reject) => setTimeout(() => {
           if (s === "lan-scan-error") return reject("局域网扫描启动失败");

@@ -6,6 +6,18 @@ export function sessionLabels(sessions: TerminalSession[]): Map<string, string> 
   return new Map(ordered.map((s, i) => [s.id, `会话 ${i + 1}`]));
 }
 
+/** 侧边栏、标签、状态栏上显示的会话名：跑着 AI 的用 AI 的名字；同一台设备上有两个同样的 AI，后面带上会话编号 */
+export function sessionTitles(sessions: TerminalSession[]): Map<string, string> {
+  const labels = sessionLabels(sessions);
+  const counts = new Map<string, number>();
+  for (const s of sessions) if (s.agent) counts.set(s.agent.name, (counts.get(s.agent.name) ?? 0) + 1);
+  return new Map(sessions.map((s) => {
+    const label = labels.get(s.id) ?? "会话";
+    if (!s.agent) return [s.id, label];
+    return [s.id, (counts.get(s.agent.name) ?? 0) > 1 ? `${s.agent.name} · ${label}` : s.agent.name];
+  }));
+}
+
 /** 刚刚、3 分钟前、2 小时前、昨天 19:30、10月20日 */
 export function relativeTime(secs: number | null | undefined): string {
   if (!secs) return "";

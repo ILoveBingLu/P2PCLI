@@ -358,6 +358,56 @@ async fn persistent_session_survives_disconnect_and_host_restart() {
     restarted.shutdown().await;
 }
 
+/// 会话里跑命令行 AI：终端连接的会话列表和在线探测都要认出是 Claude Code，状态跟着屏幕变。
+/// 用一个改名叫 claude 的小脚本假装 AI，依次显示干活、等确认、空闲三种屏幕。要真的起 tmux，所以默认不跑
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux on macOS/Linux"]
+async fn agent_in_session_is_recognized_with_its_state() {
+    use p2pcli_core::agents::AgentState;
+
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig {
+        data_dir: temp_dir("agent-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("agent-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let (mut input, output) = remote.open_terminal(100, 30).await.unwrap();
+    let id = output.session_id.clone();
+    let script = "printf '\\033[2J\\033[H✻ Pondering… (2s)\\n'; sleep 6; \
+        printf '\\033[2J\\033[HDo you want to proceed?\\n❯ 1. Yes\\n  2. No\\nEsc to cancel\\n'; sleep 6; \
+        printf '\\033[2J\\033[H✻ Worked for 3s\\n❯ \\n'; sleep 60";
+    input.write(format!("(exec -a claude sh -c \"{script}\")\r").as_bytes()).await.unwrap();
+
+    // 等会话列表里这个会话的 AI 变成想要的状态；顺带确认在线探测也带着同样的信息
+    let conn = p2pcli_core::presence::connect(&guest.endpoint, local_addr(&host)).await.unwrap();
+    for want in [AgentState::Working, AgentState::Waiting, AgentState::Idle] {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let sessions = remote.list_terminals().await.unwrap();
+                let agent = sessions.iter().find(|s| s.id == id).and_then(|s| s.agent.clone());
+                if let Some(agent) = agent && agent.state == want {
+                    assert_eq!((agent.kind.as_str(), agent.name.as_str()), ("claude", "Claude Code"));
+                    let probed = p2pcli_core::presence::ask_sessions(&conn).await.unwrap().unwrap();
+                    let probed = probed.iter().find(|s| s.id == id).unwrap();
+                    assert!(probed.details.is_none(), "探测不该带目录和程序");
+                    assert_eq!(probed.agent.as_ref().map(|a| a.kind.as_str()), Some("claude"), "探测要带上 AI 的种类");
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }).await.unwrap_or_else(|_| panic!("会话里的 AI 没有变成 {want:?}"));
+    }
+    remote.end_terminal(id).await.unwrap();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
 /// 在线探测：配对过的能拿会话列表；没配对的只知道在线和延迟；旧版本认得出来，不当成离线；对方关了 ping 就不通
 #[tokio::test(flavor = "multi_thread")]
 async fn presence_probe_paired_unpaired_and_old_version() {

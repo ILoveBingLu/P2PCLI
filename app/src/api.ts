@@ -26,6 +26,17 @@ export interface TerminalSession {
     command: string | null;
     current_path: string | null;
   } | null;
+  /** 会话里跑着的命令行 AI；没认出来、或者对方是旧版本时没有 */
+  agent?: AgentInfo | null;
+}
+
+/** AI 在干什么：干活中、等你确认、空闲 */
+export type AgentState = "working" | "waiting" | "idle";
+export interface AgentInfo {
+  /** claude、codex 这种稳定标识，按它配图标 */
+  kind: string;
+  name: string;
+  state: AgentState;
 }
 
 export interface OpenedTerminal { term_id: number; session_id: string }
@@ -228,6 +239,8 @@ export const api = {
   setPasswordFixed: (fixed: boolean) => invoke("set_password_fixed", { fixed }),
   removePaired: (endpointId: string) => invoke("remove_paired", { endpointId }),
   refreshDevices: () => invoke("refresh_devices"),
+  /** 发一条系统通知 */
+  notify: (title: string, body: string) => invoke("notify", { title, body }),
   checkUpdate: () => invoke<UpdateView | null>("check_update"),
   /** 下载、安装并重启；成功时软件会直接重启，不会返回 */
   installUpdate: (onProgress: (p: UpdateProgress) => void) => {

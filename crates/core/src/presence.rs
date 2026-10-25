@@ -1,5 +1,5 @@
 //! 在线探测：连接历史里的设备，一打开软件就能看到在不在线、走哪条路、延迟多少；
-//! 对方同意过一次的（配对过的），还能在后台拿到会话列表（只有编号和状态），不用先点连接。
+//! 对方同意过一次的（配对过的），还能在后台拿到会话列表（只有编号、状态和里面跑的是哪个 AI、在不在干活），不用先点连接。
 //!
 //! 走单独的协议号，和终端连接分开：被连方不弹窗、不记成一次连接。
 //! 探测连接留着复用，下次不用重新握手，打洞找到的直连线路也一直热着，真要开终端时连得更快。
@@ -29,6 +29,8 @@ use crate::store::{RecentStore, now_secs};
 const PROBE_EVERY: Duration = Duration::from_secs(10);
 /// 连着的设备多久 ping 一次，延迟跟着刷新
 const PING_EVERY: Duration = Duration::from_secs(2);
+/// 连着、配对过的设备每隔几次 ping 顺带问一次会话列表：会话里 AI 的状态变了要尽快知道
+const SESSIONS_EVERY_PINGS: u64 = 2;
 const PING_TIMEOUT: Duration = Duration::from_secs(2);
 /// ping 连续失败几次就当离线
 const PING_FAILS_OFFLINE: u32 = 2;
@@ -149,7 +151,7 @@ struct Seen {
     sessions: Option<(Vec<TerminalSession>, u64)>,
 }
 
-/// 连接方的后台探测：每 10 秒把连接历史里的设备都探一遍，连着的每 2 秒 ping 一次
+/// 连接方的后台探测：每 10 秒把连接历史里的设备都探一遍，连着的每 2 秒 ping 一次、每 4 秒问一次会话列表
 pub struct Prober {
     endpoint: Endpoint,
     rdv: Option<Arc<RdvClient>>,
@@ -196,9 +198,9 @@ impl Prober {
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(PING_EVERY);
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                loop {
+                for round in 0u64.. {
                     tick.tick().await;
-                    this.ping_all().await;
+                    this.ping_all(round % SESSIONS_EVERY_PINGS == 0).await;
                 }
             })
             .abort_handle(),
@@ -211,17 +213,21 @@ impl Prober {
         }
     }
 
-    /// 给每条连着的探测连接 ping 一次；连不上了就马上标成离线，不等下一轮完整探测
-    async fn ping_all(&self) {
+    /// 给每条连着的探测连接 ping 一次；连不上了就马上标成离线，不等下一轮完整探测。
+    /// with_sessions 时，ping 通的配对设备再问一次会话列表
+    async fn ping_all(&self, with_sessions: bool) {
         let conns: Vec<(EndpointId, Connection)> =
             self.conns.lock().unwrap().iter().map(|(id, c)| (*id, c.clone())).collect();
         join_all(conns.into_iter().map(|(id, conn)| async move {
             let ok = conn.close_reason().is_none() && ping(&conn).await.is_ok();
-            let mut fails = self.fails.lock().unwrap();
             if ok {
-                fails.remove(&id);
+                self.fails.lock().unwrap().remove(&id);
+                if with_sessions {
+                    self.refresh_sessions(id, &conn).await;
+                }
                 return;
             }
+            let mut fails = self.fails.lock().unwrap();
             let n = fails.entry(id).or_default();
             *n += 1;
             if conn.close_reason().is_some() || *n >= PING_FAILS_OFFLINE {
@@ -234,6 +240,20 @@ impl Prober {
             }
         }))
         .await;
+    }
+
+    /// 只更新会话列表，在线状态和线路留给 ping 和完整探测
+    async fn refresh_sessions(&self, id: EndpointId, conn: &Connection) {
+        let key = id.to_string();
+        let paired = self.seen.lock().unwrap().get(&key).is_some_and(|s| s.state == PresenceState::Online && s.paired == Some(true));
+        if !paired {
+            return;
+        }
+        if let Ok(Some(list)) = ask_sessions(conn).await
+            && let Some(seen) = self.seen.lock().unwrap().get_mut(&key)
+        {
+            seen.sessions = Some((list, now_secs()));
+        }
     }
 
     /// 马上探一轮，比如刚连过、刚删过历史

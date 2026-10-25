@@ -416,6 +416,12 @@ async fn pick_paths(app: AppHandle, folders: bool) -> Result<Vec<String>, String
     Ok(picked.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect())
 }
 
+/// 前端要发的系统通知，比如远程会话里的 AI 停下来等你确认
+#[tauri::command]
+fn notify(app: AppHandle, title: String, body: String) {
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
 /// 在访达或资源管理器里选中这个文件；只是显示位置，不打开它
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
@@ -1032,6 +1038,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             overview,
+            notify,
             scan_nearby,
             diagnose,
             show_logs,
