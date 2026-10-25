@@ -156,7 +156,7 @@ export const api = {
 
 export function formatCode(code: string | null | undefined): string {
   if (!code || code.length !== 9) return code ?? "";
-  return `${code.slice(0, 3)} ${code.slice(3, 6)} ${code.slice(6)}`;
+  return `${code.slice(0, 3)} - ${code.slice(3, 6)} - ${code.slice(6)}`;
 }
 
 export function platformLabel(p: string): string {
