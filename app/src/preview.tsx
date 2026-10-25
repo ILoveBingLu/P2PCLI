@@ -85,6 +85,9 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "b".repeat(32), created_at: now - 40 * 60, attached: true, agent: { kind: "codex", name: "Codex", state: "waiting",
     quota: { at: now - 30, windows: [{ minutes: 300, used_percent: 92, resets_at: now + 3600 }, { minutes: 10080, used_percent: 41, resets_at: now + 5 * 86400 }] } } },
   { id: "c".repeat(32), created_at: now - 20 * 60, attached: false, agent: { kind: "gemini", name: "Gemini CLI", state: "idle" } },
+  { id: "e".repeat(32), created_at: now - 10 * 60, attached: false, agent: { kind: "zcode", name: "ZCode", state: "idle",
+    settings: { model: "bigmodel/GLM-5.3-Flash", effort: "max", mode: "build", efforts: ["low", "high", "max"],
+      models: [{ id: "bigmodel/GLM-5.3", name: "GLM-5.3" }, { id: "bigmodel/GLM-5.3-Flash", name: "GLM-5.3-Flash" }, { id: "zai/glm-5.2", name: "GLM-5.2" }] } } },
   { id: "d".repeat(32), created_at: now - 90, attached: false },
 ] : [];
 // 工作室 Mac mini 的后台探测结果用同一份会话，连上前后编号对得上
@@ -102,19 +105,21 @@ if (s === "agents") {
 }
 const attachments = new Map<number, { sessionId: string; status: any }>();
 
-// s=agents：Claude Code 收到 /model、/effort 和 Shift+Tab 时像真的一样改设置；Shift+Tab 的顺序照本机 Claude Code 2.1.310
+// s=agents：Claude Code、ZCode 收到 /model、/effort 和 Shift+Tab 时像真的一样改设置；Shift+Tab 的顺序照本机真实的
 const fakeModels: Record<string, string> = { opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5", fable: "Fable 5.1" };
-const fakeModeCycle = ["default", "acceptEdits", "plan", "auto"];
+const fakeModeCycle: Record<string, string[]> = { claude: ["default", "acceptEdits", "plan", "auto"], zcode: ["build", "edit", "yolo", "plan"] };
 function fakeAgentInput(termId: number, data: string) {
   const session = terminalSessions.find((x) => x.id === attachments.get(termId)?.sessionId);
   const agent = session?.agent;
-  if (agent?.kind !== "claude" || !agent.settings) return;
+  if (!agent?.settings || !fakeModeCycle[agent.kind]) return;
   const settings = { ...agent.settings };
-  const model = /\/model (\w+)/.exec(data)?.[1];
+  const model = /\/model (\S+?)(?:\x1b|$)/.exec(data)?.[1];
   const effort = /\/effort (\w+)/.exec(data)?.[1];
-  if (model && fakeModels[model]) settings.model = fakeModels[model];
+  if (model && agent.kind === "claude" && fakeModels[model]) settings.model = fakeModels[model];
+  if (model && agent.kind === "zcode" && settings.models?.some((m) => m.id === model)) settings.model = model;
   if (effort) settings.effort = effort;
-  for (const _ of data.match(/\x1b\[Z/g) ?? []) settings.mode = fakeModeCycle[(fakeModeCycle.indexOf(settings.mode ?? "") + 1) % fakeModeCycle.length];
+  const cycle = fakeModeCycle[agent.kind];
+  for (const _ of data.match(/\x1b\[Z/g) ?? []) settings.mode = cycle[(cycle.indexOf(settings.mode ?? "") + 1) % cycle.length];
   session!.agent = { ...agent, settings };
   ov.devices[0].sessions = terminalSessions.map((x) => ({ ...x }));
 }

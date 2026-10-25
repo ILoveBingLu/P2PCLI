@@ -1,6 +1,6 @@
 这个目录里的命令行 AI 图标取自 Lobe Icons（@lobehub/icons-static-svg 1.100.0，https://github.com/lobehub/lobe-icons），
-按 AI 的标识重新命名。软件只有深色主题、图标按图片显示，所以把 cursor、copilot、opencode、goose、qoder、kimi
-里跟随文字颜色的 currentColor 改成了浅灰色 #F5F5F7，其余没有改动。各品牌图标的商标归各自所有者。
+按 AI 的标识重新命名（zcode 用的是 zai）。软件只有深色主题、图标按图片显示，所以把 cursor、copilot、opencode、goose、qoder、kimi、
+zcode 里跟随文字颜色的 currentColor 改成了浅灰色 #F5F5F7，其余没有改动。各品牌图标的商标归各自所有者。
 
 MIT License
 

@@ -48,7 +48,7 @@ import { UpdateIsland } from "./components/UpdateIsland";
 import { useAgentAlerts } from "./components/useAgentAlerts";
 import { AgentTabTitle } from "./components/Agent";
 import { AgentComposer, isMac } from "./components/AgentComposer";
-import { AgentSettingsBar, CLAUDE_EFFORTS, CLAUDE_MODELS, CLAUDE_MODES, choiceLabel, type AgentSetting } from "./components/AgentSettingsBar";
+import { AgentSettingsBar, CLAUDE_EFFORTS, CLAUDE_MODELS, choiceLabel, modeChoices, type AgentSetting } from "./components/AgentSettingsBar";
 import {
   ApproveDialog,
   DiagDialog,
@@ -200,10 +200,12 @@ export default function App() {
   };
   /** 正在切 AI 设置的标签和哪一项；切的时候按钮转圈，不让再点 */
   const [switching, setSwitching] = useState<{ tabKey: number; what: AgentSetting } | null>(null);
-  /** 切模型、强度、权限模式，照用户自己在终端里的做法：/model、/effort 命令，权限模式只能 Shift+Tab 轮换。
+  /** 切模型、强度、权限模式，照用户自己在终端里的做法：/model、/effort 命令；权限模式按 Shift+Tab 轮换
+   *  （Claude Code 只能这样切，ZCode 也支持，而且干活的时候也能切）。
    *  切完马上重新拉一次会话列表核对，不等下一轮刷新；到点没变就说一声，让用户看终端里的提示 */
   const switchAgent = async (tab: Tab, what: AgentSetting, id: string) => {
     const handle = termHandles.current.get(tab.key);
+    const kind = tabAgent(tab)?.kind ?? "";
     if (!handle || !tab.sessionId || switching) return;
     const read = async () => {
       const sessions = await api.listTerminals(tab.connId);
@@ -222,7 +224,7 @@ export default function App() {
     setSwitching({ tabKey: tab.key, what });
     try {
       if (what === "mode") {
-        const label = choiceLabel(CLAUDE_MODES, id);
+        const label = choiceLabel(modeChoices(kind), id);
         let mode = tabAgent(tab)?.settings?.mode ?? null;
         const start = mode;
         // 轮一圈最多五档；每按一下等它真变了再按下一下，回到起点说明这一档这次启动没开
@@ -235,16 +237,19 @@ export default function App() {
         if (mode !== id)
           toast.notice(`切不到${label}`, {
             warning: true,
-            description: id === "bypassPermissions" ? "启动 Claude Code 时没加 --dangerously-skip-permissions，这一档不在轮换里" : "终端里看看现在是什么情况",
+            description: kind === "claude" && id === "bypassPermissions" ? "启动 Claude Code 时没加 --dangerously-skip-permissions，这一档不在轮换里" : "终端里看看现在是什么情况",
           });
       } else {
         handle.paste(`/${what} ${id}`);
         window.setTimeout(() => handle.enter(), 80);
-        const done = (s: AgentSettings | null) => what === "model" ? !!s?.model?.toLowerCase().startsWith(id) : s?.effort === id;
+        // Claude Code 切完显示“Opus 5.5”，按别名开头对；ZCode 显示的就是“提供方/模型”
+        const model = (m: string | null | undefined) => (kind === "claude" ? !!m?.toLowerCase().startsWith(id) : m?.toLowerCase() === id.toLowerCase());
+        const done = (s: AgentSettings | null) => (what === "model" ? model(s?.model) : s?.effort === id);
         if (!(await until(done, 4000))) {
-          toast.notice(what === "model" ? `没切到 ${choiceLabel(CLAUDE_MODELS, id)}` : `思考强度没切到${choiceLabel(CLAUDE_EFFORTS, id)}`, {
+          const name = tabAgent(tab)?.name ?? "AI";
+          toast.notice(what === "model" ? `没切到 ${choiceLabel(CLAUDE_MODELS, id)?.split("/").pop()}` : `思考强度没切到${choiceLabel(CLAUDE_EFFORTS, id)}`, {
             warning: true,
-            description: "终端里看看 Claude Code 的提示，可能这个账号或模型不支持",
+            description: `终端里看看 ${name} 的提示，可能这个账号或模型不支持`,
           });
           handle.focus();
         }

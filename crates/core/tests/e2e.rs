@@ -408,6 +408,51 @@ async fn agent_in_session_is_recognized_with_its_state() {
     host.shutdown().await;
 }
 
+/// 隔一会儿读一次 AI 的设置，直到满足条件；20 秒还不满足就算失败
+#[cfg(not(windows))]
+async fn wait_for(
+    what: &str,
+    read: impl AsyncFn() -> p2pcli_core::agents::AgentSettings,
+    ok: impl Fn(&p2pcli_core::agents::AgentSettings) -> bool,
+) -> p2pcli_core::agents::AgentSettings {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let s = read().await;
+            if ok(&s) {
+                return s;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }).await.unwrap_or_else(|_| panic!("等不到{what}"))
+}
+
+/// 输入框的发法：整段粘贴，再补一个回车
+#[cfg(not(windows))]
+async fn send_command(input: &mut p2pcli_core::client::TermInput, command: &str) {
+    input.write(format!("\x1b[200~{command}\x1b[201~").as_bytes()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    input.write(b"\r").await.unwrap();
+}
+
+/// 权限模式按 Shift+Tab 轮换，照界面的做法：每按一下核对一次，到了就停。返回一路看到的模式
+#[cfg(not(windows))]
+async fn cycle_mode(
+    input: &mut p2pcli_core::client::TermInput,
+    read: impl AsyncFn() -> p2pcli_core::agents::AgentSettings,
+    from: String,
+    to: &str,
+) -> Vec<String> {
+    let mut seen = vec![from];
+    while seen.last().map(String::as_str) != Some(to) {
+        assert!(seen.len() < 7, "转了一圈也没到 {to}：{seen:?}");
+        input.write(b"\x1b[Z").await.unwrap();
+        let before = seen.last().cloned();
+        let s = wait_for("权限模式变化", &read, |s| s.mode.is_some() && s.mode != before).await;
+        seen.push(s.mode.unwrap());
+    }
+    seen
+}
+
 /// 真的跑一个 Claude Code：会话列表里要读出它的模型、思考强度和权限模式，照输入框的做法切换后跟着变。
 /// /model、/effort 会写进 Claude Code 的配置当新会话的默认值，所以必须用临时配置目录（CLAUDE_CONFIG_DIR）和假的 API key，
 /// 不碰自己的 ~/.claude 和登录；切这几样不调接口，假 key 就够了。要真的起 tmux 和 Claude Code，所以默认不跑：
@@ -416,7 +461,6 @@ async fn agent_in_session_is_recognized_with_its_state() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires tmux and Claude Code"]
 async fn claude_settings_are_read_and_switched() {
-    use p2pcli_core::agents::AgentSettings;
 
     let claude = std::env::var("P2PCLI_TEST_CLAUDE").expect("P2PCLI_TEST_CLAUDE 要指向 claude 程序");
     let config = std::path::PathBuf::from(std::env::var("CLAUDE_CONFIG_DIR").expect("CLAUDE_CONFIG_DIR 要设成临时目录"));
@@ -454,46 +498,91 @@ async fn claude_settings_are_read_and_switched() {
             sessions.into_iter().find(|s| &s.id == id).and_then(|s| s.agent).and_then(|a| a.settings).unwrap_or_default()
         }
     };
-    async fn wait_for(what: &str, read: impl AsyncFn() -> AgentSettings, ok: impl Fn(&AgentSettings) -> bool) -> AgentSettings {
-        tokio::time::timeout(Duration::from_secs(20), async {
-            loop {
-                let s = read().await;
-                if ok(&s) {
-                    return s;
-                }
-                tokio::time::sleep(Duration::from_millis(300)).await;
-            }
-        }).await.unwrap_or_else(|_| panic!("等不到{what}"))
-    }
     // 刚开的会话还没有对话记录，模型和强度从横幅和底栏读
     let first = wait_for("开头的模型、强度和权限模式", &settings, |s| s.model.is_some() && s.effort.is_some() && s.mode.is_some()).await;
     assert_eq!(first.mode.as_deref(), Some("default"), "新配置默认是手动确认：{first:?}");
     eprintln!("刚开：{first:?}");
 
-    // 输入框的发法：整段粘贴，再补一个回车
     for (command, what) in [("/model sonnet", "换成 Sonnet"), ("/effort high", "强度变成 high")] {
-        input.write(format!("\x1b[200~{command}\x1b[201~").as_bytes()).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        input.write(b"\r").await.unwrap();
+        send_command(&mut input, command).await;
         let s = wait_for(what, &settings, |s| match command {
             "/model sonnet" => s.model.as_deref().is_some_and(|m| m.starts_with("Sonnet")),
             _ => s.effort.as_deref() == Some("high"),
         }).await;
         eprintln!("{command} 之后：{s:?}");
     }
-    // 权限模式只能 Shift+Tab 轮换：每按一下核对一次，到了就停
-    let mut seen = vec![first.mode.clone().unwrap()];
-    while seen.last().map(String::as_str) != Some("plan") {
-        assert!(seen.len() < 6, "转了一圈也没到计划模式：{seen:?}");
-        input.write(b"\x1b[Z").await.unwrap();
-        let before = seen.last().cloned();
-        let s = wait_for("权限模式变化", &settings, |s| s.mode.is_some() && s.mode != before).await;
-        seen.push(s.mode.unwrap());
-    }
+    // 权限模式只能 Shift+Tab 轮换
+    let seen = cycle_mode(&mut input, &settings, first.mode.clone().unwrap(), "plan").await;
     assert_eq!(seen, ["default", "acceptEdits", "plan"]);
     // 切的结果确实落在临时配置里，没碰到自己的
     let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(config.join("settings.json")).unwrap()).unwrap();
     assert_eq!(saved["model"], "sonnet");
+
+    remote.end_terminal(id).await.unwrap();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
+/// 真的跑一个 ZCode（zcode-app-cli）：读状态栏里的模型、强度、权限模式，照输入框的做法切换。
+/// ZCode 把强度记成用户默认、权限模式记成目录默认，所以用临时 HOME 和假 key；切这几样不调接口。默认不跑：
+/// P2PCLI_TEST_SESSION_PROGRAM=<tmux> P2PCLI_TEST_ZCODE=<zcode> cargo test -p p2pcli-core --test e2e zcode_settings -- --ignored
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux and ZCode"]
+async fn zcode_settings_are_read_and_switched() {
+    let zcode = std::env::var("P2PCLI_TEST_ZCODE").expect("P2PCLI_TEST_ZCODE 要指向 zcode 程序");
+    let home = temp_dir("zcode-home");
+    let work = temp_dir("zcode-work");
+    std::fs::create_dir_all(home.join(".zcode/cli")).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let levels = serde_json::json!({ "enabled": true, "levels": ["low", "max", "high"], "defaultLevel": "max" });
+    std::fs::write(home.join(".zcode/cli/config.json"), serde_json::json!({
+        "provider": { "bigmodel": {
+            "kind": "anthropic", "name": "BigModel Coding Plan",
+            "options": { "apiKeyRequired": true, "baseURL": "https://open.bigmodel.cn/api/anthropic", "apiKey": "p2pcli-test-not-a-real-key" },
+            "models": { "GLM-5.3": { "name": "GLM-5.3", "reasoning": levels }, "GLM-5.3-Flash": { "name": "GLM-5.3-Flash", "reasoning": levels } },
+        } },
+        "model": { "main": "bigmodel/GLM-5.3-Flash", "lite": "bigmodel/GLM-5.3" },
+        "permission": { "mode": "build" },
+    }).to_string()).unwrap();
+
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig {
+        data_dir: temp_dir("zcode-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("zcode-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let (mut input, output) = remote.open_terminal(120, 40).await.unwrap();
+    let id = output.session_id.clone();
+    input.write(format!("cd '{}' && HOME='{}' ZCODE_DISABLE_UPDATE_CHECK=1 exec '{zcode}'\r", work.display(), home.display()).as_bytes()).await.unwrap();
+
+    let settings = || {
+        let (remote, id) = (&remote, &id);
+        async move {
+            let sessions = remote.list_terminals().await.unwrap();
+            let agent = sessions.into_iter().find(|s| &s.id == id).and_then(|s| s.agent);
+            if let Some(agent) = &agent {
+                assert_eq!(agent.kind, "zcode");
+            }
+            agent.and_then(|a| a.settings).unwrap_or_default()
+        }
+    };
+    let first = wait_for("开头的模型、强度和权限模式", &settings, |s| s.model.is_some() && s.effort.is_some() && s.mode.is_some()).await;
+    assert_eq!(
+        (first.model.as_deref(), first.effort.as_deref(), first.mode.as_deref()),
+        (Some("bigmodel/GLM-5.3-Flash"), Some("max"), Some("build")),
+    );
+    send_command(&mut input, "/model bigmodel/GLM-5.3").await;
+    wait_for("换成 GLM-5.3", &settings, |s| s.model.as_deref() == Some("bigmodel/GLM-5.3")).await;
+    send_command(&mut input, "/effort high").await;
+    wait_for("强度变成 high", &settings, |s| s.effort.as_deref() == Some("high")).await;
+    let seen = cycle_mode(&mut input, &settings, "build".into(), "plan").await;
+    assert_eq!(seen, ["build", "edit", "yolo", "plan"]);
 
     remote.end_terminal(id).await.unwrap();
     remote.close();

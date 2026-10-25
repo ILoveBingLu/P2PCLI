@@ -54,8 +54,12 @@ export interface AgentSettings {
   model?: string | null;
   /** low、medium、high、xhigh、max、auto */
   effort?: string | null;
-  /** Claude Code 的权限模式：default、acceptEdits、plan、auto、bypassPermissions、dontAsk */
+  /** 权限模式，各家自己的叫法。Claude Code：default、acceptEdits、plan、auto、bypassPermissions、dontAsk；ZCode：build、edit、yolo、plan */
   mode?: string | null;
+  /** 能切到的模型；Claude Code 的别名固定写在界面里，ZCode 按那台电脑上的配置来 */
+  models?: { id: string; name: string }[];
+  /** 当前模型能用的思考强度，同样只有按配置来的才有 */
+  efforts?: string[];
 }
 export interface AgentQuota {
   windows: QuotaWindow[];

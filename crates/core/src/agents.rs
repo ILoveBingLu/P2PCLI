@@ -54,9 +54,24 @@ pub struct AgentSettings {
     /// 思考强度，用 AI 自己的叫法：low、medium、high、xhigh、max、auto
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
-    /// 权限模式，用 Claude Code 自己的叫法：default、acceptEdits、plan、auto、bypassPermissions、dontAsk
+    /// 权限模式，用各家自己的叫法。Claude Code：default、acceptEdits、plan、auto、bypassPermissions、dontAsk；
+    /// ZCode：build、edit、yolo、plan
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// 能切到的模型。Claude Code 的别名是固定的，写在界面里；ZCode 按那台电脑上的配置来
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelChoice>,
+    /// 当前模型能用的思考强度，同样只有按配置来的才有
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelChoice {
+    /// 切换时用的名字，比如 bigmodel/GLM-5.3
+    pub id: String,
+    /// 显示的名字，比如 GLM-5.3
+    pub name: String,
 }
 
 /// AI 账号的额度：几个滚动窗口各用了多少
@@ -107,6 +122,7 @@ const KNOWN: &[Known] = &[
     Known { kind: "droid", name: "Droid", names: &["droid"], markers: &[] },
     Known { kind: "goose", name: "Goose", names: &["goose"], markers: &[] },
     Known { kind: "auggie", name: "Auggie", names: &["auggie"], markers: &["@augmentcode/auggie"] },
+    Known { kind: "zcode", name: "ZCode", names: &["zcode"], markers: &["zcode-app-cli"] },
 ];
 
 /// 进程表刷新一次后几秒内的查询都用它，几个会话、几个查看方一起问时不重复扫
@@ -212,7 +228,7 @@ fn is_runner(word: &str) -> bool {
 }
 
 /// 确认框底下的操作提示，出现在屏幕最后几行就说明在等你选
-const CONFIRM_HINTS: &[&str] = &["enter to confirm", "esc to exit", "press enter to confirm", "enter to select", "to navigate"];
+const CONFIRM_HINTS: &[&str] = &["enter to confirm", "esc to exit", "press enter to confirm", "enter to select", "to navigate", "enter confirm", "up/down choose"];
 /// 正在干活时屏幕上的打断提示（Codex、Gemini 用这个；老版本 Claude Code 也有）
 const BUSY_HINTS: &[&str] = &["esc to interrupt", "esc to cancel", "esc interrupt", "ctrl+c to interrupt", "esc to stop"];
 /// 选项前面的选中标记
@@ -245,9 +261,12 @@ pub fn state(title: &str, screen: &str) -> AgentState {
     }
 }
 
-/// Claude Code、Codex 等结束后会留下 “Worked for …” 一行。
+/// Claude Code、Codex 等结束后会留下 “Worked for …” 一行，ZCode 是“[ ✓ 7s ]”。
 /// 只看靠下的完成标记，避免把回复正文里提到的同类文字误认为已经完成。
 fn completed_line(line: &str) -> bool {
+    if line.starts_with("[ ✓ ") {
+        return true;
+    }
     let mut chars = line.chars();
     let marked = chars.next().is_some_and(|c| SPINNERS.contains(&c) || matches!(c, '•' | '✦' | '✓'))
         && chars.next() == Some(' ');
@@ -300,7 +319,12 @@ fn option(line: &str) -> Option<(bool, u32)> {
 
 fn working_line(line: &str) -> bool {
     let lower = line.to_lowercase();
-    BUSY_HINTS.iter().any(|h| lower.contains(h)) || spinner_line(line)
+    BUSY_HINTS.iter().any(|h| lower.contains(h)) || spinner_line(line) || timer_line(line)
+}
+
+/// ZCode 干活时编辑框上面那行“working… ── [ 🕐 1s ]”“thinking… ── [ 🕔 5s ]”
+fn timer_line(line: &str) -> bool {
+    line.split_once(" ── [").is_some_and(|(head, _)| !head.contains(' ') && (head.ends_with('…') || head.ends_with("...")))
 }
 
 /// “✻ Cogitating…”这种：开头一个转圈符号，第一个词以省略号结尾。干完会变成“✻ Worked for 2s”，没有省略号
@@ -465,30 +489,55 @@ fn tail(path: &Path, bytes: u64) -> Option<String> {
 /// Claude Code 的对话记录只看最后这么多字节：切模型、切强度和每轮回复都会记一笔
 const TRANSCRIPT_TAIL_BYTES: u64 = 256 * 1024;
 
-/// 各会话里 AI 设置的缓存：对话记录没变长就不重新读
+/// 各会话里 AI 设置的缓存：对话记录没变长、配置文件没改过就不重新读
 #[derive(Default)]
 pub struct Settings {
     transcripts: HashMap<PathBuf, (u64, Option<String>, Option<String>)>,
+    zcode: Option<(u64, ZcodeCatalog)>,
 }
 
 impl Settings {
     /// 读进程号是 pid 的 AI 现在的设置。屏幕内容只在这里看，不往外发
     pub fn get(&mut self, kind: &str, pid: u32, screen: &str) -> Option<AgentSettings> {
-        if kind != "claude" {
-            return None;
+        let settings = match kind {
+            "claude" => self.claude(pid, screen),
+            "zcode" => self.zcode(screen),
+            _ => return None,
+        };
+        (settings != AgentSettings::default()).then_some(settings)
+    }
+
+    /// ZCode 三样都写在最底下的状态栏里；能切哪些模型、每个模型有哪些强度在它的配置里
+    fn zcode(&mut self, screen: &str) -> AgentSettings {
+        let mut settings = zcode_footer(screen);
+        let Some(path) = std::env::home_dir().map(|home| home.join(".zcode/cli/config.json")) else { return settings };
+        let modified = modified_secs(&path);
+        if self.zcode.as_ref().is_none_or(|(seen, _)| *seen != modified) {
+            // 配置里有各家的 API key，这里只取模型名和强度，别的不往外带
+            let catalog = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).map(|c| zcode_catalog(&c)).unwrap_or_default();
+            self.zcode = Some((modified, catalog));
         }
+        let catalog = &self.zcode.as_ref().unwrap().1;
+        settings.models = catalog.models.clone();
+        if let Some(model) = &settings.model {
+            settings.efforts = catalog.levels.get(&model.to_lowercase()).cloned().unwrap_or_default();
+        }
+        settings
+    }
+
+    fn claude(&mut self, pid: u32, screen: &str) -> AgentSettings {
         // 模型和强度以对话记录为准，记录里没有（刚开的会话、记录关了）再看屏幕
         let config = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| Some(std::env::home_dir()?.join(".claude")));
         let (model, effort) = config
             .and_then(|config| claude_transcript(&config, pid))
             .map(|path| self.transcript(path))
             .unwrap_or_default();
-        let settings = AgentSettings {
+        AgentSettings {
             model: model.or_else(|| claude_screen_model(screen)),
             effort: effort.or_else(|| claude_screen_effort(screen)),
             mode: claude_mode(screen).map(str::to_string),
-        };
-        (settings != AgentSettings::default()).then_some(settings)
+            ..Default::default()
+        }
     }
 
     fn transcript(&mut self, path: PathBuf) -> (Option<String>, Option<String>) {
@@ -639,6 +688,58 @@ fn claude_screen_effort(screen: &str) -> Option<String> {
     })
 }
 
+/// ZCode 配置里的模型：键是“提供方/模型”，强度在 reasoning.levels 里，按从低到高排
+#[derive(Debug, Default, Clone, PartialEq)]
+struct ZcodeCatalog {
+    models: Vec<ModelChoice>,
+    /// 小写的模型 ID → 能用的强度
+    levels: HashMap<String, Vec<String>>,
+}
+
+fn zcode_catalog(config: &serde_json::Value) -> ZcodeCatalog {
+    const ORDER: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
+    let mut catalog = ZcodeCatalog::default();
+    let providers = config.get("provider").and_then(|v| v.as_object()).into_iter().flatten();
+    for (provider, p) in providers {
+        for (model, m) in p.get("models").and_then(|v| v.as_object()).into_iter().flatten() {
+            let id = format!("{provider}/{model}");
+            let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(model).to_string();
+            let reasoning = m.get("reasoning");
+            if reasoning.and_then(|r| r.get("enabled")).and_then(|v| v.as_bool()) != Some(false) {
+                let mut levels: Vec<String> = reasoning
+                    .and_then(|r| r.get("levels"))
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+                levels.sort_by_key(|l| ORDER.iter().position(|o| o == l).unwrap_or(ORDER.len()));
+                if !levels.is_empty() {
+                    catalog.levels.insert(id.to_lowercase(), levels);
+                }
+            }
+            catalog.models.push(ModelChoice { id, name });
+        }
+    }
+    catalog
+}
+
+/// ZCode 最底下的状态栏：“◈ bigmodel/GLM-5.3-Flash ─ ◉ build ─ ⚡ high ─ ctx 99% left”；
+/// 窗口窄的时候后面几项会被挤掉，等你确认时整行被确认框盖住
+fn zcode_footer(screen: &str) -> AgentSettings {
+    let mut settings = AgentSettings::default();
+    let Some(line) = screen.lines().rev().map(str::trim).filter(|l| !l.is_empty()).take(3).find(|l| l.starts_with("◈ ")) else {
+        return settings;
+    };
+    for field in line.split(" ─ ").map(str::trim) {
+        let value = |prefix: &str| field.strip_prefix(prefix).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        settings.model = settings.model.take().or_else(|| value("◈ "));
+        settings.mode = settings.mode.take().or_else(|| value("◉ "));
+        settings.effort = settings.effort.take().or_else(|| value("⚡ "));
+    }
+    settings
+}
+
 /// 屏幕最底下的权限模式提示：“⏸ manual mode on”“⏵⏵ auto mode on (shift+tab to cycle)”；
 /// 老版本默认模式什么都不写，只有“? for shortcuts”。等你确认时底下换成了确认框，读不到
 fn claude_mode(screen: &str) -> Option<&'static str> {
@@ -701,6 +802,9 @@ mod tests {
         // Windows 的 exe
         assert_eq!(kind("claude.exe", &[r"C:\Users\a\.local\bin\claude.exe"]), Some("claude"));
         assert_eq!(kind("codebuddy", &["codebuddy"]), Some("codebuddy"));
+        // ZCode 的终端客户端是 Node 写的，npm 包叫 zcode-app-cli
+        assert_eq!(kind("node", &["node", "/opt/homebrew/bin/zcode"]), Some("zcode"));
+        assert_eq!(kind("node.exe", &[r"C:\Program Files\nodejs\node.exe", r"C:\Users\a\AppData\Roaming\npm\node_modules\zcode-app-cli\bin\zcode.js"]), Some("zcode"));
         // 不是 AI 的
         assert_eq!(kind("zsh", &["-zsh"]), None);
         assert_eq!(kind("vim", &["vim", "claude.md"]), None);
@@ -865,6 +969,12 @@ mod tests {
         assert_eq!(state("", GEMINI_APPROVAL), Waiting);
         assert_eq!(state("", GEMINI_WORKING), Working);
         assert_eq!(state("", OPENCODE_PERMISSION), Waiting);
+        assert_eq!(state("ZC | ⠇ working…", ZCODE_WORKING), Working);
+        assert_eq!(state("", ZCODE_WORKING), Working);
+        assert_eq!(state("", ZCODE_DONE), Idle);
+        // 标题里的转圈晚一步清掉也以屏幕上的完成标记为准
+        assert_eq!(state("ZC | ⠇ thinking…", ZCODE_DONE), Idle);
+        assert_eq!(state("ZC | ⠧ running Write…", ZCODE_PERMISSION), Waiting);
         // 标题里有盲文转圈符号
         assert_eq!(state("⠙ gemini", "> Type your message"), Working);
         // AI 回复里普通的编号列表不算在等你确认
@@ -1004,5 +1114,77 @@ mod tests {
         assert_eq!(claude_transcript(&dir, 4242), Some(moved));
         assert_eq!(claude_transcript(&dir, 999), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ZCode（zcode-app-cli 3.11.2）真实截下来的屏幕，目录换掉了
+    const ZCODE_WORKING: &str = "
+╰─ /help commands · /status details ───────────────────────────────────────╯
+ › 用一句话介绍你自己，不要用任何工具
+ ◇ Thinking · active
+  The user is asking me to introduce myself in one sentence, in Chinese, and
+ thinking… ── [ 🕔 5s ]
+──────────────────────────────────────────────────────
+──────────────────────────────────────────────────────
+ ◈ bigmodel/GLM-5.3-Flash ─ ◉ plan ─ ⚡ high ─ ctx 100% left ─ session 0 tokens
+";
+    const ZCODE_DONE: &str = "
+ › 用一句话介绍你自己，不要用任何工具
+ ◇ Thought · Ctrl+O to expand
+ 我是 ZCode，一个由 GLM（Z.ai 训练）驱动的交互式编程助手，能帮你阅读代码、编写实现、调试问题并执行各类软件开发任务。
+ [ ✓ 7s ]
+──────────────────────────────────────────────────────
+──────────────────────────────────────────────────────
+ ◈ bigmodel/GLM-5.3-Flash ─ ◉ plan ─ ⚡ high ─ ctx 99% left ─ cache 50% hit ─ session 13.8K tokens
+";
+    const ZCODE_PERMISSION: &str = "
+ ◆ Write ~/work/hi.txt · waiting
+ for permission
+  hi
+ Activity · 1 active tool
+  ○ Write
+Permission · Write
+Tool has side effects and requires approval
+ Risk: medium
+ ● Write ~/work/hi.txt +1 -0
+       │ @@ -0,0 +1,1 @@
+     1 │+ hi
+Filter: type to search
+→ 1. Allow once                   Approve only this request
+  2. Always allow in this projec  Allow matching Write requests
+  3. Deny and tell ZCode why      Return feedback so the agent can adjust
+  4. Deny
+Type to filter · number selects · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel
+";
+
+    #[test]
+    fn reads_zcode_settings() {
+        let s = |v: &str| Some(v.to_string());
+        let footer = zcode_footer(ZCODE_DONE);
+        assert_eq!((footer.model, footer.mode, footer.effort), (s("bigmodel/GLM-5.3-Flash"), s("plan"), s("high")));
+        // 刚开、还没配模型时
+        let footer = zcode_footer("──────\n──────\n ◈ default ─ ◉ build ─ ctx 100% left");
+        assert_eq!((footer.model, footer.mode, footer.effort), (s("default"), s("build"), None));
+        // 确认框盖住了状态栏
+        assert_eq!(zcode_footer(ZCODE_PERMISSION), AgentSettings::default());
+
+        // 配置的结构照真实的 ~/.zcode/cli/config.json，key 是假的；只取模型名和强度
+        let config: serde_json::Value = serde_json::from_str(r#"{
+            "model": {"main": "bigmodel/GLM-5.3-Flash", "lite": "bigmodel/GLM-5.3"},
+            "provider": {
+                "bigmodel": {"kind": "anthropic", "name": "BigModel Coding Plan",
+                    "options": {"apiKeyRequired": true, "baseURL": "https://open.bigmodel.cn/api/anthropic", "apiKey": "not-a-real-key"},
+                    "models": {
+                        "GLM-5.3": {"name": "GLM-5.3", "reasoning": {"enabled": true, "levels": ["low", "max", "high"], "defaultLevel": "max"}},
+                        "glm-5-turbo": {"name": "GLM-5-Turbo", "reasoning": {"enabled": false, "levels": ["low"]}}
+                    }},
+                "zai": {"models": {"glm-5.2": {"name": "GLM-5.2"}}}
+            }}"#).unwrap();
+        let catalog = zcode_catalog(&config);
+        let ids: Vec<(&str, &str)> = catalog.models.iter().map(|m| (m.id.as_str(), m.name.as_str())).collect();
+        assert_eq!(ids, [("bigmodel/GLM-5.3", "GLM-5.3"), ("bigmodel/glm-5-turbo", "GLM-5-Turbo"), ("zai/glm-5.2", "GLM-5.2")]);
+        assert_eq!(catalog.levels.get("bigmodel/glm-5.3"), Some(&vec!["low".to_string(), "high".to_string(), "max".to_string()]));
+        // 关掉了推理的、没写强度的都没有
+        assert_eq!(catalog.levels.len(), 1);
+        assert!(!format!("{catalog:?}").contains("not-a-real-key"), "配置里的 key 不能带出来");
     }
 }
