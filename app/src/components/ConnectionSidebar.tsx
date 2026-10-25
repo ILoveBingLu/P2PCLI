@@ -4,15 +4,17 @@ import { History, Radar, Trash2 } from "lucide-react";
 import { api, formatCode, type NearbyDevice, type Overview } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
 import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
 import type { SessionTarget } from "./RemoteSessions";
 
-export function ConnectionSidebar({ ov, busy, open, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab }: {
+export function ConnectionSidebar({ ov, busy, open, scanning, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab }: {
   ov: Overview | null;
   busy: boolean;
   open: boolean;
+  scanning: boolean;
   tabs: SidebarTab[];
   activeKey: number | null;
   sessionTarget: SessionTarget | null;
@@ -24,9 +26,19 @@ export function ConnectionSidebar({ ov, busy, open, tabs, activeKey, sessionTarg
   onSelectTab: (key: number) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["nearby", "history"]));
+  useEffect(() => {
+    if (open && scanning) {
+      setExpandedSections((keys) => new Set([...keys, "nearby"]));
+      document.getElementById("nearby-title")?.scrollIntoView({ block: "nearest" });
+    }
+  }, [open, scanning]);
   const activeDevice = sessionTarget?.info.endpoint_id ?? tabs.find((tab) => tab.key === activeKey)?.info.endpoint_id;
   useEffect(() => {
-    if (activeDevice) setExpanded((keys) => new Set([...keys, activeDevice]));
+    if (activeDevice) {
+      setExpanded((keys) => new Set([...keys, activeDevice]));
+      setExpandedSections((keys) => new Set([...keys, "history"]));
+    }
   }, [activeDevice]);
   // A device may have historical codes; show it once, using its most recent code.
   const seen = new Set<string>();
@@ -41,33 +53,48 @@ export function ConnectionSidebar({ ov, busy, open, tabs, activeKey, sessionTarg
   return (
     <aside id="connection-sidebar" className="connection-sidebar" data-collapsed={open ? undefined : ""} aria-label="连接历史">
       <div className="connection-sidebar-inner">
-        <section className="recent-section mb-5" aria-labelledby="nearby-title">
-          <div className="section-title">
-            <h2 id="nearby-title"><Radar />附近设备</h2>
-            <Badge variant="secondary">{nearby.length}</Badge>
-          </div>
+        <Accordion hideSeparator allowsMultipleExpanded expandedKeys={expandedSections}
+          onExpandedChange={(keys) => setExpandedSections(new Set([...keys].map(String)))}>
+        <Accordion.Item id="nearby" className="recent-section">
+          <Accordion.Heading level={2} id="nearby-title">
+            <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
+              <Radar className="size-3.5 text-muted-foreground" />
+              <span className="flex-1">附近设备</span>
+              <Badge variant="secondary">{nearby.length}</Badge>
+              <Accordion.Indicator className="size-3.5" />
+            </Accordion.Trigger>
+          </Accordion.Heading>
+          <Accordion.Panel aria-busy={scanning}>
+          {scanning && <p className="recent-placeholder" role="status">扫描中…</p>}
           {nearby.length ? (
             <div className="flex flex-col">
               {nearby.map((device) => (
                 <Button key={device.endpoint_id} variant="ghost" disabled={busy}
-                  className="h-auto min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
+                  className="h-auto w-full min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
                   title={`连接 ${device.name}`} onClick={() => onConnectLan(device)}>
                   <PlatformIcon platform={device.platform} decorative />
                   <span className="min-w-0 flex-1 truncate text-left">{device.name}</span>
                 </Button>
               ))}
             </div>
-          ) : (
+          ) : !scanning && (
             <p className="recent-placeholder">
-              同一网络里打开 P2PCLI 的电脑会自动出现在这里。看不到的话，确认在同一个网络、Windows 防火墙已允许，或者改用设备码连接。
+              暂无附近设备
             </p>
           )}
-        </section>
-        <section className="recent-section" aria-labelledby="recent-title">
-          <div className="section-title">
-            <h2 id="recent-title"><History />连接历史</h2>
-            <Badge variant="secondary">{devices.length}</Badge>
-          </div>
+          </Accordion.Panel>
+        </Accordion.Item>
+        <Separator className="mt-1 mb-0 h-[0.7px] opacity-50" />
+        <Accordion.Item id="history" className="recent-section">
+          <Accordion.Heading level={2} id="recent-title">
+            <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
+              <History className="size-3.5 text-muted-foreground" />
+              <span className="flex-1">连接历史</span>
+              <Badge variant="secondary">{devices.length}</Badge>
+              <Accordion.Indicator className="size-3.5" />
+            </Accordion.Trigger>
+          </Accordion.Heading>
+          <Accordion.Panel>
           {devices.length ? (
             <Accordion hideSeparator allowsMultipleExpanded expandedKeys={expanded}
               onExpandedChange={(keys) => setExpanded(new Set([...keys].map(String)))}>
@@ -97,7 +124,7 @@ export function ConnectionSidebar({ ov, busy, open, tabs, activeKey, sessionTarg
                               } catch (error) { toast.error(String(error)); }
                             }}><Trash2 className="size-3" /></Button>
                         </div>
-                        {open && expanded.has(device.endpoint_id) && <DeviceSessions
+                        {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
                           key={target?.connId ?? "disconnected"} target={target} tabs={deviceTabs}
                           activeKey={sessionTarget ? null : activeKey} busy={busy}
                           onConnect={() => lanOnline.has(device.endpoint_id)
@@ -110,8 +137,10 @@ export function ConnectionSidebar({ ov, busy, open, tabs, activeKey, sessionTarg
                 );
               })}
             </Accordion>
-          ) : <p className="recent-placeholder">连接过的设备会出现在这里。</p>}
-        </section>
+          ) : <p className="recent-placeholder">暂无连接历史</p>}
+          </Accordion.Panel>
+        </Accordion.Item>
+        </Accordion>
       </div>
     </aside>
   );

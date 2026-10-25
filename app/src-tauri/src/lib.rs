@@ -249,6 +249,13 @@ fn overview(state: State<'_, AppState>) -> Overview {
 }
 
 #[tauri::command]
+async fn scan_nearby(state: State<'_, AppState>) -> Result<Vec<NearbyDevice>, String> {
+    let node = state.node();
+    let lan = node.lan.as_ref().ok_or_else(|| "局域网发现未启用".to_string())?;
+    lan.scan(node.id()).await.map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 async fn diagnose(state: State<'_, AppState>) -> Result<p2pcli_core::diag::Diagnosis, String> {
     Ok(p2pcli_core::diag::diagnose(&state.node()).await)
 }
@@ -766,6 +773,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             overview,
+            scan_nearby,
             diagnose,
             refresh_password,
             set_password_fixed,

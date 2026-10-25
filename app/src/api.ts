@@ -139,6 +139,7 @@ export interface Diagnosis {
 
 export const api = {
   overview: () => invoke<Overview>("overview"),
+  scanNearby: () => invoke<NearbyDevice[]>("scan_nearby"),
   diagnose: () => invoke<Diagnosis>("diagnose"),
   refreshPassword: () => invoke<string>("refresh_password"),
   setPasswordFixed: (fixed: boolean) => invoke("set_password_fixed", { fixed }),

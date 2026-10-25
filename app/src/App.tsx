@@ -73,6 +73,8 @@ export default function App() {
   const [showDiag, setShowDiag] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const [showLocalDevice, setShowLocalDevice] = useState(false);
+  const [scanningNearby, setScanningNearby] = useState(false);
+  const scanPending = useRef(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -175,6 +177,22 @@ export default function App() {
 
   const connection = useConnection({ onConnected, onOpenChange: setShowConnect });
   const sidebar = useSidebar();
+  const scanNearby = async () => {
+    sidebar.show();
+    if (scanPending.current) return;
+    scanPending.current = true;
+    setScanningNearby(true);
+    try {
+      const nearby = await api.scanNearby();
+      setOv((current) => current ? { ...current, nearby } : current);
+      toast.success(nearby.length ? `发现 ${nearby.length} 台附近设备` : "未发现附近设备");
+    } catch (error) {
+      toast.error(`扫描失败：${String(error)}`);
+    } finally {
+      scanPending.current = false;
+      setScanningNearby(false);
+    }
+  };
 
   const closeTab = (key: number) => {
     const tab = tabs.find((t) => t.key === key);
@@ -243,6 +261,7 @@ export default function App() {
         ov={ov}
         busy={connection.busy}
         open={sidebar.open}
+        scanning={scanningNearby}
         tabs={tabs}
         activeKey={activeKey}
         sessionTarget={sessionTarget}
@@ -479,6 +498,8 @@ export default function App() {
           <Welcome
             ov={ov}
             onLocalDevice={() => setShowLocalDevice(true)}
+            onScanNearby={() => void scanNearby()}
+            scanning={scanningNearby}
             onSettings={() => setShowSettings(true)}
             onConnect={() => setShowConnect(true)}
           />

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -37,6 +38,7 @@ pub struct Lan {
     shared: Arc<Shared>,
     devices: Arc<Mutex<HashMap<EndpointId, NearbyDevice>>>,
     task: tokio::task::AbortHandle,
+    scan_lock: tokio::sync::Mutex<()>,
 }
 
 /// 本机要广播的附加数据，以及 iroh 最近一次发布的地址（改名时拿它重新发布）
@@ -112,7 +114,42 @@ impl Lan {
             }
         })
         .abort_handle();
-        Ok(Arc::new(Self { mdns, shared, devices, task }))
+        Ok(Arc::new(Self { mdns, shared, devices, task, scan_lock: tokio::sync::Mutex::new(()) }))
+    }
+
+    /// 临时启动短周期查询；不重建现有 endpoint，也不改变本机可见性。
+    pub async fn scan(&self, me: EndpointId) -> Result<Vec<NearbyDevice>> {
+        let _guard = self.scan_lock.try_lock().context("正在扫描附近设备")?;
+        let probe = MdnsAddressLookup::builder()
+            .service_name(SERVICE_NAME)
+            .advertise(false)
+            .discovery_cadence(Duration::from_millis(200))
+            .build(me)
+            .context("局域网扫描启动失败")?;
+        let mut events = probe.subscribe().await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut found = HashMap::new();
+        while let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.next()).await {
+            match event {
+                DiscoveryEvent::Discovered { endpoint_info, .. } if endpoint_info.endpoint_id != me => {
+                    if let Some((platform, name)) = endpoint_info.data.user_data().and_then(|d| decode(d.as_ref())) {
+                        let id = endpoint_info.endpoint_id;
+                        found.insert(id.to_string(), NearbyDevice { endpoint_id: id.to_string(), name, platform });
+                    }
+                }
+                DiscoveryEvent::Expired { endpoint_id } => {
+                    found.remove(&endpoint_id.to_string());
+                }
+                _ => {}
+            }
+        }
+        // 后台发现仍在运行；保留它掌握的在线设备，不清空现有会话。
+        for device in self.devices() {
+            found.entry(device.endpoint_id.clone()).or_insert(device);
+        }
+        let mut devices: Vec<_> = found.into_values().collect();
+        devices.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.endpoint_id.cmp(&b.endpoint_id)));
+        Ok(devices)
     }
 
     /// 改了设备名就重新广播

@@ -1,4 +1,4 @@
-import { ArrowRight, Monitor } from "lucide-react";
+import { ArrowRight, LoaderCircle, Monitor, Radar } from "lucide-react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import type { Overview } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -16,11 +16,15 @@ export function Welcome({
   onSettings,
   onConnect,
   onLocalDevice,
+  onScanNearby,
+  scanning,
 }: {
   ov: Overview | null;
   onSettings: () => void;
   onConnect: () => void;
   onLocalDevice: () => void;
+  onScanNearby: () => void;
+  scanning: boolean;
 }) {
   return (
     <div className="welcome-scroll">
@@ -41,12 +45,16 @@ export function Welcome({
         </EmptyHeader>
         <EmptyContent>
           <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button variant="ghost" className="text-muted-foreground" onClick={onLocalDevice}>
+              <Monitor data-icon="inline-start" />本机设备
+            </Button>
             <Button onClick={onConnect}>
               开始连接
               <ArrowRight data-icon="inline-end" />
             </Button>
-            <Button variant="ghost" className="text-muted-foreground" onClick={onLocalDevice}>
-              <Monitor data-icon="inline-start" />本机设备
+            <Button variant="ghost" className="text-muted-foreground" onClick={onScanNearby} disabled={scanning}>
+              {scanning ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Radar data-icon="inline-start" />}
+              {scanning ? "扫描中…" : "附近设备"}
             </Button>
           </div>
           {ov?.server.state === "none" && (

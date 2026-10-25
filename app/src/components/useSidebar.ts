@@ -22,6 +22,7 @@ export function useSidebar() {
     }
   });
   const toggle = useCallback(() => setOpen((v) => !v), []);
+  const show = useCallback(() => setOpen(true), []);
 
   useEffect(() => {
     try {
@@ -43,5 +44,5 @@ export function useSidebar() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [toggle]);
 
-  return { open, toggle };
+  return { open, toggle, show };
 }

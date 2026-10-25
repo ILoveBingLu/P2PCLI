@@ -71,6 +71,11 @@ mockIPC(
     switch (cmd) {
       case "overview":
         return ov;
+      case "scan_nearby":
+        return new Promise((resolve, reject) => setTimeout(() => {
+          if (s === "lan-scan-error") return reject("局域网扫描启动失败");
+          resolve(ov.nearby);
+        }, 3000));
       case "connect": {
         if (s === "error") return Promise.reject({ reject: "bad_password", message: "配对密码不正确，请向对方获取最新密码。" });
         const lan = ov.nearby.find((d) => d.endpoint_id === args.target);
