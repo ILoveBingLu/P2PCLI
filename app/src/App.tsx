@@ -12,6 +12,7 @@ import {
   FileUp,
   LoaderCircle,
   History,
+  House,
   Plus,
   Radio,
   Unplug,
@@ -248,7 +249,7 @@ export default function App() {
     setSessionsRev((v) => v + 1);
     const rest = tabs.filter((t) => t.info.endpoint_id !== endpointId || t.sessionId !== id);
     setTabs(rest);
-    if (!rest.some((t) => t.key === activeKey)) setActiveKey(rest.at(-1)?.key ?? null);
+    if (activeKey !== null && !rest.some((t) => t.key === activeKey)) setActiveKey(rest.at(-1)?.key ?? null);
   };
 
   const closeTab = (key: number) => {
@@ -496,18 +497,20 @@ export default function App() {
           />
         )}
         <div className="workspace-content" hidden={showSettings || !!sessionTarget}>
-        {tabs.length > 0 ? (
           <Tabs
-            selectedKey={String(activeKey)}
-            onSelectionChange={(key) => setActiveKey(Number(key))}
+            selectedKey={activeKey === null ? "home" : String(activeKey)}
+            onSelectionChange={(key) => setActiveKey(key === "home" ? null : Number(key))}
             className="terminal-workspace"
           >
             <div className="terminal-toolbar">
               <Tabs.ListContainer className="terminal-list-container">
                 <Tabs.List
-                  aria-label="远程终端标签"
+                  aria-label="工作区标签"
                   className="terminal-tab-list"
                 >
+                  <Tabs.Tab id="home" aria-label="首页" className="terminal-home-tab">
+                    <House aria-hidden="true" />
+                  </Tabs.Tab>
                   {tabs.map((t) => (
                     <Tabs.Tab
                       id={String(t.key)}
@@ -551,26 +554,35 @@ export default function App() {
                   ))}
                 </Tabs.List>
               </Tabs.ListContainer>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="terminal-new-tab"
+                  aria-label={activeTab && activeTab.state !== "closed" ? "新建终端" : "新建连接"}
+                  title={activeTab && activeTab.state !== "closed" ? "在当前设备上新建终端" : "新建连接"}
+                  onClick={() => activeTab && activeTab.state !== "closed"
+                    ? addTab(activeTab.connId, activeTab.info, activeTab.code)
+                    : setShowConnect(true)}
+                >
+                  <Plus />
+                </Button>
               {activeTab && activeTab.state !== "closed" && (
                 <Button variant="ghost" size="icon-sm" aria-label="远程会话" title="查看和恢复远程会话" onClick={() => setSessionTarget(activeTab)}>
                   <History />
                 </Button>
               )}
-              {activeTab && activeTab.state !== "closed" && (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="新建终端"
-                  title="在当前设备上新建终端"
-                  onClick={() =>
-                    addTab(activeTab.connId, activeTab.info, activeTab.code)
-                  }
-                >
-                  <Plus />
-                </Button>
-              )}
             </div>
             <div className="terminals">
+              <Tabs.Panel id="home" className="terminal-panel terminal-home-panel">
+                <Welcome
+                  ov={ov}
+                  onLocalDevice={() => setShowLocalDevice(true)}
+                  onScanNearby={() => void scanNearby(true)}
+                  scanning={scanningNearby}
+                  onSettings={() => setShowSettings(true)}
+                  onConnect={() => setShowConnect(true)}
+                />
+              </Tabs.Panel>
               {tabs.map((t) => (
                 <Tabs.Panel
                   shouldForceMount
@@ -653,16 +665,6 @@ export default function App() {
               visible={!showSettings && !sessionTarget}
             />}
           </Tabs>
-        ) : (
-          <Welcome
-            ov={ov}
-            onLocalDevice={() => setShowLocalDevice(true)}
-            onScanNearby={() => void scanNearby(true)}
-            scanning={scanningNearby}
-            onSettings={() => setShowSettings(true)}
-            onConnect={() => setShowConnect(true)}
-          />
-        )}
 
         </div>
         <TransferPanel transfers={transfers} />

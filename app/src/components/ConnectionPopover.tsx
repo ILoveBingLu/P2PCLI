@@ -1,6 +1,6 @@
 import { InputOTP, Popover, REGEXP_ONLY_DIGITS } from "@heroui/react";
 import { Fragment } from "react";
-import { ArrowUpRight, LoaderCircle, LockKeyhole, Plus } from "lucide-react";
+import { ArrowUpRight, Link, LoaderCircle, LockKeyhole } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -37,7 +37,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
   return (
     <Popover isOpen={open} onOpenChange={onOpenChange}>
       <Button variant="ghost" size="icon-sm" aria-label="新建连接" title="新建连接">
-        <Plus />
+        <Link />
       </Button>
       <Popover.Content
         placement="bottom"
