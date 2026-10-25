@@ -3,6 +3,7 @@ import {
   Activity,
   Check,
   FileDown,
+  FileText,
   Laptop,
   LoaderCircle,
   Radio,
@@ -293,6 +294,15 @@ export function DiagDialog({ onClose, publicKey }: { onClose: () => void; public
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [openingLogs, setOpeningLogs] = useState(false);
+  const showLogs = async () => {
+    setOpeningLogs(true);
+    setLogError(null);
+    try { await api.showLogs(); }
+    catch (error) { setLogError(String(error)); }
+    finally { setOpeningLogs(false); }
+  };
   const run = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -402,8 +412,13 @@ export function DiagDialog({ onClose, publicKey }: { onClose: () => void; public
               </div>
             </dl>
           </section>
+          {logError && <p role="alert" className="mt-3 text-sm text-danger">{logError}</p>}
         </div>
         <DialogFooter>
+          <Button variant="outline" onClick={showLogs} disabled={openingLogs}>
+            <FileText data-icon="inline-start" />
+            查看日志
+          </Button>
           <Button variant="outline" onClick={run} disabled={busy}>
             <RefreshCw
               className={busy ? "animate-spin" : undefined}

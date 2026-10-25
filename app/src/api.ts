@@ -223,6 +223,7 @@ export const api = {
   overview: () => invoke<Overview>("overview"),
   scanNearby: () => invoke<NearbyDevice[]>("scan_nearby"),
   diagnose: () => invoke<Diagnosis>("diagnose"),
+  showLogs: () => invoke<void>("show_logs"),
   refreshPassword: () => invoke<string>("refresh_password"),
   setPasswordFixed: (fixed: boolean) => invoke("set_password_fixed", { fixed }),
   removePaired: (endpointId: string) => invoke("remove_paired", { endpointId }),

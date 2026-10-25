@@ -176,7 +176,20 @@ impl Node {
             },
             None => None,
         };
-        let host = shared_host.unwrap_or_else(|| Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate)));
+        let host = shared_host.unwrap_or_else(|| {
+            let host = Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate));
+            let weak = Arc::downgrade(&host);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    let Some(host) = weak.upgrade() else { break };
+                    host.terminals.check_health().await;
+                }
+            });
+            host
+        });
         let recent = recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir)));
         let files = shared_files.unwrap_or_else(|| {
             let inbox = cfg.inbox_dir.clone().unwrap_or_else(default_inbox_dir);

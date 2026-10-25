@@ -1,6 +1,7 @@
 //! Persistent terminals live in tmux (macOS/Linux) or psmux (native Windows).
 //! The authenticated remote key is part of every name; clients only supply a random suffix.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
@@ -12,16 +13,27 @@ use tokio::process::Command;
 use crate::proto::{TerminalDetails, TerminalSession};
 
 const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_attached}\t#{status}\t#{window_index}\t#{window_name}\t#{session_windows}\t#{pane_current_command}\t#{pane_current_path}";
+const HEALTH_FORMAT: &str = "#{session_name}\t#{pid}\t#{socket_path}";
+
+#[derive(Default)]
+struct Health {
+    sessions: BTreeMap<String, String>,
+    last_error: Option<String>,
+    last_capture: Option<std::time::Instant>,
+}
 
 pub struct SessionManager {
     namespace: String,
     program: Option<PathBuf>,
     gate: tokio::sync::Mutex<()>,
+    health: std::sync::Mutex<Health>,
 }
 
 impl SessionManager {
     pub fn new(local_key: &str, program: Option<PathBuf>) -> Self {
-        Self { namespace: format!("p2pcli-{local_key}"), program, gate: tokio::sync::Mutex::new(()) }
+        let namespace = format!("p2pcli-{local_key}");
+        tracing::info!(%namespace, ?program, app_pid = std::process::id(), "会话管理器初始化");
+        Self { namespace, program, gate: tokio::sync::Mutex::new(()), health: Default::default() }
     }
 
     fn name(owner: &str, id: &str) -> Result<String> {
@@ -46,8 +58,12 @@ impl SessionManager {
     }
 
     async fn checked(&self, args: &[&str]) -> Result<()> {
-        let out = self.command(args).await?;
+        let out = self.command(args).await.inspect_err(|error| {
+            tracing::warn!(namespace = %self.namespace, operation = args[0], error = %error, "会话管理命令无法执行");
+        })?;
         if !out.status.success() {
+            tracing::warn!(namespace = %self.namespace, operation = args[0], status = %out.status,
+                stderr = %String::from_utf8_lossy(&out.stderr).trim(), "会话管理命令失败");
             bail!("会话操作失败：{}", String::from_utf8_lossy(&out.stderr).trim());
         }
         Ok(())
@@ -68,8 +84,7 @@ impl SessionManager {
         let out = self.command(&["list-sessions", "-F", SESSION_FORMAT]).await?;
         if !out.status.success() {
             let error = String::from_utf8_lossy(&out.stderr).to_lowercase();
-            if error.contains("no server") || error.contains("no sessions") ||
-                (error.contains("error connecting to") && (error.contains("no such file") || error.contains("connection refused"))) {
+            if server_absent(&error) {
                 return Ok(Vec::new());
             }
             bail!("读取会话列表失败：{}", error.trim());
@@ -111,12 +126,19 @@ impl SessionManager {
         let _gate = self.gate.lock().await;
         let id = requested.map(str::to_string).unwrap_or_else(|| format!("{:032x}", rand::random::<u128>()));
         let name = Self::name(owner, &id)?;
+        tracing::info!(namespace = %self.namespace, terminal = %name, restoring = requested.is_some(), "请求附着后台会话");
         if requested.is_some() {
-            self.checked(&["has-session", "-t", &name]).await.context("会话已结束或不属于当前设备")?;
+            if let Err(error) = self.checked(&["has-session", "-t", &name]).await {
+                let backends = self.health.lock().unwrap().sessions.values().cloned().collect();
+                self.capture_diagnostics(backends);
+                return Err(error.context("无法恢复后台会话（请查看被控端日志）"));
+            }
         } else {
             let cols = cols.max(2).to_string();
             let rows = rows.max(2).to_string();
             self.checked(&["new-session", "-d", "-s", &name, "-x", &cols, "-y", &rows]).await?;
+            self.health.lock().unwrap().sessions.insert(name.clone(), String::new());
+            tracing::info!(namespace = %self.namespace, terminal = %name, "后台会话已创建");
             // Per-session options only: never change the user's unrelated tmux sessions.
             self.checked(&["set-option", "-t", &name, "destroy-unattached", "off"]).await?;
         }
@@ -137,8 +159,86 @@ impl SessionManager {
     pub async fn end(&self, owner: &str, id: &str) -> Result<()> {
         let _gate = self.gate.lock().await;
         let name = Self::name(owner, id)?;
-        self.checked(&["kill-session", "-t", &name]).await
+        tracing::info!(namespace = %self.namespace, terminal = %name, "用户请求结束后台会话");
+        self.checked(&["kill-session", "-t", &name]).await?;
+        self.health.lock().unwrap().sessions.remove(&name);
+        tracing::info!(namespace = %self.namespace, terminal = %name, "后台会话已按请求结束");
+        Ok(())
     }
+
+    /// Observe even detached sessions. Only query; never start, recreate or terminate a server.
+    pub async fn check_health(&self) {
+        let gate = self.gate.lock().await;
+        let output = self.command(&["list-sessions", "-F", HEALTH_FORMAT]).await;
+        let (current, error) = match output {
+            Ok(out) if out.status.success() => {
+                let current = String::from_utf8_lossy(&out.stdout).lines().filter_map(|line| {
+                    let (name, details) = line.split_once('\t')?;
+                    // Ignore unrelated or malformed names; never log terminal contents.
+                    let (owner, id) = name.strip_prefix("p2pcli-")?.split_once('-')?;
+                    Self::name(owner, id).ok()?;
+                    Some((name.to_string(), details.to_string()))
+                }).collect::<BTreeMap<_, _>>();
+                (Some(current), None)
+            }
+            Ok(out) => {
+                let error = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                let gone = server_absent(&error);
+                (gone.then(BTreeMap::new), Some(format!("{}: {error}", out.status)))
+            }
+            Err(error) => (None, Some(format!("{error:#}"))),
+        };
+        let missing = {
+            let mut health = self.health.lock().unwrap();
+            if health.last_error != error {
+                if let Some(error) = &error {
+                    // An empty namespace before the first session is normal.
+                    if !health.sessions.is_empty() || current.is_none() {
+                        tracing::warn!(namespace = %self.namespace, %error, "后台会话健康检查失败");
+                    }
+                } else if health.last_error.is_some() {
+                    tracing::info!(namespace = %self.namespace, "后台会话查询恢复正常");
+                }
+            }
+            health.last_error = error;
+            let mut missing = Vec::new();
+            if let Some(current) = current {
+                for (name, details) in &health.sessions {
+                    if !current.contains_key(name) {
+                        tracing::warn!(namespace = %self.namespace, terminal = %name, last_backend = %details,
+                            "后台会话消失（未收到结束请求；可能是 shell 退出、服务退出或连接端点丢失）");
+                        missing.push(details.clone());
+                    }
+                }
+                for (name, details) in &current {
+                    if health.sessions.get(name) != Some(details) {
+                        tracing::info!(namespace = %self.namespace, terminal = %name, backend_pid_socket = %details, "后台会话状态已记录");
+                    }
+                }
+                health.sessions = current;
+            }
+            missing
+        };
+        drop(gate);
+        if !missing.is_empty() {
+            self.capture_diagnostics(missing);
+        }
+    }
+
+    fn capture_diagnostics(&self, backends: Vec<String>) {
+        let mut health = self.health.lock().unwrap();
+        if health.last_capture.is_some_and(|at| at.elapsed() < Duration::from_secs(30)) { return; }
+        health.last_capture = Some(std::time::Instant::now());
+        let namespace = self.namespace.clone();
+        // Evidence gathering must not delay the UI's failure response or hold the session gate.
+        tokio::spawn(async move { crate::session_diagnostics::capture(&namespace, &backends).await; });
+    }
+}
+
+fn server_absent(error: &str) -> bool {
+    let error = error.to_lowercase();
+    error.contains("no server") || error.contains("no sessions") ||
+        (error.contains("error connecting to") && (error.contains("no such file") || error.contains("connection refused")))
 }
 
 fn status_hidden(value: &str) -> bool {

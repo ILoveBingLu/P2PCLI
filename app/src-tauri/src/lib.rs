@@ -2,6 +2,7 @@
 
 mod cli;
 mod update;
+mod logging;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -324,6 +325,29 @@ async fn scan_nearby(state: State<'_, AppState>) -> Result<Vec<NearbyDevice>, St
 #[tauri::command]
 async fn diagnose(state: State<'_, AppState>) -> Result<p2pcli_core::diag::Diagnosis, String> {
     Ok(p2pcli_core::diag::diagnose(&state.node()).await)
+}
+
+#[tauri::command]
+async fn show_logs(state: State<'_, AppState>) -> Result<(), String> {
+    let path = state.data_dir.join("p2pcli.log");
+    if !path.is_file() { return Err("日志文件尚未生成".into()); }
+    #[cfg(windows)]
+    {
+        // Explorer is a persistent UI process; do not wait for it to exit.
+        std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", path.display())).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = tokio::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+        if cfg!(target_os = "macos") { command.arg("-R").arg(&path); }
+        else { command.arg(&state.data_dir); }
+        command.kill_on_drop(true);
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), command.status()).await
+            .map_err(|_| "打开日志位置超时".to_string())?.map_err(|e| e.to_string())?;
+        if !status.success() { return Err(format!("打开日志位置失败：{status}")); }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -826,7 +850,7 @@ fn show_main(app: &AppHandle) {
 }
 
 fn init_logging(dir: &Path) {
-    let file = std::fs::File::create(dir.join("p2pcli.log")).ok();
+    let file = logging::LogWriter::open(dir).ok();
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "p2pcli_core=info,p2pcli_app_lib=info".into());
     let builder = tracing_subscriber::fmt().with_env_filter(filter).with_ansi(false);
@@ -862,6 +886,8 @@ pub fn run() {
             };
             std::fs::create_dir_all(&data_dir)?;
             init_logging(&data_dir);
+            info!(pid = std::process::id(), version = env!("CARGO_PKG_VERSION"),
+                development = cfg!(debug_assertions), executable = ?std::env::current_exe(), "应用进程启动（新一次运行）");
             let settings = load_settings(&data_dir);
             let delegate = Arc::new(UiDelegate {
                 app: app.handle().clone(),
@@ -1002,6 +1028,7 @@ pub fn run() {
             overview,
             scan_nearby,
             diagnose,
+            show_logs,
             refresh_password,
             remove_paired,
             refresh_devices,
@@ -1039,6 +1066,9 @@ pub fn run() {
         .expect("P2PCLI 启动失败");
 
     app.run(|app, event| {
+        if let tauri::RunEvent::Exit = &event {
+            info!(pid = std::process::id(), "应用进程正常退出；保留后台会话");
+        }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
             show_main(app);

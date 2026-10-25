@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -60,12 +61,30 @@ fn which(exe: &str) -> bool {
 struct KillGuard {
     killer: Box<dyn ChildKiller + Send + Sync>,
     armed: bool,
+    session_id: String,
+    pid: Option<u32>,
+    stopping: Arc<AtomicBool>,
+}
+
+impl KillGuard {
+    fn detach(&mut self, reason: &str) {
+        if !self.stopping.swap(true, Ordering::SeqCst) {
+            if self.session_id.is_empty() {
+                tracing::info!(pid = ?self.pid, %reason, "关闭一次性临时终端");
+            } else {
+                tracing::info!(terminal = %self.session_id, pid = ?self.pid, %reason, "关闭终端连接客户端（不结束后台会话）");
+            }
+        }
+        if let Err(error) = self.killer.kill() {
+            tracing::warn!(terminal = %self.session_id, pid = ?self.pid, %error, "关闭终端连接客户端失败");
+        }
+    }
 }
 
 impl Drop for KillGuard {
     fn drop(&mut self) {
         if self.armed {
-            let _ = self.killer.kill();
+            self.detach("流处理结束或任务被取消");
         }
     }
 }
@@ -102,17 +121,22 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
         .openpty(size(cols, rows))
         .context("打开终端失败")?;
     let mut child = pair.slave.spawn_command(cmd).context("启动 shell 失败")?;
-    tracing::debug!(pid = ?child.process_id(), %shell, "终端已启动");
+    let pid = child.process_id();
+    let stopping = Arc::new(AtomicBool::new(false));
+    tracing::info!(?pid, %shell, terminal = %session_id, "终端连接客户端已启动");
     drop(pair.slave);
     let mut guard = KillGuard {
         killer: child.clone_killer(),
         armed: true,
+        session_id: session_id.clone(),
+        pid,
+        stopping: stopping.clone(),
     };
     let mut reader = pair.master.try_clone_reader()?;
     let mut writer = pair.master.take_writer()?;
     let master: SharedMaster = Arc::new(Mutex::new(Some(pair.master)));
 
-    write_msg(&mut send, &Msg::Opened { shell, session_id }).await?;
+    write_msg(&mut send, &Msg::Opened { shell, session_id: session_id.clone() }).await?;
 
     // 终端输出：阻塞读放在独立线程
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
@@ -132,8 +156,23 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
     });
 
     let (exit_tx, mut exit_rx) = oneshot::channel::<Option<u32>>();
+    let wait_session = session_id.clone();
     std::thread::spawn(move || {
-        let code = child.wait().ok().map(|s| s.exit_code());
+        let code = match child.wait() {
+            Ok(status) => {
+                let detach_requested = stopping.load(Ordering::SeqCst);
+                if !status.success() && !detach_requested {
+                    tracing::warn!(terminal = %wait_session, ?pid, code = status.exit_code(), signal = ?status.signal(), "终端连接客户端异常退出（不是后台服务退出码）");
+                } else {
+                    tracing::info!(terminal = %wait_session, ?pid, code = status.exit_code(), signal = ?status.signal(), detach_requested, "终端连接客户端已退出");
+                }
+                Some(status.exit_code())
+            }
+            Err(error) => {
+                tracing::warn!(terminal = %wait_session, ?pid, %error, "读取终端连接客户端退出状态失败");
+                None
+            }
+        };
         let _ = exit_tx.send(code);
     });
 
@@ -149,6 +188,7 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
     });
 
     let master_in = master.clone();
+    let input_session = session_id.clone();
     let mut input = tokio::spawn(async move {
         loop {
             match read_frame(&mut recv).await {
@@ -164,7 +204,14 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
                     }
                 }
                 Ok(Some(_)) => {}
-                Ok(None) | Err(_) => break,
+                Ok(None) => {
+                    tracing::info!(terminal = %input_session, "终端输入流关闭：远端脱离或断线");
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!(terminal = %input_session, %error, "终端输入流异常断开");
+                    break;
+                }
             }
         }
     });
@@ -178,7 +225,9 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
     loop {
         tokio::select! {
             data = out_rx.recv() => match data {
-                Some(d) => write_data(&mut send, &d).await?,
+                Some(d) => write_data(&mut send, &d).await.inspect_err(|error| {
+                    tracing::warn!(terminal = %session_id, %error, "终端输出流写入失败");
+                })?,
                 None => break,
             },
             code = &mut exit_rx, if !exited => {
@@ -196,7 +245,7 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
             _ = &mut input, if !input_done => {
                 // 对面脱离终端：只结束 attach 客户端，后台会话继续运行。
                 input_done = true;
-                let _ = guard.killer.kill();
+                guard.detach("远端输入流结束");
             }
             _ = async { sleep_until(deadline.unwrap()).await }, if deadline.is_some() => break,
         }

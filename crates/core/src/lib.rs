@@ -20,6 +20,7 @@ pub mod rdv_ws;
 pub mod rendezvous;
 pub mod store;
 pub mod sessions;
+mod session_diagnostics;
 pub mod v6;
 
 /// 终端连接用的协议号

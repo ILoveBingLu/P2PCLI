@@ -531,7 +531,7 @@ impl Host {
             Ok(())
         }.await;
         if let Err(e) = result {
-            debug!(session, "会话操作失败：{e:#}");
+            warn!(session, %owner, "会话操作失败：{e:#}");
             let _ = write_msg(&mut send, &Msg::Error { message: format!("{e:#}") }).await;
         }
         let _ = send.finish();

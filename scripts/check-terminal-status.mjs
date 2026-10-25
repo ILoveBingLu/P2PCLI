@@ -38,6 +38,7 @@ function hidden() {
 // Use the production format so changing the field order cannot silently break this check.
 const source = readFileSync(path.join(root, "crates/core/src/sessions.rs"), "utf8");
 const format = JSON.parse(source.match(/const SESSION_FORMAT: &str = ("[^"\r\n]*");/)[1]);
+const healthFormat = JSON.parse(source.match(/const HEALTH_FORMAT: &str = ("[^"\r\n]*");/)[1]);
 function details() {
   const values = run("list-sessions", "-F", format).split("\t");
   assert.equal(values.length, 9);
@@ -60,6 +61,12 @@ try {
   run("set-option", "-t", "check", "destroy-unattached", "off");
   run("set-option", "-t", "check", "status", "off");
   hidden();
+  const [healthName, backendPid, backendSocket] = run("list-sessions", "-F", healthFormat).split("\t");
+  assert.equal(healthName, "check");
+  assert(Number(backendPid) > 0, `Invalid backend PID: ${backendPid}`);
+  assert(backendSocket && !backendSocket.includes("#{"), `Invalid backend socket: ${backendSocket}`);
+  run("has-session", "-t", "check");
+  console.log("PASS: read-only health snapshot reports a backend PID and socket for a detached session");
   console.log("Initial:", await eventually(() => {
     const value = details();
     assert(value.command && value.cwd);
