@@ -8,7 +8,7 @@ use p2pcli_core::identity::load_or_create_key;
 use tracing::info;
 
 #[derive(Parser)]
-#[command(about = "P2PCLI 牵线服务器")]
+#[command(about = "P2PCLI 牵线服务器", version)]
 struct Args {
     /// 数据目录，放服务器私钥和设备库
     #[arg(long, default_value = "./p2pcli-server-data")]

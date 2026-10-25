@@ -1,0 +1,62 @@
+# 打 server-v* 标签时编译 Linux 版牵线服务器，连同校验和一起放到发布页。
+# 一键安装脚本 crates/server/install.sh 从这里下载。
+name: 牵线服务器发布
+
+on:
+  push:
+    tags: ["server-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 标签要和 Cargo.toml 里的版本一致
+        run: |
+          want="server-v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "p2pcli-server") | .version')"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "标签是 $GITHUB_REF_NAME，Cargo.toml 里的版本对应 $want"
+            exit 1
+          fi
+
+      - name: 装交叉编译工具
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          # cargo-zigbuild 的 pip 包会连 zig 一起装上；放进独立 venv，它找 zig 时用的 python3 才是这个 venv 的
+          python3 -m venv "$RUNNER_TEMP/zigbuild"
+          "$RUNNER_TEMP/zigbuild/bin/pip" install --quiet cargo-zigbuild==0.24.0
+          echo "$RUNNER_TEMP/zigbuild/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 编译
+        run: |
+          mkdir dist
+          for arch in x86_64 aarch64; do
+            cargo zigbuild --release --locked -p p2pcli-server --target "$arch-unknown-linux-musl"
+            cp "target/$arch-unknown-linux-musl/release/p2pcli-server" "dist/p2pcli-server-linux-$arch"
+          done
+          cd dist && sha256sum p2pcli-server-linux-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="P2PCLI 牵线服务器 ${GITHUB_REF_NAME#server-v}，Linux x86_64 / aarch64 静态编译。
+
+          一条命令安装或升级（root 运行）：
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/crates/server/install.sh | sudo bash
+          \`\`\`
+
+          用法见 README 的 自建服务器 一节。"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "牵线服务器 ${GITHUB_REF_NAME#server-v}" --notes "$notes" --latest=false
+          fi

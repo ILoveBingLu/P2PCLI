@@ -64,11 +64,21 @@ IPv6 直连（`crates/core/src/v6.rs`）：公网 IPv6 没有 NAT，网卡地址
 
 ### 自建服务器
 
+Linux 服务器（带 systemd，x86_64 或 aarch64）上一条命令装好：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ILoveBingLu/P2PCLI/main/crates/server/install.sh | sudo bash
+```
+
+脚本会下载发布页上编译好的程序、核对校验和、装成开机自启的服务，最后打印软件里要填的地址（`公钥@IP:端口`）。装完在云服务器控制台的安全组里放行 UDP 7788。再跑一次就是升级（只换程序，原来的服务配置不动），参数写在 `bash -s --` 后面，例如 `| sudo bash -s -- --port 9000`：`--ws-port` 另开 WebSocket 入口，`--mirror` 给国内服务器下载 GitHub 慢时加代理前缀，`--uninstall` 卸载，`--help` 看全部。
+
+不用脚本也可以直接跑：
+
 ```sh
 p2pcli-server --data-dir /var/lib/p2pcli --port 7788 --ws-port 7789 --public-ip <公网IP>
 ```
 
-放行 UDP 7788。启动时会打印 UDP 写法要填的地址（`公钥@IP:端口`），IP 也可以换成直接解析到服务器的域名，每次连接时现解析，服务器换 IP 改解析就行。`--ws-port` 开的是明文 WebSocket，对外用 `wss://` 时在前面加反向代理（例如 Caddy：`rdv.example.com { reverse_proxy 127.0.0.1:7789 }`），或者把域名放在 Cloudflare、阿里云 ESA 这类 CDN 后面。CDN 只转 HTTP，域名走了 CDN 就只能用 `wss://` 写法，好处是服务器 IP 不公开，CDN 帮着挡攻击。
+启动时会打印 UDP 写法要填的地址（`公钥@IP:端口`），IP 也可以换成直接解析到服务器的域名，每次连接时现解析，服务器换 IP 改解析就行。`--ws-port` 开的是明文 WebSocket，对外用 `wss://` 时在前面加反向代理（例如 Caddy：`rdv.example.com { reverse_proxy 127.0.0.1:7789 }`），或者把域名放在 Cloudflare、阿里云 ESA 这类 CDN 后面。CDN 只转 HTTP，域名走了 CDN 就只能用 `wss://` 写法，好处是服务器 IP 不公开，CDN 帮着挡攻击。
 
 ### Cloudflare Workers
 
@@ -104,6 +114,8 @@ pnpm run dev                       # 启动桌面应用开发模式
 pnpm run build --bundles app,dmg    # macOS 正式包
 pnpm run build --bundles nsis       # Windows 正式包
 ```
+
+发布牵线服务器：改好根目录 `Cargo.toml` 的版本号，推一个同版本的 `server-vX.Y.Z` 标签，GitHub Actions 会编译 Linux x86_64、aarch64 两个版本连同校验和放到发布页（`.github/workflows/server-release.yml`），一键安装脚本就从那里下载。
 
 界面预览：在根目录执行 `pnpm run dev:web`，然后打开 `http://localhost:1420/preview.html?s=empty`（s 还可以是 request、busy、relay），用假数据渲染界面。仅构建前端可执行 `pnpm run build:web`。
 
