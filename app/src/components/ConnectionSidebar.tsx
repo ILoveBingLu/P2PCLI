@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Accordion } from "@heroui/react";
-import { History, Radar, Trash2 } from "lucide-react";
+import { History, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { api, formatCode, type NearbyDevice, type Overview } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,11 +10,13 @@ import { PlatformIcon } from "./PlatformIcon";
 import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
 import type { SessionTarget } from "./RemoteSessions";
 
-export function ConnectionSidebar({ ov, busy, open, scanning, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab }: {
+export function ConnectionSidebar({ ov, busy, open, scanning, nearbyReveal, onScanNearby, tabs, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onSelectTab }: {
   ov: Overview | null;
   busy: boolean;
   open: boolean;
   scanning: boolean;
+  nearbyReveal: number;
+  onScanNearby: () => void;
   tabs: SidebarTab[];
   activeKey: number | null;
   sessionTarget: SessionTarget | null;
@@ -28,11 +30,11 @@ export function ConnectionSidebar({ ov, busy, open, scanning, tabs, activeKey, s
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["nearby", "history"]));
   useEffect(() => {
-    if (open && scanning) {
+    if (nearbyReveal > 0) {
       setExpandedSections((keys) => new Set([...keys, "nearby"]));
       document.getElementById("nearby-title")?.scrollIntoView({ block: "nearest" });
     }
-  }, [open, scanning]);
+  }, [nearbyReveal]);
   const activeDevice = sessionTarget?.info.endpoint_id ?? tabs.find((tab) => tab.key === activeKey)?.info.endpoint_id;
   useEffect(() => {
     if (activeDevice) {
@@ -48,7 +50,7 @@ export function ConnectionSidebar({ ov, busy, open, scanning, tabs, activeKey, s
     return true;
   });
   const nearby = ov?.nearby ?? [];
-  const lanOnline = new Set(nearby.map((d) => d.endpoint_id));
+  const lanOnline = new Set(nearby.filter((d) => d.online).map((d) => d.endpoint_id));
 
   return (
     <aside id="connection-sidebar" className="connection-sidebar" data-collapsed={open ? undefined : ""} aria-label="连接历史">
@@ -56,28 +58,36 @@ export function ConnectionSidebar({ ov, busy, open, scanning, tabs, activeKey, s
         <Accordion hideSeparator allowsMultipleExpanded expandedKeys={expandedSections}
           onExpandedChange={(keys) => setExpandedSections(new Set([...keys].map(String)))}>
         <Accordion.Item id="nearby" className="recent-section">
-          <Accordion.Heading level={2} id="nearby-title">
-            <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
-              <Radar className="size-3.5 text-muted-foreground" />
-              <span className="flex-1">附近设备</span>
-              <Badge variant="secondary">{nearby.length}</Badge>
-              <Accordion.Indicator className="size-3.5" />
+          <Accordion.Heading level={2} id="nearby-title" className="grid grid-cols-[max-content_1.5rem_minmax(0,1fr)] items-center gap-2">
+            <Accordion.Trigger className="col-span-3 col-start-1 row-start-1 grid grid-cols-subgrid min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
+              <span className="flex items-center gap-2"><Radar className="size-3.5 text-muted-foreground" />附近设备</span>
+              <span aria-hidden="true" />
+              <span className="flex items-center justify-end gap-2">
+                <Badge variant="secondary">{nearby.length}</Badge>
+                <Accordion.Indicator className="size-3.5" />
+              </span>
             </Accordion.Trigger>
+            <Button slot={null} variant="ghost" size="icon-sm"
+              className="col-start-2 row-start-1 z-10 size-6 min-w-0 text-muted-foreground"
+              title="刷新附近设备" aria-label="刷新附近设备" disabled={scanning}
+              onPress={onScanNearby}>
+              <RefreshCw className={scanning ? "size-3 animate-spin" : "size-3"} />
+            </Button>
           </Accordion.Heading>
           <Accordion.Panel aria-busy={scanning}>
-          {scanning && <p className="recent-placeholder" role="status">扫描中…</p>}
           {nearby.length ? (
             <div className="flex flex-col">
               {nearby.map((device) => (
-                <Button key={device.endpoint_id} variant="ghost" disabled={busy}
+                <Button key={device.endpoint_id} variant="ghost" disabled={busy || !device.online}
                   className="h-auto w-full min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
-                  title={`连接 ${device.name}`} onClick={() => onConnectLan(device)}>
+                  aria-label={`${device.name}${device.online ? "" : "（离线）"}`}
+                  title={device.online ? `连接 ${device.name}` : `${device.name} · 离线`} onClick={() => onConnectLan(device)}>
                   <PlatformIcon platform={device.platform} decorative />
                   <span className="min-w-0 flex-1 truncate text-left">{device.name}</span>
                 </Button>
               ))}
             </div>
-          ) : !scanning && (
+          ) : (
             <p className="recent-placeholder">
               暂无附近设备
             </p>
@@ -128,7 +138,7 @@ export function ConnectionSidebar({ ov, busy, open, scanning, tabs, activeKey, s
                           key={target?.connId ?? "disconnected"} target={target} tabs={deviceTabs}
                           activeKey={sessionTarget ? null : activeKey} busy={busy}
                           onConnect={() => lanOnline.has(device.endpoint_id)
-                            ? onConnectLan({ endpoint_id: device.endpoint_id, name: device.name, platform: device.platform })
+                            ? onConnectLan({ endpoint_id: device.endpoint_id, name: device.name, platform: device.platform, online: true })
                             : onConnect(device.code)}
                           onOpen={onOpenSession} onSelect={onSelectTab} />}
                       </div>

@@ -23,8 +23,8 @@ const ov: Overview = {
   ],
   // 工作室 Mac mini 也在连接历史里，会标「局域网在线」；连客厅那台要密码
   nearby: [
-    { endpoint_id: "x", name: "工作室 Mac mini", platform: "macos" },
-    { endpoint_id: "c".repeat(64), name: "客厅的 Windows", platform: "windows" },
+    { endpoint_id: "x", name: "工作室 Mac mini", platform: "macos", online: true },
+    { endpoint_id: "c".repeat(64), name: "客厅的 Windows", platform: "windows", online: true },
   ],
   trusted: [{ endpoint_id: "f9bb5fbc3f", name: "工作室 Mac mini", platform: "macos", added_at: 0 }],
 };
@@ -50,6 +50,7 @@ const previewSettings: SettingsView = {
 // s=custom-server：设置里填过自定义牵线服务器
 if (s === "custom-server") previewSettings.server = "b840307fdbdff2aa164308932575e8f7396b7fd539bd7cfd1927b2456b3fc8a8@rdv.example.com:7788";
 let termSeq = 0;
+let scanSeq = 0;
 const terminalSessions: TerminalSession[] = s === "sessions" ? [{ id: "a".repeat(32), created_at: Math.floor(Date.now() / 1000) - 3600, attached: false }] : [];
 const attachments = new Map<number, { sessionId: string; status: any }>();
 
@@ -74,6 +75,11 @@ mockIPC(
       case "scan_nearby":
         return new Promise((resolve, reject) => setTimeout(() => {
           if (s === "lan-scan-error") return reject("局域网扫描启动失败");
+          if (s === "lan-refresh") {
+            scanSeq += 1;
+            ov.nearby = ov.nearby.map((device, index) => ({ ...device, online: index !== 1 || scanSeq % 2 === 0 }));
+            if (scanSeq === 1) ov.nearby.push({ endpoint_id: "d".repeat(64), name: "新发现的 Mac", platform: "macos", online: true });
+          }
           resolve(ov.nearby);
         }, 3000));
       case "connect": {

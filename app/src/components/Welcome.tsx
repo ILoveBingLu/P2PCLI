@@ -54,7 +54,7 @@ export function Welcome({
             </Button>
             <Button variant="ghost" className="text-muted-foreground" onClick={onScanNearby} disabled={scanning}>
               {scanning ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Radar data-icon="inline-start" />}
-              {scanning ? "扫描中…" : "附近设备"}
+              附近设备
             </Button>
           </div>
           {ov?.server.state === "none" && (

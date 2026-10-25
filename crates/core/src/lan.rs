@@ -6,17 +6,18 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
-use iroh::address_lookup::{AddressLookup, EndpointData, Error as AddressLookupError, Item, UserData};
-use iroh::{Endpoint, EndpointId};
+use iroh::address_lookup::{AddressLookup, EndpointData, EndpointInfo, Error as AddressLookupError, Item, UserData};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, TransportAddr, endpoint::presets};
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use serde::Serialize;
 use tracing::debug;
 
 use crate::identity::DeviceInfo;
+use crate::ALPN_TERM;
 
 /// mDNS 服务名，和别的 iroh 程序分开
 const SERVICE_NAME: &str = "p2pcli";
@@ -31,12 +32,19 @@ pub struct NearbyDevice {
     pub endpoint_id: String,
     pub name: String,
     pub platform: String,
+    pub online: bool,
+}
+
+struct KnownDevice {
+    info: NearbyDevice,
+    addr: EndpointAddr,
+    first_seen: Instant,
 }
 
 pub struct Lan {
     mdns: MdnsAddressLookup,
     shared: Arc<Shared>,
-    devices: Arc<Mutex<HashMap<EndpointId, NearbyDevice>>>,
+    devices: Arc<Mutex<HashMap<EndpointId, KnownDevice>>>,
     task: tokio::task::AbortHandle,
     scan_lock: tokio::sync::Mutex<()>,
 }
@@ -82,7 +90,7 @@ impl Lan {
             mdns: mdns.clone(),
             shared: shared.clone(),
         });
-        let devices: Arc<Mutex<HashMap<EndpointId, NearbyDevice>>> = Arc::default();
+        let devices: Arc<Mutex<HashMap<EndpointId, KnownDevice>>> = Arc::default();
         let mut events = mdns.subscribe().await;
         let (found, me_id) = (devices.clone(), endpoint.id());
         let task = tokio::spawn(async move {
@@ -93,19 +101,11 @@ impl Lan {
                         if id == me_id {
                             continue;
                         }
-                        match endpoint_info.data.user_data().and_then(|d| decode(d.as_ref())) {
-                            Some((platform, name)) => {
-                                let dev = NearbyDevice { endpoint_id: id.to_string(), name, platform };
-                                if found.lock().unwrap().insert(id, dev.clone()).as_ref() != Some(&dev) {
-                                    debug!(id = %id.fmt_short(), name = %dev.name, "局域网发现设备");
-                                }
-                            }
-                            None => debug!(id = %id.fmt_short(), "局域网里有认不出的设备，跳过"),
-                        }
+                        remember(&mut found.lock().unwrap(), &endpoint_info);
                     }
                     DiscoveryEvent::Expired { endpoint_id } => {
-                        let gone = found.lock().unwrap().remove(&endpoint_id);
-                        if gone.is_some() {
+                        if let Some(device) = found.lock().unwrap().get_mut(&endpoint_id) {
+                            device.info.online = false;
                             debug!(id = %endpoint_id.fmt_short(), "局域网设备离开");
                         }
                     }
@@ -128,28 +128,52 @@ impl Lan {
             .context("局域网扫描启动失败")?;
         let mut events = probe.subscribe().await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-        let mut found = HashMap::new();
         while let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.next()).await {
             match event {
                 DiscoveryEvent::Discovered { endpoint_info, .. } if endpoint_info.endpoint_id != me => {
-                    if let Some((platform, name)) = endpoint_info.data.user_data().and_then(|d| decode(d.as_ref())) {
-                        let id = endpoint_info.endpoint_id;
-                        found.insert(id.to_string(), NearbyDevice { endpoint_id: id.to_string(), name, platform });
-                    }
-                }
-                DiscoveryEvent::Expired { endpoint_id } => {
-                    found.remove(&endpoint_id.to_string());
+                    remember(&mut self.devices.lock().unwrap(), &endpoint_info);
                 }
                 _ => {}
             }
         }
-        // 后台发现仍在运行；保留它掌握的在线设备，不清空现有会话。
-        for device in self.devices() {
-            found.entry(device.endpoint_id.clone()).or_insert(device);
+        drop(events);
+        drop(probe);
+        // 独立、仅直连的 endpoint：不复用或关闭用户的连接，也不经中继判断局域网在线。
+        let addresses: Vec<_> = self.devices.lock().unwrap().iter()
+            .map(|(id, device)| (*id, device.addr.clone())).collect();
+        if addresses.is_empty() {
+            return Ok(self.devices());
         }
-        let mut devices: Vec<_> = found.into_values().collect();
-        devices.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.endpoint_id.cmp(&b.endpoint_id)));
-        Ok(devices)
+        let checker = Endpoint::builder(presets::Minimal)
+            .clear_address_lookup()
+            .relay_mode(RelayMode::Disabled)
+            .bind().await.context("设备连通性检查启动失败")?;
+        let checks = futures_util::stream::iter(addresses).map(|(id, addr)| {
+            let checker = checker.clone();
+            async move {
+                let online = if addr.ip_addrs().next().is_none() {
+                    false
+                } else {
+                    match tokio::time::timeout(Duration::from_secs(2), checker.connect(addr, ALPN_TERM)).await {
+                        Ok(Ok(conn)) => {
+                            // 只完成加密握手，不开流、不发 Hello，不触发配对或创建会话。
+                            conn.close(0u32.into(), b"reachability checked");
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                (id, online)
+            }
+        }).buffer_unordered(8);
+        tokio::pin!(checks);
+        while let Some((id, online)) = checks.next().await {
+            if let Some(device) = self.devices.lock().unwrap().get_mut(&id) {
+                device.info.online = online;
+            }
+        }
+        checker.close().await;
+        Ok(self.devices())
     }
 
     /// 改了设备名就重新广播
@@ -167,11 +191,30 @@ impl Lan {
         }
     }
 
-    /// 现在能看到的设备，按名字排
+    /// 保留离线设备，并按首次发现顺序显示，刷新时不跳行。
     pub fn devices(&self) -> Vec<NearbyDevice> {
-        let mut v: Vec<_> = self.devices.lock().unwrap().values().cloned().collect();
-        v.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.endpoint_id.cmp(&b.endpoint_id)));
-        v
+        let devices = self.devices.lock().unwrap();
+        let mut v: Vec<_> = devices.values().collect();
+        v.sort_by_key(|device| device.first_seen);
+        v.into_iter().map(|device| device.info.clone()).collect()
+    }
+}
+
+fn remember(devices: &mut HashMap<EndpointId, KnownDevice>, endpoint: &EndpointInfo) {
+    let Some((platform, name)) = endpoint.data.user_data().and_then(|data| decode(data.as_ref())) else { return };
+    let id = endpoint.endpoint_id;
+    // 只保留 mDNS 提供的 IP 地址，连通性检查不使用广播中的中继地址。
+    let addr = EndpointAddr::from_parts(id, endpoint.data.ip_addrs().copied().map(TransportAddr::Ip));
+    if let Some(device) = devices.get_mut(&id) {
+        device.info.name = name;
+        device.info.platform = platform;
+        device.addr = addr;
+    } else {
+        devices.insert(id, KnownDevice {
+            info: NearbyDevice { endpoint_id: id.to_string(), name, platform, online: true },
+            addr,
+            first_seen: Instant::now(),
+        });
     }
 }
 

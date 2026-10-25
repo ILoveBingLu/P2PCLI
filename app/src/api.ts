@@ -86,6 +86,7 @@ export interface NearbyDevice {
   endpoint_id: string;
   name: string;
   platform: string;
+  online: boolean;
 }
 
 export interface IncomingRequest {
