@@ -37,9 +37,9 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
         <Plus />
       </Button>
       <Popover.Content
-        placement="bottom end"
+        placement="bottom"
         offset={8}
-        className="w-[26rem] max-w-[calc(100vw-24px)] data-[entering]:animate-none"
+        className="w-[26rem] max-w-[calc(100vw-24px)]"
       >
         <Popover.Arrow />
         <Popover.Dialog aria-label="连接远程设备" className="max-h-[calc(100dvh-72px)] overflow-y-auto">

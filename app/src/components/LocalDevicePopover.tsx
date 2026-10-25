@@ -100,7 +100,7 @@ export function LocalDevicePopover({
         <Monitor data-icon="inline-start" />
       </Button>
       <Popover.Content
-        placement="bottom end"
+        placement="bottom"
         offset={8}
         className="w-80 max-w-[calc(100vw-24px)]"
       >
