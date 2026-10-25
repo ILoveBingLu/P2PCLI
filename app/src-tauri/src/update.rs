@@ -28,6 +28,9 @@ pub enum UpdateProgress {
     Installing,
 }
 
+/// 下载更新包最多等这么久；检查更新还是 30 秒
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// 设置里配了 HTTP 代理就走代理；P2PCLI_UPDATE_URL 是测试用的，换成别的更新地址
 fn updater(app: &AppHandle, proxy: Option<&str>) -> Result<Updater, String> {
     let mut builder = app.updater_builder().timeout(Duration::from_secs(30));
@@ -44,7 +47,10 @@ pub async fn check(app: &AppHandle, proxy: Option<String>) -> Result<Option<Upda
     let update = updater(app, proxy.as_deref())?
         .check()
         .await
-        .map_err(|e| format!("检查更新失败：{e}"))?;
+        .map_err(|e| {
+            warn!("检查更新失败：{e}");
+            format!("检查更新失败：{e}")
+        })?;
     let view = update.as_ref().map(|u| UpdateView {
         version: u.version.clone(),
         current_version: u.current_version.clone(),
@@ -59,13 +65,16 @@ pub async fn install(app: &AppHandle, progress: Channel<UpdateProgress>) -> Resu
     if cfg!(debug_assertions) {
         return Err("开发版不能在线更新，请用安装包装的正式版".into());
     }
-    let update = app
+    let mut update = app
         .state::<PendingUpdate>()
         .0
         .lock()
         .unwrap()
         .take()
         .ok_or("没有待安装的新版本，请重新检查更新")?;
+    // 检查更新的 30 秒超时会原样带到下载，而且算的是整个下载；网慢的时候十几 MB 下不完就报失败。下载放宽到 10 分钟
+    update.timeout = Some(DOWNLOAD_TIMEOUT);
+    info!(version = %update.version, "开始下载更新");
     let mut downloaded = 0u64;
     let on_chunk = progress.clone();
     update
@@ -79,7 +88,10 @@ pub async fn install(app: &AppHandle, progress: Channel<UpdateProgress>) -> Resu
             },
         )
         .await
-        .map_err(|e| format!("更新失败：{e}"))?;
+        .map_err(|e| {
+            warn!(version = %update.version, downloaded, "更新失败：{e}");
+            format!("更新失败：{e}")
+        })?;
     info!(version = %update.version, "新版本已装好，重启");
     app.restart();
 }
