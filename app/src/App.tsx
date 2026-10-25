@@ -72,6 +72,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
+  const [showLocalDevice, setShowLocalDevice] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -106,6 +107,7 @@ export default function App() {
       listen("server-status", refresh),
       listen<{ conn_id: number; reason: string }>("remote-closed", (e) => {
         const { conn_id, reason } = e.payload;
+        setSessionTarget((target) => target?.connId === conn_id ? null : target);
         setTabs((ts) =>
           ts.map((t) =>
             t.connId === conn_id ? { ...t, state: "closed", note: reason } : t,
@@ -134,6 +136,8 @@ export default function App() {
   }, [activeTab?.connId, activeTab?.state]);
 
   const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string) => {
+    if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
+      void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
     const existing = sessionId ? tabs.find((t) => t.info.endpoint_id === info.endpoint_id && t.sessionId === sessionId && (t.state === "open" || t.state === "opening")) : null;
     if (existing) {
       if (existing.connId !== connId && !tabs.some((t) => t.connId === connId))
@@ -214,6 +218,8 @@ export default function App() {
       <Titlebar
         ov={ov}
         onRefresh={refresh}
+        localDeviceOpen={showLocalDevice}
+        onLocalDeviceOpenChange={setShowLocalDevice}
         terminalCount={tabs.length}
         onDiag={() => setShowDiag(true)}
         onSettings={() => setShowSettings(true)}
@@ -233,6 +239,15 @@ export default function App() {
         ov={ov}
         busy={connection.busy}
         open={sidebar.open}
+        tabs={tabs}
+        activeKey={activeKey}
+        sessionTarget={sessionTarget}
+        onOpenSession={(target, id) => addTab(target.connId, target.info, target.code, id)}
+        onSelectTab={(key) => {
+          if (sessionTarget && !tabs.some((tab) => tab.connId === sessionTarget.connId))
+            void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
+          setActiveKey(key); setSessionTarget(null); setShowSettings(false);
+        }}
         onConnect={(code) => void connection.doConnect(code, connection.password)}
         onRefresh={refresh}
       />}
@@ -458,6 +473,7 @@ export default function App() {
         ) : (
           <Welcome
             ov={ov}
+            onLocalDevice={() => setShowLocalDevice(true)}
             onSettings={() => setShowSettings(true)}
             onConnect={() => setShowConnect(true)}
           />

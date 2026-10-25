@@ -12,6 +12,8 @@ import { sidebarShortcut } from "./useSidebar";
 export function Titlebar({
   ov,
   onRefresh,
+  localDeviceOpen,
+  onLocalDeviceOpenChange,
   terminalCount,
   connectionAction,
   onDiag,
@@ -23,6 +25,8 @@ export function Titlebar({
 }: {
   ov: Overview | null;
   onRefresh: () => void;
+  localDeviceOpen: boolean;
+  onLocalDeviceOpenChange: (open: boolean) => void;
   terminalCount: number;
   connectionAction: ReactNode;
   onDiag: () => void;
@@ -74,7 +78,7 @@ export function Titlebar({
       <div className="titlebar-actions">
         <Badge variant="outline">{terminalCount} 个终端</Badge>
         {connectionAction}
-        <LocalDevicePopover ov={ov} onRefresh={onRefresh} />
+        <LocalDevicePopover ov={ov} onRefresh={onRefresh} open={localDeviceOpen} onOpenChange={onLocalDeviceOpenChange} />
         <Button
           variant="ghost"
           size="icon-sm"

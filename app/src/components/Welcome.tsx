@@ -1,4 +1,4 @@
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Monitor } from "lucide-react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import type { Overview } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -15,10 +15,12 @@ export function Welcome({
   ov,
   onSettings,
   onConnect,
+  onLocalDevice,
 }: {
   ov: Overview | null;
   onSettings: () => void;
   onConnect: () => void;
+  onLocalDevice: () => void;
 }) {
   return (
     <div className="welcome-scroll">
@@ -38,10 +40,15 @@ export function Welcome({
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
-          <Button onClick={onConnect}>
-            开始连接
-            <ArrowRight data-icon="inline-end" />
-          </Button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button onClick={onConnect}>
+              开始连接
+              <ArrowRight data-icon="inline-end" />
+            </Button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={onLocalDevice}>
+              <Monitor data-icon="inline-start" />本机设备
+            </Button>
+          </div>
           {ov?.server.state === "none" && (
             <Alert>
               <AlertTitle>先配置牵线服务器</AlertTitle>

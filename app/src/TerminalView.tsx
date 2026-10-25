@@ -105,11 +105,14 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
     });
 
     const output = new Channel<ArrayBuffer>();
-    output.onmessage = (buf) => term.write(new Uint8Array(buf));
+    output.onmessage = (buf) => { if (!disposed) term.write(new Uint8Array(buf)); };
     const status = new Channel<TermStatus>();
-    status.onmessage = (s) => cb.current.onStatus(s);
+    status.onmessage = (s) => { if (!disposed) cb.current.onStatus(s); };
 
-    invoke<OpenedTerminal>("open_terminal", { connId, sessionId: sessionId ?? null, cols: term.cols, rows: term.rows, output, status })
+    // Let StrictMode's setup/cleanup rehearsal finish before creating a persistent session.
+    const openTimer = window.setTimeout(() => {
+      if (disposed) return;
+      void invoke<OpenedTerminal>("open_terminal", { connId, sessionId: sessionId ?? null, cols: term.cols, rows: term.rows, output, status })
       .then(({ term_id: id, session_id }) => {
         if (disposed) {
           invoke("term_close", { termId: id });
@@ -121,9 +124,11 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
         invoke("term_resize", { termId: id, cols: term.cols, rows: term.rows });
       })
       .catch((err) => {
+        if (disposed) return;
         term.write(`\r\n\x1b[31m打开终端失败：${err}\x1b[0m\r\n`);
         cb.current.onStatus({ type: "closed", reason: String(err) });
       });
+    }, 0);
 
     const subs = [
       term.onData((d) => send(d)),
@@ -143,6 +148,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
 
     return () => {
       disposed = true;
+      window.clearTimeout(openTimer);
       window.clearTimeout(resizeTimer);
       ro.disconnect();
       subs.forEach((s) => s.dispose());

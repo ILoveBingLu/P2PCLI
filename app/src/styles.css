@@ -349,40 +349,6 @@
 .recent-section {
   padding: 0 3px;
 }
-.recent-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-inline: -8px;
-}
-.recent-device {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 2px;
-}
-.recent-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  text-align: left;
-}
-.recent-copy > span:first-child {
-  max-width: 175px;
-  font-size: 12px;
-  font-weight: 450;
-}
-.recent-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-}
 .recent-placeholder {
   padding-block: 12px;
   color: var(--muted-foreground);

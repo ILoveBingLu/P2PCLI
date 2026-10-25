@@ -45,11 +45,14 @@ function ServerStatus({ ov }: { ov: Overview | null }) {
 export function LocalDevicePopover({
   ov,
   onRefresh,
+  open,
+  onOpenChange,
 }: {
   ov: Overview | null;
   onRefresh: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -85,15 +88,16 @@ export function LocalDevicePopover({
     <Popover
       isOpen={open}
       onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
+        onOpenChange(nextOpen);
         if (!nextOpen) {
           setShowPassword(false);
           setCopied(null);
         }
       }}
     >
-      <Button variant="ghost" size="icon-sm" aria-label="本机设备" title="本机设备">
-        <Monitor />
+      <Button variant="ghost" size="icon-sm"
+        aria-label="本机设备" title="查看本机设备码和临时密码">
+        <Monitor data-icon="inline-start" />
       </Button>
       <Popover.Content
         placement="bottom end"

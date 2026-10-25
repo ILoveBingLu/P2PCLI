@@ -6,6 +6,23 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import type { useConnection } from "./useConnection";
 
+// Let the popover paint before OTP focus/selection initialization runs.
+function focusDeviceCodeAfterPaint(input: HTMLInputElement | null) {
+  if (!input) return;
+  let frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const dialog = input.closest('[role="dialog"]');
+      // Do not steal focus if the user (or a connection error) chose another field.
+      if (input.isConnected && !input.disabled &&
+        (!active || active === document.body || active === dialog)) {
+        input.focus({ preventScroll: true });
+      }
+    });
+  });
+  return () => cancelAnimationFrame(frame);
+}
+
 export function ConnectionPopover({ open, onOpenChange, connection }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -22,7 +39,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
       <Popover.Content
         placement="bottom end"
         offset={8}
-        className="w-[26rem] max-w-[calc(100vw-24px)]"
+        className="w-[26rem] max-w-[calc(100vw-24px)] data-[entering]:animate-none"
       >
         <Popover.Arrow />
         <Popover.Dialog aria-label="连接远程设备" className="max-h-[calc(100dvh-72px)] overflow-y-auto">
@@ -45,7 +62,8 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                     id="remote-code"
                     className="gap-3"
                     variant="secondary"
-                    autoFocus
+                    ref={focusDeviceCodeAfterPaint}
+                    pushPasswordManagerStrategy="none"
                     aria-label="设备码，9 位数字"
                     maxLength={9}
                     minLength={9}
