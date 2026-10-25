@@ -113,7 +113,7 @@ export function LocalDevicePopover({
       }}
     >
       <Button variant="ghost" size="icon-sm"
-        aria-label="本机设备" title="查看本机设备码和配对密码">
+        aria-label="本机信息" title="查看本机设备码和配对密码">
         <Monitor data-icon="inline-start" />
       </Button>
       <Popover.Content
@@ -122,9 +122,9 @@ export function LocalDevicePopover({
         className="w-80 max-w-[calc(100vw-24px)]"
       >
         <Popover.Arrow />
-        <Popover.Dialog aria-label="本机设备信息" className="flex flex-col gap-4">
+        <Popover.Dialog aria-label="本机信息" className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
-            <Popover.Heading>本机设备</Popover.Heading>
+            <Popover.Heading>本机信息</Popover.Heading>
             <ServerStatus ov={ov} />
           </div>
           <div className="flex flex-col gap-3">

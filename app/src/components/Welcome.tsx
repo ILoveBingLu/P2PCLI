@@ -46,7 +46,7 @@ export function Welcome({
         <EmptyContent>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <Button variant="ghost" className="text-muted-foreground" onClick={onLocalDevice}>
-              <Monitor data-icon="inline-start" />本机设备
+              <Monitor data-icon="inline-start" />本机信息
             </Button>
             <Button onClick={onConnect}>
               开始连接
