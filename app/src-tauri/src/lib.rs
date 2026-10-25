@@ -206,6 +206,8 @@ struct Overview {
     endpoint_id: String,
     code: Option<String>,
     password: String,
+    /// 配对密码固定了，重启也不变
+    password_fixed: bool,
     /// none 表示没配牵线服务器
     server: serde_json::Value,
     sessions: Vec<SessionSummary>,
@@ -228,6 +230,7 @@ fn overview(state: State<'_, AppState>) -> Overview {
         endpoint_id: node.id().to_string(),
         code: node.rdv.as_ref().and_then(|r| r.code()),
         password: node.host.password(),
+        password_fixed: node.host.password_fixed(),
         server,
         sessions: node.host.sessions(),
         recent: node.recent.list(),
@@ -253,6 +256,11 @@ async fn diagnose(state: State<'_, AppState>) -> Result<p2pcli_core::diag::Diagn
 #[tauri::command]
 fn refresh_password(state: State<'_, AppState>) -> String {
     state.node().host.regenerate_password()
+}
+
+#[tauri::command]
+fn set_password_fixed(state: State<'_, AppState>, fixed: bool) -> Result<(), String> {
+    state.node().host.set_password_fixed(fixed).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -760,6 +768,7 @@ pub fn run() {
             overview,
             diagnose,
             refresh_password,
+            set_password_fixed,
             respond_request,
             kick,
             remove_trusted,

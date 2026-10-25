@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
                 node.host.set_password(&p);
             }
             eprintln!("本机公钥：{}", node.id());
-            eprintln!("临时密码：{}", node.host.password());
+            eprintln!("配对密码：{}", node.host.password());
             if let Some(rdv) = &node.rdv {
                 let mut code = rdv.watch_code();
                 let got = tokio::time::timeout(Duration::from_secs(30), code.wait_for(|c| c.is_some())).await;

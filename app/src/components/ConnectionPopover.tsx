@@ -116,13 +116,13 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                 </Field>
                 )}
                 <Field data-disabled={busy}>
-                  <FieldLabel htmlFor="remote-password">临时密码</FieldLabel>
+                  <FieldLabel htmlFor="remote-password">配对密码</FieldLabel>
                   <Input
                     id="remote-password"
                     variant="secondary"
                     ref={pwRef}
                     type="password"
-                    placeholder="输入对方的临时密码"
+                    placeholder="输入对方的配对密码"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     disabled={busy}

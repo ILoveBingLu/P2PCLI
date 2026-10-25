@@ -36,7 +36,7 @@ export function Welcome({
             <h2>连接远程设备</h2>
           </EmptyTitle>
           <EmptyDescription>
-            输入设备码和临时密码，开始远程终端会话。
+            输入设备码和配对密码，开始远程终端会话。
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>

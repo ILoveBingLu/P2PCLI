@@ -207,7 +207,7 @@ export function SettingsPage({
                       在局域网中显示本机
                     </Checkbox.Content>
                     <Description className="pl-7 text-xs text-muted-foreground">
-                      同一网络里的其他 P2PCLI 能看到本机名称，点一下就能发起连接，仍然要临时密码和你的同意。在公共 Wi-Fi 上可以关掉。
+                      同一网络里的其他 P2PCLI 能看到本机名称，点一下就能发起连接，仍然要配对密码和你的同意。在公共 Wi-Fi 上可以关掉。
                     </Description>
                   </Checkbox>
                 </FieldGroup>

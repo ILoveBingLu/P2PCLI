@@ -7,6 +7,8 @@ import {
   EyeOff,
   Laptop,
   LoaderCircle,
+  Lock,
+  LockOpen,
   Monitor,
   RefreshCw,
 } from "lucide-react";
@@ -54,6 +56,8 @@ export function LocalDevicePopover({
   onOpenChange: (open: boolean) => void;
 }) {
   const [refreshing, setRefreshing] = useState(false);
+  const [locking, setLocking] = useState(false);
+  const fixed = !!ov?.password_fixed;
   const [showPassword, setShowPassword] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -76,11 +80,24 @@ export function LocalDevicePopover({
     try {
       await api.refreshPassword();
       onRefresh();
-      toast.success("临时密码已更新");
+      toast.success("配对密码已更新");
     } catch (e) {
       toast.error(`更新失败：${String(e)}`);
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const toggleFixed = async () => {
+    setLocking(true);
+    try {
+      await api.setPasswordFixed(!fixed);
+      onRefresh();
+      toast.success(fixed ? "已取消固定，下次打开软件会换新密码" : "配对密码已固定，重启也不变");
+    } catch (e) {
+      toast.error(`设置失败：${String(e)}`);
+    } finally {
+      setLocking(false);
     }
   };
 
@@ -96,7 +113,7 @@ export function LocalDevicePopover({
       }}
     >
       <Button variant="ghost" size="icon-sm"
-        aria-label="本机设备" title="查看本机设备码和临时密码">
+        aria-label="本机设备" title="查看本机设备码和配对密码">
         <Monitor data-icon="inline-start" />
       </Button>
       <Popover.Content
@@ -136,7 +153,7 @@ export function LocalDevicePopover({
               </div>
             </div>
             <div>
-              <div className="credential-label">临时密码</div>
+              <div className="credential-label">配对密码</div>
               <div className="credential-row">
                 <span className="device-password">
                   {ov ? (showPassword ? ov.password : "••••••") : "—"}
@@ -146,8 +163,8 @@ export function LocalDevicePopover({
                     variant="ghost"
                     size="icon-sm"
                     disabled={!ov}
-                    aria-label={showPassword ? "隐藏临时密码" : "显示临时密码"}
-                    title={showPassword ? "隐藏临时密码" : "显示临时密码"}
+                    aria-label={showPassword ? "隐藏配对密码" : "显示配对密码"}
+                    title={showPassword ? "隐藏配对密码" : "显示配对密码"}
                     onClick={() => setShowPassword(!showPassword)}
                   >
                     {showPassword ? <EyeOff /> : <Eye />}
@@ -156,18 +173,29 @@ export function LocalDevicePopover({
                     variant="ghost"
                     size="icon-sm"
                     disabled={!ov}
-                    aria-label="复制临时密码"
-                    title="复制临时密码"
-                    onClick={() => ov && copy(ov.password, "临时密码")}
+                    aria-label="复制配对密码"
+                    title="复制配对密码"
+                    onClick={() => ov && copy(ov.password, "配对密码")}
                   >
-                    {copied === "临时密码" ? <Check /> : <Copy />}
+                    {copied === "配对密码" ? <Check /> : <Copy />}
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    disabled={!ov || refreshing}
-                    aria-label="刷新临时密码"
-                    title="刷新密码，旧密码立即失效"
+                    disabled={!ov || locking}
+                    aria-label={fixed ? "取消固定配对密码" : "固定配对密码"}
+                    aria-pressed={fixed}
+                    title={fixed ? "已固定，重启也不变；点击取消固定" : "固定密码，重启也不变，对方以后用同一个密码就能连"}
+                    onClick={toggleFixed}
+                  >
+                    {fixed ? <Lock className="text-accent" /> : <LockOpen />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={!ov || refreshing || fixed}
+                    aria-label="刷新配对密码"
+                    title={fixed ? "密码已固定，先取消固定才能换" : "刷新密码，旧密码立即失效"}
                     onClick={refreshPassword}
                   >
                     {refreshing ? (

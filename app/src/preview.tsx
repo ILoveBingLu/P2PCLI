@@ -11,6 +11,7 @@ const ov: Overview = {
   endpoint_id: "459a2c0a8c093ad76c1b00d7ecfd6dce576f219cdc3c2907cdfc49b3b9ac9ca9",
   code: "246813579",
   password: "ankab7",
+  password_fixed: false,
   server: { state: "online" },
   sessions:
     s === "busy"
@@ -71,10 +72,10 @@ mockIPC(
       case "overview":
         return ov;
       case "connect": {
-        if (s === "error") return Promise.reject({ reject: "bad_password", message: "临时密码不正确，请向对方获取最新密码。" });
+        if (s === "error") return Promise.reject({ reject: "bad_password", message: "配对密码不正确，请向对方获取最新密码。" });
         const lan = ov.nearby.find((d) => d.endpoint_id === args.target);
         if (lan && lan.endpoint_id !== "x" && !args.password)
-          return Promise.reject({ reject: "need_password", message: "需要输入临时密码" });
+          return Promise.reject({ reject: "need_password", message: "需要输入配对密码" });
         return new Promise((r) =>
           setTimeout(
             () =>
@@ -116,6 +117,9 @@ mockIPC(
         if (session) session.attached = [...attachments.values()].some((a) => a.sessionId === session.id);
         return null;
       }
+      case "set_password_fixed":
+        ov.password_fixed = !!args.fixed;
+        return null;
       case "refresh_password":
         ov.password = ov.password === "ankab7" ? "h9km2p" : "ankab7";
         return ov.password;

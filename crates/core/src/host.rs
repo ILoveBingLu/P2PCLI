@@ -1,10 +1,10 @@
-//! 被连方：校验临时密码，弹窗等主人点同意，然后按需开终端。
+//! 被连方：校验配对密码，弹窗等主人点同意，然后按需开终端。
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,7 @@ use crate::identity::DeviceInfo;
 use crate::proto::{Msg, RejectCode, read_frame, read_msg, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
-use crate::store::TrustStore;
+use crate::store::{TrustStore, write_private};
 
 /// 弹窗最多等多久
 pub const APPROVE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -30,7 +30,7 @@ const PEER_LOCK: Duration = Duration::from_secs(10 * 60);
 /// 所有设备加起来一段时间内错太多次，整体暂停密码校验（防换钥匙爆破）
 const GLOBAL_WINDOW: Duration = Duration::from_secs(10 * 60);
 const GLOBAL_MAX_FAILS: usize = 30;
-/// 临时密码字符：去掉 0 o 1 l i 这些容易看错的
+/// 配对密码字符：去掉 0 o 1 l i 这些容易看错的
 const PASSWORD_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 const PASSWORD_LEN: usize = 6;
 
@@ -162,6 +162,9 @@ pub struct Host {
     me: RwLock<DeviceInfo>,
     pub terminals: SessionManager,
     password: RwLock<String>,
+    /// 固定了的配对密码存在这里，重启也不变；没固定就不存，每次启动换新的
+    password_file: PathBuf,
+    password_fixed: AtomicBool,
     pub trust: TrustStore,
     limiter: Mutex<Limiter>,
     sessions: Mutex<HashMap<u64, SessionEntry>>,
@@ -171,10 +174,17 @@ pub struct Host {
 
 impl Host {
     pub fn new(me: DeviceInfo, data_dir: &Path, local_key: &str, session_program: Option<PathBuf>, delegate: Arc<dyn HostDelegate>) -> Self {
+        let password_file = data_dir.join("pairing_password.txt");
+        let fixed = std::fs::read_to_string(&password_file)
+            .ok()
+            .map(|p| p.trim().to_lowercase())
+            .filter(|p| !p.is_empty());
         Self {
             me: RwLock::new(me),
             terminals: SessionManager::new(local_key, session_program),
-            password: RwLock::new(generate_password()),
+            password_fixed: AtomicBool::new(fixed.is_some()),
+            password: RwLock::new(fixed.unwrap_or_else(generate_password)),
+            password_file,
             trust: TrustStore::open(data_dir),
             limiter: Mutex::new(Limiter::default()),
             sessions: Mutex::new(HashMap::new()),
@@ -192,7 +202,29 @@ impl Host {
     pub fn regenerate_password(&self) -> String {
         let p = generate_password();
         *self.password.write().unwrap() = p.clone();
+        if self.password_fixed()
+            && let Err(e) = write_private(&self.password_file, p.as_bytes())
+        {
+            warn!("保存固定的配对密码失败：{e:#}");
+        }
         p
+    }
+
+    pub fn password_fixed(&self) -> bool {
+        self.password_fixed.load(Ordering::Relaxed)
+    }
+
+    /// 固定配对密码：存进数据目录，重启也不变；取消固定就删掉，下次启动换新的
+    pub fn set_password_fixed(&self, fixed: bool) -> Result<()> {
+        if fixed {
+            write_private(&self.password_file, self.password().as_bytes())?;
+        } else if let Err(e) = std::fs::remove_file(&self.password_file)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(e.into());
+        }
+        self.password_fixed.store(fixed, Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn set_password(&self, p: &str) {

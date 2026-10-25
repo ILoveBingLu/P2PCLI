@@ -72,6 +72,8 @@ export interface Overview {
   endpoint_id: string;
   code: string | null;
   password: string;
+  /** 配对密码固定了，重启也不变 */
+  password_fixed: boolean;
   server: ServerState;
   sessions: SessionSummary[];
   recent: RecentDevice[];
@@ -139,6 +141,7 @@ export const api = {
   overview: () => invoke<Overview>("overview"),
   diagnose: () => invoke<Diagnosis>("diagnose"),
   refreshPassword: () => invoke<string>("refresh_password"),
+  setPasswordFixed: (fixed: boolean) => invoke("set_password_fixed", { fixed }),
   respond: (id: number, allow: boolean, trust: boolean) => invoke("respond_request", { id, allow, trust }),
   kick: (session: number) => invoke<boolean>("kick", { session }),
   removeTrusted: (endpointId: string) => invoke("remove_trusted", { endpointId }),

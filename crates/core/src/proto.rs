@@ -29,8 +29,8 @@ pub enum RejectCode {
 impl RejectCode {
     pub fn describe(self) -> &'static str {
         match self {
-            RejectCode::NeedPassword => "需要输入临时密码",
-            RejectCode::BadPassword => "临时密码不对",
+            RejectCode::NeedPassword => "需要输入配对密码",
+            RejectCode::BadPassword => "配对密码不对",
             RejectCode::Denied => "对方拒绝了连接",
             RejectCode::Timeout => "对方没有响应连接请求",
             RejectCode::Locked => "密码错误次数太多，请稍后再试",
