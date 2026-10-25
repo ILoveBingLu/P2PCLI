@@ -4,6 +4,7 @@
 //! 桌面端（Tauri）和开发用命令行都只调这里的接口。
 
 pub mod agents;
+pub mod approval;
 pub mod launchers;
 pub mod client;
 pub mod control;

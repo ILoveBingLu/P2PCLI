@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Skeleton } from "@heroui/react";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { api, type InstalledAgent } from "../api";
 import { AgentIcon } from "./Agent";
@@ -17,13 +18,13 @@ function scan(connId: number, refresh: boolean) {
   return scans.get(connId)!;
 }
 
-export function AgentLauncher({ connId, sessionId, visible, canLaunch, onLaunched, onFocus }: {
-  connId: number; sessionId: string; visible: boolean;
+export function AgentLauncher({ connId, sessionId, active, visible, canLaunch, onLaunched, onFocus }: {
+  connId: number; sessionId: string; active: boolean; visible: boolean;
   canLaunch: () => boolean; onLaunched: () => void; onFocus: () => void;
 }) {
   const [agents, setAgents] = useState<InstalledAgent[]>([]);
   const [scanning, setScanning] = useState(true);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState<string | null>(null);
   const alive = useRef(true);
   const lock = useRef(false);
@@ -32,8 +33,8 @@ export function AgentLauncher({ connId, sessionId, visible, canLaunch, onLaunche
   const menu = useContextMenu();
   useEffect(() => {
     alive.current = true;
-    void scan(connId, false).then((items) => { if (alive.current) { setAgents(items); setError(false); } })
-      .catch(() => { if (alive.current) setError(true); })
+    void scan(connId, false).then((items) => { if (alive.current) { setAgents(items); setError(null); } })
+      .catch((e) => { if (alive.current) setError(String(e)); })
       .finally(() => { if (alive.current) setScanning(false); });
     return () => { alive.current = false; };
   }, [connId]);
@@ -41,13 +42,14 @@ export function AgentLauncher({ connId, sessionId, visible, canLaunch, onLaunche
 
   const refresh = async () => {
     if (scanning) return;
+    menu.close();
     setScanning(true);
-    try { const items = await scan(connId, true); if (alive.current) { setAgents(items); setError(false); } }
-    catch (e) { if (alive.current) { setError(true); toast.error(`检测 AI 失败：${String(e)}`); } }
+    try { const items = await scan(connId, true); if (alive.current) { setAgents(items); setError(null); } }
+    catch (e) { if (alive.current) { setError(String(e)); toast.error(`检测 AI 失败：${String(e)}`); } }
     finally { if (alive.current) setScanning(false); }
   };
   const launch = async (agent: InstalledAgent, allowBypass = false) => {
-    if (lock.current || !current.current.visible || !current.current.canLaunch()) return;
+    if (scanning || lock.current || !current.current.visible || !current.current.canLaunch()) return;
     lock.current = true;
     setLaunching(agent.kind);
     try {
@@ -56,10 +58,27 @@ export function AgentLauncher({ connId, sessionId, visible, canLaunch, onLaunche
     } catch (e) { if (alive.current) toast.error(`启动失败：${String(e)}`); }
     finally { lock.current = false; if (alive.current) setLaunching(null); }
   };
-  if (!visible) return null;
+  if (!active || (!visible && !scanning && !error)) return null;
   return <>
-    <div className="agent-launcher" aria-label="启动已安装的 AI">
-      {agents.map((agent) => (
+    <div className="agent-launcher" aria-label="启动已安装的 AI" aria-busy={scanning}>
+      {scanning ? <>
+        <div className="agent-launcher-loading" role="status">
+          <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+          <span>正在检测 AI</span>
+        </div>
+        <div className="agent-launcher-skeletons" aria-hidden="true">
+          <Skeleton animationType="shimmer" className="agent-launcher-skeleton" />
+          <Skeleton animationType="shimmer" className="agent-launcher-skeleton agent-launcher-skeleton-short" />
+        </div>
+      </> : <>
+        {error && <Button variant="secondary" size="sm" className="agent-launcher-pill"
+          title={`${error}。请确认双方均已更新到支持 AI 检测的版本。`}
+          aria-label="AI 检测失败，重试" onPress={() => void refresh()}>
+          <RefreshCw className="size-3.5" aria-hidden="true" />
+          检测失败 · 重试
+        </Button>}
+        {!error && agents.length === 0 && <div className="agent-launcher-loading" role="status">未检测到 AI</div>}
+        {visible && agents.map((agent) => (
         <Button key={agent.kind} variant="secondary" size="sm" className="agent-launcher-pill"
           aria-label={`启动 ${agent.name}`} isDisabled={launching !== null}
           onPress={() => void launch(agent)}
@@ -70,12 +89,12 @@ export function AgentLauncher({ connId, sessionId, visible, canLaunch, onLaunche
           {launching === agent.kind ? <LoaderCircle className="size-4 animate-spin" /> : <AgentIcon kind={agent.kind} className="size-4" />}
           {agent.name}
         </Button>
-      ))}
-      <Button variant="ghost" size="icon-sm" aria-label="刷新已安装的 AI" isDisabled={scanning || launching !== null}
-        title={scanning ? "正在检测这台设备的 AI" : error ? "检测失败，点击重试（双方需支持启动器）" : agents.length ? "刷新已安装的 AI" : "未检测到 AI，点击重新检测"}
+      ))}</>}
+      {!scanning && !error && <Button variant="ghost" size="icon-sm" aria-label="刷新已安装的 AI" isDisabled={launching !== null}
+        title={agents.length ? "刷新已安装的 AI" : "未检测到 AI，点击重新检测"}
         onPress={() => void refresh()}>
-        <RefreshCw className={scanning ? "size-4 animate-spin" : "size-4"} />
-      </Button>
+        <RefreshCw className="size-4" />
+      </Button>}
     </div>
     {menu.element}
   </>;

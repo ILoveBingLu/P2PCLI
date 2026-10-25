@@ -501,6 +501,10 @@ impl Host {
         };
         let result: Result<()> = async {
             match request {
+                Msg::ChooseAgentOption { session_id, approval_id, option_id } => {
+                    self.terminals.choose_agent_option(&owner, &session_id, &approval_id, option_id).await?;
+                    write_msg(&mut send, &Msg::AgentOptionChosen).await?;
+                }
                 Msg::ListInstalledAgents { refresh } => {
                     let agents = self.terminals.installed_agents(refresh).await?;
                     write_msg(&mut send, &Msg::InstalledAgents { agents }).await?;

@@ -2,6 +2,7 @@ import { useId, useLayoutEffect, useState, type KeyboardEvent, type ReactNode, t
 import { ArrowUp, ChevronDown, LoaderCircle, Paperclip } from "lucide-react";
 import type { AgentInfo } from "../api";
 import { Button } from "@/components/ui/button";
+import { AgentApproval } from "./AgentApproval";
 
 const HISTORY_KEY = "p2pcli.composer.history";
 const HISTORY_MAX = 50;
@@ -32,7 +33,7 @@ function saveHistory(list: string[]) {
 /** 认出命令行 AI 时终端下面的输入框：在本机打完一整句再发过去，中文输入法顺、远程不卡、长段落好改。
  *  回车发送，Shift+回车换行；输入框是空的时候上下箭头翻历史；Esc 回到终端。
  *  AI 在等你确认时不让发：这时候发“1”加回车，就等于替你点了“是” */
-export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTerminal, onToggle, onUpload, inputRef, tools }: {
+export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTerminal, onToggle, onUpload, onChoose, inputRef, tools }: {
   agent: AgentInfo;
   /** 输入框右侧的模型、思考强度和权限切换工具。 */
   tools?: ReactNode;
@@ -44,6 +45,7 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
   onTerminal: () => void;
   onToggle: () => void;
   onUpload: () => Promise<void>;
+  onChoose: (approvalId: string, optionId: number) => Promise<void>;
   inputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const panelId = useId();
@@ -51,7 +53,8 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
   const [history, setHistory] = useState(loadHistory);
   /** 正在翻第几条历史；没在翻是 null */
   const [browsing, setBrowsing] = useState<number | null>(null);
-  const blocked = agent.state === "waiting" ? `${agent.name} 在等你确认，先在终端里选` : null;
+  const approval = agent.state === "waiting" ? agent.approval : null;
+  const blocked = agent.state === "waiting" ? `${agent.name} 在等你确认，${approval ? "请在上方选择" : "先在终端里选"}` : null;
 
   useLayoutEffect(() => {
     const el = inputRef.current;
@@ -113,6 +116,7 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
 
   return (
     <div className="agent-composer-dock" data-expanded={expanded}>
+      {approval && <AgentApproval key={approval.id} approval={approval} name={agent.name} onChoose={onChoose} onTerminal={onTerminal} />}
       <Button variant="ghost" size="icon-sm" className="agent-composer-toggle"
         aria-label={expanded ? "收起输入框" : "展开输入框"}
         aria-expanded={expanded} aria-controls={panelId}
@@ -140,7 +144,7 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
               onKeyDown={onKeyDown}
             />
             {/* 已经写了字就看不到占位符，单独说一声为什么发不出去；写好的字留着，确认完再发 */}
-            {blocked && draft.trim() && <span className="agent-composer-hint">先在终端里确认</span>}
+            {blocked && draft.trim() && <span className="agent-composer-hint">{approval ? "先在上方确认" : "先在终端里确认"}</span>}
             {tools}
             <Button size="icon-sm" aria-label="发送" title="发送（回车）" isDisabled={!draft.trim() || !!blocked} onPress={submit}>
               <ArrowUp />

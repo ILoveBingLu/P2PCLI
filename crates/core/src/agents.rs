@@ -4,7 +4,7 @@
 //! Claude Code 的可执行文件名是版本号（2.1.310），Gemini CLI、Qwen Code 是 Node 写的，Aider、Kimi 是 Python 写的，
 //! 程序名都是 node、python，要看命令行里的名字和脚本路径。
 //!
-//! 看状态：读会话标题和屏幕最后几十行。屏幕内容只在本机判断状态用，不发给任何人。
+//! 看状态：读会话标题和屏幕最后几十行。只发送识别出的状态及确认菜单，不传整屏。
 //! 规则参考了 tmuxcc（MIT）对各家界面的解析；Claude Code、CodeBuddy 的界面用本机真实截下来的屏幕核对过，见下面的测试。
 //!
 //! 看额度：只读 AI 自己留在本机的文件，不联网、不碰登录凭据，见 quota()。
@@ -43,6 +43,9 @@ pub struct AgentInfo {
     /// 这个会话里的 AI 现在用的模型、思考强度、权限模式；目前只认 Claude Code
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<AgentSettings>,
+    /// 明确识别的当前单选确认框；旧设备不提供时使用终端操作。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<crate::approval::Approval>,
 }
 
 /// AI 现在的设置，读不到的项留空
@@ -151,6 +154,10 @@ impl Default for Processes {
 }
 
 impl Processes {
+    pub fn fresh_agent_under(&mut self, root: u32) -> Option<(u32, &'static str, &'static str)> {
+        self.at = None;
+        self.agent_under(root)
+    }
     pub fn idle_shell(&mut self, root: u32, command: &str, fresh: bool) -> bool {
         if fresh { self.at = None; }
         self.refresh();

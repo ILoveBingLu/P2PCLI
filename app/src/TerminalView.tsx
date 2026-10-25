@@ -178,7 +178,9 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       const after = line?.translateToString(true, buffer.cursorX) ?? "";
       return {
         signature: `${buffer.type}:${row}:${buffer.cursorX}:${line?.translateToString(true) ?? ""}`,
-        empty: inputReady.current && buffer.type === "normal" && !line?.isWrapped && !after.trim() && emptyShellPrompt(before),
+        // tmux attach 本身就在外层备用屏幕中；内层是否运行全屏程序由被控端
+        // 的 alternate_on / pane_in_mode 和进程检查决定，不能用外层 buffer.type 判断。
+        empty: inputReady.current && !line?.isWrapped && !after.trim() && emptyShellPrompt(before),
       };
     };
     const canLaunch = () => { const p = prompt(); return guard.ready(p.signature, p.empty); };

@@ -170,6 +170,13 @@ impl RemoteHost {
         }
     }
 
+    pub async fn choose_agent_option(&self, session_id: String, approval_id: String, option_id: usize) -> Result<()> {
+        match self.session_request(Msg::ChooseAgentOption { session_id, approval_id, option_id }).await? {
+            Msg::AgentOptionChosen => Ok(()),
+            other => bail!("提交选项失败：{other:?}"),
+        }
+    }
+
     async fn session_request(&self, msg: Msg) -> Result<Msg> {
         let (mut send, mut recv) = self.conn.open_bi().await?;
         write_msg(&mut send, &msg).await?;

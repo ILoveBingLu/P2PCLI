@@ -76,6 +76,20 @@ let pathSamples = 0;
 if (s === "latency") ov.devices[0].path!.rtt_ms = 99;
 let statusStartedAt = 0;
 const now = Math.floor(Date.now() / 1000);
+// Approval fixtures exercise display/submission without sending keys to a real AI.
+const approvalKind = ["codex", "gemini", "opencode"].find((kind) => s === `approval-${kind}`) ?? "claude";
+const approvalNames: Record<string, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode" };
+const approvalLabels: Record<string, string[]> = {
+  claude: ["Yes", "Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session", "No"],
+  codex: ["Yes, proceed (y)", "Yes, and don't ask again for commands that start with `echo` (p)", "No, and tell Codex what to do differently (esc)"],
+  gemini: ["Allow once", "Allow for this session", "No, suggest changes (esc)"],
+  opencode: ["Allow once", "Allow always", "Reject"],
+};
+const previewApproval = {
+  id: "preview-approval-1",
+  context: approvalKind === "claude" ? "Create file · hello.txt\n+ hi\nDo you want to create hello.txt?" : "Run command · ~/Projects/demo\n$ echo hi\nAllow execution?",
+  options: approvalLabels[approvalKind].map((label, id) => ({ id, label })),
+};
 const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false },
   { id: "b".repeat(32), created_at: now - 40 * 60, attached: true },
@@ -97,6 +111,11 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "e".repeat(32), created_at: now - 1200, attached: false, agent: {
     kind: "opencode", name: "OpenCode",
     state: s === "opencode-working" ? "working" : s === "opencode-waiting" ? "waiting" : "idle",
+  } },
+] : s.startsWith("approval-") ? [
+  { id: "f".repeat(32), created_at: now - 60, attached: false, agent: {
+    kind: approvalKind, name: approvalNames[approvalKind], state: "waiting",
+    approval: s === "approval-unsupported" ? undefined : previewApproval,
   } },
 ] : s.startsWith("launcher") ? [
   { id: "f".repeat(32), created_at: now - 60, attached: false, details: {
@@ -261,6 +280,7 @@ mockIPC(
         }))), 300));
       }
       case "installed_agents":
+        if (s === "launcher-loading") await new Promise((resolve) => setTimeout(resolve, 8000));
         if (s === "launcher-error") throw new Error("模拟检测失败");
         return s === "launcher-empty" ? [] : [
           { kind: "claude", name: "Claude Code", command: "claude" },
@@ -276,6 +296,22 @@ mockIPC(
         console.info("Launcher preview", args.kind, { allowBypass: args.allowBypass });
         for (const attachment of attachments.values()) {
           if (attachment.sessionId === session.id) previewWrite(attachment.output, args.kind + "\r\n\r\n" + session.agent.name + "\r\n> ");
+        }
+        return null;
+      }
+      case "choose_agent_option": {
+        const session = terminalSessions.find((x) => x.id === args.sessionId);
+        const approval = session?.agent?.approval;
+        if (!approval || approval.id !== args.approvalId || !approval.options.some((option) => option.id === args.optionId)) throw new Error("确认内容已变化或已处理");
+        if (s === "approval-stale") {
+          session!.agent = { ...session!.agent!, approval: undefined, state: "working" };
+          throw new Error("确认内容已变化或已处理，请查看最新选项");
+        }
+        console.info("Approval preview choice", approvalKind, args.optionId, approval.options[args.optionId].label);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        session!.agent = { ...session!.agent!, approval: undefined, state: "working" };
+        for (const attachment of attachments.values()) {
+          if (attachment.sessionId === session!.id) previewWrite(attachment.output, "\r\n已选择：" + approval.options[args.optionId].label + "\r\n");
         }
         return null;
       }
@@ -297,7 +333,9 @@ mockIPC(
         if (!statusStartedAt) statusStartedAt = Date.now();
         attachments.set(termId, { sessionId: session.id, status: args.status, output: args.output });
         ((window as any).__outs ??= []).push(args.output);
-        const screen = s.startsWith("launcher") ? shellPrompt : session.agent?.kind === "opencode"
+        // tmux attach 使用外层备用屏幕，即使内层 pane 停在普通 Shell。
+        const screen = s.startsWith("approval-") ? `\x1b[?1049h${previewApproval.context.replaceAll("\n", "\r\n")}\r\n\r\n${previewApproval.options.map((option) => `${option.id === 0 ? "❯" : " "} ${option.id + 1}. ${option.label}`).join("\r\n")}\r\nEnter to confirm · Esc to cancel\r\n`
+          : s.startsWith("launcher") ? "\x1b[?1049h" + shellPrompt : session.agent?.kind === "opencode"
           ? "\x1b[1;36mOpenCode\x1b[0m\r\n\r\nBuild · 模型由当前供应商配置提供\r\n\r\n这是界面预览；控制按键记录在浏览器控制台。\r\n"
           : sample;
         setTimeout(() => args.output.onmessage(new TextEncoder().encode(screen).buffer), 100);

@@ -719,6 +719,7 @@ export default function App() {
                   />
                   {t.state === "open" && t.sessionId && (
                     <AgentLauncher key={`${t.connId}:${t.sessionId}`} connId={t.connId} sessionId={t.sessionId}
+                      active={!showSettings && !sessionTarget && t.key === activeKey}
                       visible={!showSettings && !sessionTarget && t.key === activeKey && !!promptReady[t.key]
                         && !liveSessions[t.connId]?.error && !tabAgent(t)
                         && liveSessions[t.connId]?.sessions?.find((s) => s.id === t.sessionId)?.details?.shell_ready === true}
@@ -793,6 +794,11 @@ export default function App() {
                   else termHandles.current.get(activeTab.key)?.focus();
                 }}
                 onUpload={uploadToComposer}
+                onChoose={async (approvalId, optionId) => {
+                  if (!activeTab.sessionId || activeTab.state !== "open") throw new Error("会话已断开");
+                  try { await api.chooseAgentOption(activeTab.connId, activeTab.sessionId, approvalId, optionId); }
+                  finally { setSessionsRev((rev) => rev + 1); }
+                }}
                 inputRef={composerRef}
                 tools={
                   <AgentSettingsBar

@@ -77,6 +77,8 @@ pub enum Msg {
     InstalledAgents { agents: Vec<crate::launchers::InstalledAgent> },
     LaunchAgent { session_id: String, kind: String, allow_bypass: bool },
     AgentLaunched,
+    ChooseAgentOption { session_id: String, approval_id: String, option_id: usize },
+    AgentOptionChosen,
     Resize {
         cols: u16,
         rows: u16,

@@ -628,6 +628,11 @@ async fn launch_agent(state: State<'_, AppState>, conn_id: u64, session_id: Stri
 }
 
 #[tauri::command]
+async fn choose_agent_option(state: State<'_, AppState>, conn_id: u64, session_id: String, approval_id: String, option_id: usize) -> Result<(), String> {
+    state.remote(conn_id)?.choose_agent_option(session_id, approval_id, option_id).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 async fn open_terminal(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1077,6 +1082,7 @@ pub fn run() {
             list_terminals,
             installed_agents,
             launch_agent,
+            choose_agent_option,
             end_terminal,
             term_input,
             term_resize,

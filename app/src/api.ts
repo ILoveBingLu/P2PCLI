@@ -41,6 +41,11 @@ export interface TerminalSessionSnapshot {
 
 /** AI 在干什么：干活中、等你确认、空闲 */
 export type AgentState = "working" | "waiting" | "idle";
+export interface AgentApproval {
+  id: string;
+  context: string;
+  options: { id: number; label: string }[];
+}
 export interface AgentInfo {
   /** claude、codex 这种稳定标识，按它配图标 */
   kind: string;
@@ -50,6 +55,7 @@ export interface AgentInfo {
   quota?: AgentQuota | null;
   /** 这个会话里的 AI 现在的模型、思考强度、权限模式；目前只有 Claude Code 有 */
   settings?: AgentSettings | null;
+  approval?: AgentApproval | null;
 }
 /** 读不到的项没有 */
 export interface AgentSettings {
@@ -308,6 +314,8 @@ export const api = {
   installedAgents: (connId: number, refresh = false) => invoke<InstalledAgent[]>("installed_agents", { connId, refresh }),
   launchAgent: (connId: number, sessionId: string, kind: string, allowBypass = false) =>
     invoke<void>("launch_agent", { connId, sessionId, kind, allowBypass }),
+  chooseAgentOption: (connId: number, sessionId: string, approvalId: string, optionId: number) =>
+    invoke<void>("choose_agent_option", { connId, sessionId, approvalId, optionId }),
   endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
   saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null, lanVisible: boolean) =>

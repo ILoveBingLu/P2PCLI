@@ -54,6 +54,8 @@ pub struct SessionManager {
     /// 会话里 AI 现在的模型、强度、权限模式
     settings: std::sync::Mutex<Settings>,
     installed: tokio::sync::Mutex<Option<(std::time::Instant, Vec<crate::launchers::InstalledAgent>)>>,
+    approvals: std::sync::Mutex<crate::approval::Tracker>,
+    approval_gate: tokio::sync::Mutex<()>,
 }
 
 impl SessionManager {
@@ -69,6 +71,8 @@ impl SessionManager {
             quotas: Default::default(),
             settings: Default::default(),
             installed: Default::default(),
+            approvals: Default::default(),
+            approval_gate: Default::default(),
         }
     }
 
@@ -179,18 +183,74 @@ impl SessionManager {
         Ok(sessions)
     }
 
-    /// 会话里跑的是不是命令行 AI，是的话再读一次屏幕判断它在干什么。屏幕内容只在这里用，不往外发
+    /// 整屏只用于本机解析；可以向连接方返回识别出的确认选项与请求摘要。
     async fn agent(&self, name: &str, pane_pid: Option<u32>, title: &str) -> Option<AgentInfo> {
-        let (pid, kind, display) = self.processes.lock().unwrap().agent_under(pane_pid?)?;
-        let screen = match self.command(&["capture-pane", "-p", "-t", name]).await {
-            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
-            _ => String::new(),
+        // Prevent an older in-flight poll from replacing a just-consumed confirmation.
+        let _approval_gate = self.approval_gate.lock().await;
+        let found = pane_pid.and_then(|pid| self.processes.lock().unwrap().agent_under(pid));
+        let Some((pid, kind, display)) = found else {
+            self.approvals.lock().unwrap().observe(name, None);
+            return None;
+        };
+        let (screen, captured) = match self.command(&["capture-pane", "-p", "-t", name]).await {
+            Ok(out) if out.status.success() => (String::from_utf8_lossy(&out.stdout).into_owned(), true),
+            _ => (String::new(), false),
         };
         // 屏幕已经明确显示完成或空闲时立即生效；不能用固定延迟把完成状态重新盖成“干活中”。
-        let state = agents::state(title, &screen);
+        let mut state = agents::state(title, &screen);
+        let parsed = self.parse_approval(name, kind, pid, &screen).await;
+        if parsed.is_some() { state = agents::AgentState::Waiting; }
+        let approval = if parsed.is_some() {
+            self.approvals.lock().unwrap().observe(name, parsed.as_ref())
+        } else {
+            // A failed capture or ambiguous waiting screen is not evidence of a new round.
+            if captured && state != agents::AgentState::Waiting { self.approvals.lock().unwrap().observe(name, None); }
+            None
+        };
         let quota = self.quotas.lock().unwrap().get(kind);
         let settings = self.settings.lock().unwrap().get(kind, pid, &screen);
-        Some(AgentInfo { kind: kind.to_string(), name: display.to_string(), state, quota, settings })
+        Some(AgentInfo { kind: kind.to_string(), name: display.to_string(), state, quota, settings, approval })
+    }
+
+    async fn parse_approval(&self, name: &str, kind: &str, pid: u32, screen: &str) -> Option<crate::approval::Parsed> {
+        if kind == "opencode" {
+            if !screen.contains("Permission required") { return None; }
+            let styled = self.command(&["capture-pane", "-p", "-e", "-t", name]).await.ok()?;
+            if !styled.status.success() { return None; }
+            crate::approval::parse(kind, pid, &String::from_utf8_lossy(&styled.stdout))
+        } else {
+            crate::approval::parse(kind, pid, screen)
+        }
+    }
+
+    pub async fn choose_agent_option(&self, owner: &str, id: &str, approval_id: &str, option_id: usize) -> Result<()> {
+        let name = Self::name(owner, id)?;
+        let _gate = self.gate.lock().await;
+        let _approval_gate = self.approval_gate.lock().await;
+        let out = self.command(&["display-message", "-p", "-t", &name, "#{pane_pid}\t#{pane_in_mode}"]).await?;
+        if !out.status.success() { bail!("会话已结束"); }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let (pid, mode) = text.trim().split_once('\t').context("无法读取终端状态")?;
+        if mode != "0" { bail!("终端处于复制模式，请先退出"); }
+        let (agent_pid, kind, _) = self.processes.lock().unwrap().fresh_agent_under(pid.parse()?).context("AI 已退出，请刷新会话")?;
+        let screen = self.command(&["capture-pane", "-p", "-t", &name]).await?;
+        if !screen.status.success() { bail!("无法读取当前确认框"); }
+        // Use the AI process PID (not the parent shell), matching the observed menu fingerprint.
+        let parsed = self.parse_approval(&name, kind, agent_pid, &String::from_utf8_lossy(&screen.stdout)).await
+            .context("无法确认当前选项，请在终端中处理")?;
+        let keys = {
+            let mut tracker = self.approvals.lock().unwrap();
+            let menu = tracker.observe(&name, Some(&parsed));
+            if menu.as_ref().is_none_or(|menu| menu.id != approval_id) { bail!("确认内容已变化或已处理，请查看最新选项"); }
+            let keys = parsed.keys(option_id).context("选项已失效")?;
+            if !tracker.consume(&name, approval_id) { bail!("该确认已提交，请等待 AI 响应"); }
+            keys
+        };
+        // Fixed navigation keys only. Never accept arbitrary terminal input from this API.
+        let mut args = vec!["send-keys", "-t", &name];
+        args.extend(keys);
+        self.checked(&args).await?;
+        Ok(())
     }
 
     pub async fn attach(&self, owner: &str, requested: Option<&str>, cols: u16, rows: u16) -> Result<(CommandBuilder, String)> {
