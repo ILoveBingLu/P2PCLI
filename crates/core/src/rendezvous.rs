@@ -27,6 +27,12 @@ use crate::v6;
 /// 软件默认用的牵线服务器（自建服务器，藏在 CDN 后面走 WebSocket）；用户可以在设置里换成自己部署的
 pub const DEFAULT_SERVER: &str = "wss://p2pcli.aiqji.cn";
 
+/// 设置里可以直接选的牵线服务器：地址、名称、说明。也可以不选，自己填
+pub const SERVER_PRESETS: &[(&str, &str, &str)] = &[
+    (DEFAULT_SERVER, "国内服务器", "国内节点，在国内用连得最快"),
+    ("wss://p2pcli.yscopy.cn", "Cloudflare", "海外节点，适合在国外用，国内访问有时不稳"),
+];
+
 /// 多久看一次自己的地址有没有变，变了就报
 const CHECK_ADDR_EVERY: Duration = Duration::from_secs(20);
 /// 地址没变也至少这么久报一次，顺带保活（WebSocket 太久没数据会被中间设备断开）

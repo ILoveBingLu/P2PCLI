@@ -32,7 +32,14 @@ if (s === "offline") ov.server = { state: "offline", error: "无法连接牵线�
 const previewSettings: SettingsView = {
   server: null, device_name: null, relay: null, proxy: null,
   effective_relay: null, effective_server: "wss://p2pcli.aiqji.cn",
+  default_server: "wss://p2pcli.aiqji.cn",
+  server_presets: [
+    { address: "wss://p2pcli.aiqji.cn", label: "国内服务器", note: "国内节点，在国内用连得最快" },
+    { address: "wss://p2pcli.yscopy.cn", label: "Cloudflare", note: "海外节点，适合在国外用，国内访问有时不稳" },
+  ],
 };
+// s=custom-server：设置里填过自定义牵线服务器
+if (s === "custom-server") previewSettings.server = "b840307fdbdff2aa164308932575e8f7396b7fd539bd7cfd1927b2456b3fc8a8@rdv.example.com:7788";
 let termSeq = 0;
 const terminalSessions: TerminalSession[] = s === "sessions" ? [{ id: "a".repeat(32), created_at: Math.floor(Date.now() / 1000) - 3600, attached: false }] : [];
 const attachments = new Map<number, { sessionId: string; status: any }>();

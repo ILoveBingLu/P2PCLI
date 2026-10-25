@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Globe2, Network, LoaderCircle, Save, ShieldCheck, Trash2 } from "lucide-react";
-import { Tabs, Checkbox, Description } from "@heroui/react";
+import { Tabs, Checkbox, Description, Radio, RadioGroup } from "@heroui/react";
 import { api, platformLabel, type Overview, type SettingsView } from "../api";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,9 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { PlatformIcon } from "./PlatformIcon";
+
+/** 牵线服务器选“自定义”时的取值，预设项的取值就是它的地址 */
+const CUSTOM_SERVER = "custom";
 
 export function SettingsPage({
   ov,
@@ -18,7 +22,8 @@ export function SettingsPage({
   onChanged: () => void;
 }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
-  const [server, setServer] = useState("");
+  const [serverChoice, setServerChoice] = useState(CUSTOM_SERVER);
+  const [customServer, setCustomServer] = useState("");
   const [relay, setRelay] = useState("");
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [proxy, setProxy] = useState("");
@@ -33,7 +38,10 @@ export function SettingsPage({
     try {
       const value = await api.getSettings();
       setSettings(value);
-      setServer(value.server ?? "");
+      // 没设置过就是默认服务器；设置的地址正好是某个预设就选中它，否则当作自定义
+      const preset = value.server_presets.find((p) => p.address === (value.server ?? value.default_server));
+      setServerChoice(preset ? preset.address : CUSTOM_SERVER);
+      setCustomServer(preset ? "" : (value.server ?? ""));
       setRelay(value.relay ?? "");
       setName(value.device_name ?? "");
       setProxyEnabled(!!value.proxy);
@@ -52,6 +60,10 @@ export function SettingsPage({
     setSaving(true);
     setError(null);
     try {
+      // 选默认服务器时存空值，以后默认地址换了也跟着走
+      const server = serverChoice === CUSTOM_SERVER
+        ? customServer
+        : serverChoice === settings.default_server ? null : serverChoice;
       await api.saveSettings(server, name, relay, proxyEnabled ? proxy : null);
       onChanged();
       toast.success("设置已保存并立即应用");
@@ -127,25 +139,49 @@ export function SettingsPage({
                       对方看到的名称，留空使用电脑名称。
                     </FieldDescription>
                   </Field>
-                  <Field data-disabled={saving}>
-                    <FieldLabel htmlFor="server-address">牵线服务器</FieldLabel>
-                    <Input
-                      id="server-address"
-                      variant="secondary"
-                      value={server}
-                      placeholder={
-                        settings.effective_server ??
-                        "公钥@IP:端口 或 wss://域名"
-                      }
-                      onChange={(e) => { setServer(e.target.value); }}
-                      spellCheck={false}
-                      disabled={saving}
-                    />
-                    <FieldDescription>
-                      公钥@IP:端口 走 UDP，wss://域名 走
-                      WebSocket。留空使用默认配置。
-                    </FieldDescription>
-                  </Field>
+                  <RadioGroup
+                    value={serverChoice}
+                    onChange={setServerChoice}
+                    isDisabled={saving}
+                  >
+                    <FieldLabel>牵线服务器</FieldLabel>
+                    {settings.server_presets.map((p) => (
+                      <Radio key={p.address} value={p.address}>
+                        <Radio.Content className="gap-3 text-sm">
+                          <Radio.Control><Radio.Indicator /></Radio.Control>
+                          {p.label}
+                          {p.address === settings.default_server && <Badge variant="secondary">默认</Badge>}
+                        </Radio.Content>
+                        <Description className="pl-7 text-xs text-muted-foreground">
+                          {p.note}。<span className="font-mono">{p.address}</span>
+                        </Description>
+                      </Radio>
+                    ))}
+                    <Radio value={CUSTOM_SERVER}>
+                      <Radio.Content className="gap-3 text-sm">
+                        <Radio.Control><Radio.Indicator /></Radio.Control>
+                        自定义
+                      </Radio.Content>
+                      <Description className="pl-7 text-xs text-muted-foreground">
+                        填自己部署的牵线服务器：公钥@IP或域名:端口 走 UDP，wss://域名 走 WebSocket。
+                      </Description>
+                    </Radio>
+                  </RadioGroup>
+                  {serverChoice === CUSTOM_SERVER && (
+                    <Field data-disabled={saving} className="-mt-2 pl-7">
+                      <Input
+                        id="server-address"
+                        aria-label="自定义牵线服务器地址"
+                        variant="secondary"
+                        value={customServer}
+                        placeholder="公钥@IP:端口 或 wss://域名"
+                        onChange={(e) => { setCustomServer(e.target.value); }}
+                        spellCheck={false}
+                        autoComplete="off"
+                        disabled={saving}
+                      />
+                    </Field>
+                  )}
                   <Field data-disabled={saving}>
                     <FieldLabel htmlFor="relay-address">中继服务器</FieldLabel>
                     <Input
@@ -252,7 +288,10 @@ export function SettingsPage({
         )}
         <footer className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-5">
           <span className="mr-auto text-xs text-muted-foreground">保存后即时生效。代理或中继变更会重连网络，后台终端会话保留。</span>
-          <Button onClick={save} disabled={loading || !settings || saving || (proxyEnabled && !proxy.trim())}>
+          <Button
+            onClick={save}
+            disabled={loading || !settings || saving || (proxyEnabled && !proxy.trim()) || (serverChoice === CUSTOM_SERVER && !customServer.trim())}
+          >
             {saving ? (
               <LoaderCircle data-icon="inline-start" className="animate-spin" />
             ) : <Save data-icon="inline-start" />}

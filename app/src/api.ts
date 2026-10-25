@@ -101,6 +101,14 @@ export interface SettingsView {
   relay: string | null;
   effective_server: string | null;
   effective_relay: string | null;
+  default_server: string;
+  server_presets: ServerPreset[];
+}
+
+export interface ServerPreset {
+  address: string;
+  label: string;
+  note: string;
 }
 
 export type NatKind = "none" | "cone" | "symmetric" | "unknown";

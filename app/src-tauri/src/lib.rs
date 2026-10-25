@@ -61,15 +61,39 @@ fn load_settings(dir: &Path) -> Settings {
         .unwrap_or_default()
 }
 
+/// 编译时默认的牵线服务器，打包时可以用 P2PCLI_DEFAULT_SERVER 换掉
+fn default_server() -> &'static str {
+    option_env!("P2PCLI_DEFAULT_SERVER").unwrap_or(p2pcli_core::rendezvous::DEFAULT_SERVER)
+}
+
 /// 牵线服务器：环境变量 > 配置文件 > 编译时默认
 fn effective_server(s: &Settings) -> Option<String> {
     std::env::var("P2PCLI_SERVER")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .or_else(|| s.server.clone())
-        .or_else(|| option_env!("P2PCLI_DEFAULT_SERVER").map(String::from))
-        .or_else(|| Some(p2pcli_core::rendezvous::DEFAULT_SERVER.to_string()))
+        .or_else(|| Some(default_server().to_string()))
         .filter(|s| !s.trim().is_empty())
+}
+
+#[derive(Serialize)]
+struct ServerPreset {
+    address: &'static str,
+    label: &'static str,
+    note: &'static str,
+}
+
+/// 设置页可选的牵线服务器；打包时换了默认服务器而它不在列表里，就放在最前面
+fn server_presets() -> Vec<ServerPreset> {
+    let mut list: Vec<ServerPreset> = p2pcli_core::rendezvous::SERVER_PRESETS
+        .iter()
+        .map(|&(address, label, note)| ServerPreset { address, label, note })
+        .collect();
+    let default = default_server();
+    if !default.trim().is_empty() && !list.iter().any(|p| p.address == default) {
+        list.insert(0, ServerPreset { address: default, label: "默认服务器", note: "安装包内置的牵线服务器" });
+    }
+    list
 }
 
 /// 中继同样：环境变量 > 配置文件 > 编译时默认；都没有就用 iroh 公共中继
@@ -481,6 +505,8 @@ struct SettingsView {
     relay: Option<String>,
     effective_server: Option<String>,
     effective_relay: Option<String>,
+    default_server: &'static str,
+    server_presets: Vec<ServerPreset>,
 }
 
 #[tauri::command]
@@ -490,6 +516,8 @@ fn get_settings(state: State<'_, AppState>) -> SettingsView {
         proxy: s.proxy.clone(),
         effective_server: effective_server(&s),
         effective_relay: effective_relay(&s),
+        default_server: default_server(),
+        server_presets: server_presets(),
         server: s.server,
         device_name: s.device_name,
         relay: s.relay,
