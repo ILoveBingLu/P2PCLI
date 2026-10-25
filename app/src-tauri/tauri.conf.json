@@ -30,6 +30,7 @@
     "targets": ["app", "dmg", "nsis"],
     "category": "DeveloperTool",
     "shortDescription": "点对点远程终端",
+    "copyright": "Copyright © 2026 ILoveBingLu",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

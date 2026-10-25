@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="150" height="57" viewBox="0 0 150 57">
+  <!-- Windows 安装包每页顶部右侧的图，NSIS 要 150x57，按两倍尺寸出图；底色要和安装界面顶栏一样是白色 -->
+  <rect width="150" height="57" fill="#fff"/>
+  <image href="../icons/icon.png" x="100" y="8.5" width="40" height="40"/>
+</svg>

@@ -20,6 +20,7 @@ runs:
   using: composite
   steps:
     - name: 标签要和软件版本一致
+      if: github.ref_type == 'tag'
       shell: bash
       run: |
         want="v$(node -p "require('./app/src-tauri/tauri.conf.json').version")"
@@ -54,6 +55,8 @@ runs:
       env:
         TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.signing-key }}
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        # Tauri 发现在 CI 里就跳过 dmg 窗口的排版（背景图、图标位置），GitHub 的 Mac 机器能排，让它照常排
+        TAURI_BUNDLER_DMG_IGNORE_CI: "true"
       run: |
         if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
           echo "仓库 Secrets 里没有 TAURI_SIGNING_PRIVATE_KEY，在线更新包签不了名"
@@ -65,7 +68,8 @@ runs:
     - name: 收集安装包
       shell: bash
       run: |
-        ver="${GITHUB_REF_NAME#v}"
+        # 推 ci/ 分支试编时没有标签，版本号从配置里读
+        ver="$(node -p "require('./app/src-tauri/tauri.conf.json').version")"
         b="target/${{ inputs.target }}/release/bundle"
         mkdir -p dist
         if [ -d "$b/macos" ]; then

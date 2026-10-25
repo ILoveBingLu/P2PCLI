@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="164" height="314" viewBox="0 0 164 314">
+  <!-- Windows 安装包欢迎页、完成页左边的竖图，NSIS 要 164x314，按两倍尺寸出图 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#162033"/>
+      <stop offset="1" stop-color="#0b1220"/>
+    </linearGradient>
+    <radialGradient id="blue">
+      <stop stop-color="#60a5fa" stop-opacity=".32"/>
+      <stop offset="1" stop-color="#60a5fa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#60a5fa" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#60a5fa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="green">
+      <stop stop-color="#34d399" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#34d399" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="164" height="314" fill="url(#bg)"/>
+  <ellipse cx="150" cy="20" rx="120" ry="110" fill="url(#blue)"/>
+  <ellipse cx="10" cy="300" rx="130" ry="110" fill="url(#green)"/>
+  <circle cx="82" cy="96" r="62" fill="url(#halo)"/>
+  <image href="../icons/icon.png" x="46" y="60" width="72" height="72"/>
+  <g font-family="'Segoe UI', -apple-system, 'PingFang SC', sans-serif" text-anchor="middle">
+    <text x="82" y="166" font-size="21" font-weight="700" fill="#f8fafc">P2PCLI</text>
+    <text x="82" y="188" font-size="11.5" letter-spacing="1" fill="#94a3b8">点对点远程终端</text>
+  </g>
+  <rect x="70" y="202" width="24" height="3" rx="1.5" fill="#60a5fa"/>
+  <g font-family="'Cascadia Code', 'SF Mono', Menlo, monospace" font-size="11">
+    <text x="30" y="270" fill="#34d399">❯</text>
+    <text x="44" y="270" fill="#cbd5e1">p2pcli</text>
+    <rect x="89" y="261" width="7" height="12" rx="1" fill="#60a5fa" opacity=".9"/>
+  </g>
+</svg>

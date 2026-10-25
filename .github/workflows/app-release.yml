@@ -1,5 +1,6 @@
-# 推 vX.Y.Z 标签时，Mac（Apple 芯片）、Mac（Intel）、Windows 三个安装包同时开编，
+# 推 vX.Y.Z 标签时，Mac 两种芯片、Windows 三种架构的安装包同时开编，
 # 编完由“发布”汇总，连同在线更新用的 latest.json 一起发到发布页，并标成最新版本。
+# 推 ci/ 开头的分支只编不发，改了打包配置先用它试，编出来的包在这次运行的 Artifacts 里。
 # 各平台共用的步骤在 .github/actions/build-app。
 # 在线更新的安装包要签名：仓库 Settings → Secrets 里要有 TAURI_SIGNING_PRIVATE_KEY（没有密码）。
 name: 安装包发布
@@ -7,50 +8,37 @@ name: 安装包发布
 on:
   push:
     tags: ["v*"]
+    branches: ["ci/**"]
 
 permissions:
   contents: write
 
 jobs:
-  mac-arm:
-    name: Mac（Apple 芯片）
-    runs-on: macos-latest
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Mac（Apple 芯片）, os: macos-latest, target: aarch64-apple-darwin, bundles: "app,dmg", arch: aarch64 }
+          - { name: Mac（Intel）, os: macos-latest, target: x86_64-apple-darwin, bundles: "app,dmg", arch: x64 }
+          - { name: Windows（x64）, os: windows-latest, target: x86_64-pc-windows-msvc, bundles: nsis, arch: x64 }
+          - { name: Windows（ARM64）, os: windows-latest, target: aarch64-pc-windows-msvc, bundles: nsis, arch: arm64 }
+          - { name: Windows（32 位）, os: windows-latest, target: i686-pc-windows-msvc, bundles: nsis, arch: x86 }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-app
         with:
-          target: aarch64-apple-darwin
-          bundles: app,dmg
-          arch: aarch64
-          signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-
-  mac-intel:
-    name: Mac（Intel）
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/build-app
-        with:
-          target: x86_64-apple-darwin
-          bundles: app,dmg
-          arch: x64
-          signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-
-  windows:
-    name: Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/build-app
-        with:
-          target: x86_64-pc-windows-msvc
-          bundles: nsis
-          arch: x64
+          target: ${{ matrix.target }}
+          bundles: ${{ matrix.bundles }}
+          arch: ${{ matrix.arch }}
           signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
   release:
     name: 发布
-    needs: [mac-arm, mac-intel, windows]
+    if: github.ref_type == 'tag'
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,17 +58,23 @@ jobs:
           git fetch --depth=1 origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           notes="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed '/-----BEGIN/,$d')"
           [ -n "$notes" ] || notes="P2PCLI ${ver}"
-          arm="P2PCLI_${ver}_aarch64.app.tar.gz"
-          intel="P2PCLI_${ver}_x64.app.tar.gz"
-          win="P2PCLI_${ver}_x64-setup.exe"
+          # 在线更新按平台挑包：Mac 用 .app.tar.gz，Windows 直接用安装包
+          mac_arm="P2PCLI_${ver}_aarch64.app.tar.gz"
+          mac_intel="P2PCLI_${ver}_x64.app.tar.gz"
+          win_x64="P2PCLI_${ver}_x64-setup.exe"
+          win_arm64="P2PCLI_${ver}_arm64-setup.exe"
+          win_x86="P2PCLI_${ver}_x86-setup.exe"
+          entry() { jq -n --arg url "$base/$1" --arg sig "$(cat "dist/$1.sig")" '{url: $url, signature: $sig}'; }
           jq -n --arg v "$ver" --arg notes "$notes" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg arm_url "$base/$arm" --arg arm_sig "$(cat "dist/$arm.sig")" \
-            --arg intel_url "$base/$intel" --arg intel_sig "$(cat "dist/$intel.sig")" \
-            --arg win_url "$base/$win" --arg win_sig "$(cat "dist/$win.sig")" \
+            --argjson mac_arm "$(entry "$mac_arm")" --argjson mac_intel "$(entry "$mac_intel")" \
+            --argjson win_x64 "$(entry "$win_x64")" --argjson win_arm64 "$(entry "$win_arm64")" \
+            --argjson win_x86 "$(entry "$win_x86")" \
             '{version: $v, notes: $notes, pub_date: $date, platforms: {
-              "darwin-aarch64": {url: $arm_url, signature: $arm_sig},
-              "darwin-x86_64": {url: $intel_url, signature: $intel_sig},
-              "windows-x86_64": {url: $win_url, signature: $win_sig}
+              "darwin-aarch64": $mac_arm,
+              "darwin-x86_64": $mac_intel,
+              "windows-x86_64": $win_x64,
+              "windows-aarch64": $win_arm64,
+              "windows-i686": $win_x86
             }}' > dist/latest.json
           cat dist/latest.json
           body="${notes}
@@ -88,12 +82,16 @@ jobs:
           下载：
           - Mac（Apple 芯片，M1 到 M4 这些）：\`P2PCLI_${ver}_aarch64.dmg\`
           - Mac（Intel 芯片）：\`P2PCLI_${ver}_x64.dmg\`
-          - Windows：\`P2PCLI_${ver}_x64-setup.exe\`
+          - Windows（大多数电脑）：\`P2PCLI_${ver}_x64-setup.exe\`
+          - Windows（骁龙等 ARM 芯片）：\`P2PCLI_${ver}_arm64-setup.exe\`
+          - Windows（32 位系统）：\`P2PCLI_${ver}_x86-setup.exe\`
 
           不知道 Mac 是哪种芯片：左上角苹果菜单 → 关于本机，芯片一栏写 Apple 的选第一个，写 Intel 的选第二个。
+          不知道 Windows 选哪个：设置 → 系统 → 系统信息，系统类型写 基于 x64 的选 x64，写 基于 ARM 的选 arm64，写 32 位操作系统的选 x86。
           安装包没有付费签名，第一次打开会被系统拦一下：Mac 提示 Apple 无法验证时点 完成，再到 系统设置 → 隐私与安全性 点 仍要打开；Windows 点 更多信息 → 仍要运行。
           装好以后软件会自动检查更新，有新版本在主界面点一下就能更新。"
           gh release create "$GITHUB_REF_NAME" \
             "dist/P2PCLI_${ver}_aarch64.dmg" "dist/P2PCLI_${ver}_x64.dmg" \
-            "dist/$arm" "dist/$intel" "dist/$win" dist/latest.json \
+            "dist/$mac_arm" "dist/$mac_intel" "dist/$win_x64" "dist/$win_arm64" "dist/$win_x86" \
+            dist/latest.json \
             --title "P2PCLI ${ver}" --notes "$body" --latest
