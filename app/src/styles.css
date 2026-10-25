@@ -333,6 +333,22 @@
 .connect-section .section-title {
   margin-bottom: 16px;
 }
+/* 连接面板里要连的局域网设备，高度和底色跟输入框一致 */
+.lan-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 4px 0 12px;
+  border-radius: var(--field-radius, calc(var(--radius) * 1.5));
+  background: var(--default);
+  font-size: 14px;
+}
+.lan-target svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
 .connect-note {
   display: flex;
   align-items: center;

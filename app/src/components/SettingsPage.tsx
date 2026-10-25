@@ -26,6 +26,7 @@ export function SettingsPage({
   const [customServer, setCustomServer] = useState("");
   const [relay, setRelay] = useState("");
   const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [lanVisible, setLanVisible] = useState(true);
   const [proxy, setProxy] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +46,7 @@ export function SettingsPage({
       setRelay(value.relay ?? "");
       setName(value.device_name ?? "");
       setProxyEnabled(!!value.proxy);
+      setLanVisible(value.lan_visible);
       setProxy(value.proxy ?? "");
     } catch (e) {
       setError(String(e));
@@ -64,7 +66,7 @@ export function SettingsPage({
       const server = serverChoice === CUSTOM_SERVER
         ? customServer
         : serverChoice === settings.default_server ? null : serverChoice;
-      await api.saveSettings(server, name, relay, proxyEnabled ? proxy : null);
+      await api.saveSettings(server, name, relay, proxyEnabled ? proxy : null, lanVisible);
       onChanged();
       toast.success("设置已保存并立即应用");
     } catch (e) {
@@ -199,6 +201,15 @@ export function SettingsPage({
                       直连失败时转发加密数据，多个地址用逗号分隔。
                     </FieldDescription>
                   </Field>
+                  <Checkbox isSelected={lanVisible} onChange={setLanVisible} isDisabled={saving}>
+                    <Checkbox.Content className="gap-3 text-sm">
+                      <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
+                      在局域网中显示本机
+                    </Checkbox.Content>
+                    <Description className="pl-7 text-xs text-muted-foreground">
+                      同一网络里的其他 P2PCLI 能看到本机名称，点一下就能发起连接，仍然要临时密码和你的同意。在公共 Wi-Fi 上可以关掉。
+                    </Description>
+                  </Checkbox>
                 </FieldGroup>
               )}
             </Tabs.Panel>
@@ -287,7 +298,7 @@ export function SettingsPage({
           </Alert>
         )}
         <footer className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-5">
-          <span className="mr-auto text-xs text-muted-foreground">保存后即时生效。代理或中继变更会重连网络，后台终端会话保留。</span>
+          <span className="mr-auto text-xs text-muted-foreground">保存后即时生效。代理、中继或局域网显示变更会重连网络，后台终端会话保留。</span>
           <Button
             onClick={save}
             disabled={loading || !settings || saving || (proxyEnabled && !proxy.trim()) || (serverChoice === CUSTOM_SERVER && !customServer.trim())}

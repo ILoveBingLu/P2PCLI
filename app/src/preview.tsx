@@ -20,6 +20,11 @@ const ov: Overview = {
     { code: "123456789", endpoint_id: "x", name: "工作室 Mac mini", platform: "macos", last_used: 3 },
     { code: "987654321", endpoint_id: "y", name: "办公室 PC", platform: "windows", last_used: 2 },
   ],
+  // 工作室 Mac mini 也在连接历史里，会标「局域网在线」；连客厅那台要密码
+  nearby: [
+    { endpoint_id: "x", name: "工作室 Mac mini", platform: "macos" },
+    { endpoint_id: "c".repeat(64), name: "客厅的 Windows", platform: "windows" },
+  ],
   trusted: [{ endpoint_id: "f9bb5fbc3f", name: "工作室 Mac mini", platform: "macos", added_at: 0 }],
 };
 
@@ -28,11 +33,14 @@ if (s === "unconfigured") {
   ov.code = null;
   ov.recent = [];
 }
+// s=lan-empty：局域网里没发现设备
+if (s === "unconfigured" || s === "lan-empty") ov.nearby = [];
 if (s === "offline") ov.server = { state: "offline", error: "无法连接牵线服务器" };
 const previewSettings: SettingsView = {
   server: null, device_name: null, relay: null, proxy: null,
   effective_relay: null, effective_server: "wss://p2pcli.aiqji.cn",
   default_server: "wss://p2pcli.aiqji.cn",
+  lan_visible: true,
   server_presets: [
     { address: "wss://p2pcli.aiqji.cn", label: "国内服务器", note: "国内节点，在国内用连得最快" },
     { address: "wss://p2pcli.yscopy.cn", label: "Cloudflare", note: "海外节点，适合在国外用，国内访问有时不稳" },
@@ -62,20 +70,24 @@ mockIPC(
     switch (cmd) {
       case "overview":
         return ov;
-      case "connect":
+      case "connect": {
         if (s === "error") return Promise.reject({ reject: "bad_password", message: "临时密码不正确，请向对方获取最新密码。" });
+        const lan = ov.nearby.find((d) => d.endpoint_id === args.target);
+        if (lan && lan.endpoint_id !== "x" && !args.password)
+          return Promise.reject({ reject: "need_password", message: "需要输入临时密码" });
         return new Promise((r) =>
           setTimeout(
             () =>
               r({
                 conn_id: 1,
-                code: "123456789",
-                info: { endpoint_id: "x", name: "工作室 Mac mini", platform: "macos", user: "me" },
+                code: lan ? null : "123456789",
+                info: { endpoint_id: lan?.endpoint_id ?? "x", name: lan?.name ?? "工作室 Mac mini", platform: lan?.platform ?? "macos", user: "me" },
                 path: { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" },
               }),
             600,
           ),
         );
+      }
       case "list_terminals":
         return terminalSessions.map((session) => ({ ...session }));
       case "end_terminal": {
@@ -125,6 +137,7 @@ mockIPC(
         previewSettings.device_name = args.deviceName?.trim() || null;
         previewSettings.relay = args.relay?.trim() || null;
         previewSettings.proxy = args.proxy?.trim() || null;
+        previewSettings.lan_visible = args.lanVisible ?? true;
         ov.name = previewSettings.device_name ?? "我的 MacBook Pro";
         return null;
       case "restart":

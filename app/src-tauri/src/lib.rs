@@ -13,6 +13,7 @@ use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::path::PathInfo;
 use p2pcli_core::proto::RejectCode;
 use p2pcli_core::rendezvous::{normalize_code, parse_server};
+use p2pcli_core::lan::NearbyDevice;
 use p2pcli_core::store::{RecentDevice, TrustedDevice};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -48,6 +49,9 @@ struct Settings {
     device_name: Option<String>,
     #[serde(default)]
     relay: Option<String>,
+    /// 不让局域网里的其他设备看到本机；默认看得到
+    #[serde(default)]
+    lan_hidden: bool,
 }
 
 fn settings_path(dir: &Path) -> PathBuf {
@@ -206,6 +210,8 @@ struct Overview {
     server: serde_json::Value,
     sessions: Vec<SessionSummary>,
     recent: Vec<RecentDevice>,
+    /// 局域网里发现的设备
+    nearby: Vec<NearbyDevice>,
     trusted: Vec<TrustedView>,
 }
 
@@ -225,6 +231,7 @@ fn overview(state: State<'_, AppState>) -> Overview {
         server,
         sessions: node.host.sessions(),
         recent: node.recent.list(),
+        nearby: node.nearby(),
         trusted: node
             .host
             .trust
@@ -305,6 +312,11 @@ async fn connect(
     let code = normalize_code(&target);
     let res = match &code {
         Some(c) => state.node().connect_code(c, password).await,
+        // 局域网设备，或者在局域网在线的历史设备：按公钥连，不经过牵线服务器
+        None if !target.contains('@') && target.trim().parse::<iroh::EndpointId>().is_ok() => {
+            let id = target.trim().parse::<iroh::EndpointId>().expect("上面刚检查过");
+            state.node().connect_endpoint(id, password).await
+        }
         // 开发测试：直接填 公钥@地址
         None => match parse_server(&target) {
             Ok(addr) => state.node().connect_addr(addr, password).await,
@@ -507,6 +519,7 @@ struct SettingsView {
     effective_relay: Option<String>,
     default_server: &'static str,
     server_presets: Vec<ServerPreset>,
+    lan_visible: bool,
 }
 
 #[tauri::command]
@@ -518,6 +531,7 @@ fn get_settings(state: State<'_, AppState>) -> SettingsView {
         effective_relay: effective_relay(&s),
         default_server: default_server(),
         server_presets: server_presets(),
+        lan_visible: !s.lan_hidden,
         server: s.server,
         device_name: s.device_name,
         relay: s.relay,
@@ -532,6 +546,7 @@ async fn save_settings(
     device_name: Option<String>,
     relay: Option<String>,
     proxy: Option<String>,
+    lan_visible: Option<bool>,
 ) -> Result<(), String> {
     let _gate = state.config_gate.lock().await;
     let clean = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -540,6 +555,7 @@ async fn save_settings(
         server: clean(server),
         device_name: clean(device_name),
         relay: clean(relay),
+        lan_hidden: !lan_visible.unwrap_or(true),
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
@@ -561,6 +577,8 @@ async fn save_settings(
         server: effective_server(&s),
         proxy: s.proxy.clone(),
         relays: effective_relay(&s).map(|r| r.split(',').map(|u| u.trim().to_string()).collect()).unwrap_or_default(),
+        lan: true,
+        lan_visible: !s.lan_hidden,
         ..Default::default()
     };
     let old = state.node();
@@ -660,6 +678,8 @@ pub fn run() {
                 relays: effective_relay(&settings)
                     .map(|r| r.split(',').map(|u| u.trim().to_string()).collect())
                     .unwrap_or_default(),
+                lan: true,
+                lan_visible: !settings.lan_hidden,
                 ..Default::default()
             };
             let node = tauri::async_runtime::block_on(Node::start(cfg, delegate.clone()))?;
@@ -683,7 +703,7 @@ pub fn run() {
                 loop {
                     tick.tick().await;
                     let node = handle.state::<AppState>().node();
-                    let current = serde_json::json!({ "status": node.rdv.as_ref().map(|r| r.status()), "code": node.rdv.as_ref().and_then(|r| r.code()), "name": node.me.name });
+                    let current = serde_json::json!({ "status": node.rdv.as_ref().map(|r| r.status()), "code": node.rdv.as_ref().and_then(|r| r.code()), "name": node.me.name, "lan": node.nearby() });
                     if current != previous { let _ = handle.emit("server-status", &current); previous = current; }
                 }
             });

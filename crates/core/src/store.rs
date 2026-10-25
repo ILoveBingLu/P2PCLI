@@ -138,6 +138,22 @@ impl RecentStore {
         write_private(&self.path, &serde_json::to_vec_pretty(&*map)?)
     }
 
+    /// 按公钥连上以后，更新同一台设备已有的历史记录；没有记录就不动
+    pub fn touch(&self, endpoint_id: &str, name: &str, platform: &str) -> Result<()> {
+        let mut map = self.map.lock().unwrap();
+        let mut changed = false;
+        for dev in map.values_mut().filter(|d| d.endpoint_id == endpoint_id) {
+            dev.name = name.to_string();
+            dev.platform = platform.to_string();
+            dev.last_used = now_secs();
+            changed = true;
+        }
+        if changed {
+            write_private(&self.path, &serde_json::to_vec_pretty(&*map)?)?;
+        }
+        Ok(())
+    }
+
     /// 最近用过的在前
     pub fn list(&self) -> Vec<RecentDevice> {
         let mut v: Vec<_> = self.map.lock().unwrap().values().cloned().collect();

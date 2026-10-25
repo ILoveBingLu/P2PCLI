@@ -5,6 +5,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { PlatformIcon } from "./PlatformIcon";
 import type { useConnection } from "./useConnection";
 
 // Let the popover paint before OTP focus/selection initialization runs.
@@ -29,8 +30,9 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
   onOpenChange: (open: boolean) => void;
   connection: ReturnType<typeof useConnection>;
 }) {
-  const { target, setTarget, password, setPassword, busy, error, pwRef, doConnect } = connection;
+  const { target, setTarget, password, setPassword, busy, error, setError, pwRef, doConnect, lanTarget, setLanTarget } = connection;
   const isDeviceCodeComplete = /^\d{9}$/.test(target);
+  const canSubmit = lanTarget !== null || isDeviceCodeComplete;
 
   return (
     <Popover isOpen={open} onOpenChange={onOpenChange}>
@@ -52,36 +54,56 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!isDeviceCodeComplete) return;
-                void doConnect(target, password);
+                if (!canSubmit) return;
+                void (lanTarget
+                  ? doConnect(lanTarget.endpoint_id, password, lanTarget)
+                  : doConnect(target, password));
               }}
             >
               <FieldGroup className="gap-3">
-                <Field data-disabled={busy}>
-                  <FieldLabel htmlFor="remote-code">设备码</FieldLabel>
-                  <InputOTP
-                    id="remote-code"
-                    className="gap-2"
-                    variant="secondary"
-                    ref={focusDeviceCodeAfterPaint}
-                    pushPasswordManagerStrategy="none"
-                    aria-label="设备码，9 位数字"
-                    maxLength={9}
-                    minLength={9}
-                    required
-                    pattern={REGEXP_ONLY_DIGITS}
-                    inputMode="numeric"
-                    value={target}
-                    onChange={setTarget}
-                    pasteTransformer={(text) => text.replace(/[\s-]/g, "")}
-                    isDisabled={busy}
-                    spellCheck={false}
-                    autoComplete="off"
-                  >
-                    {[0, 3, 6].map((start) => (
-                      <Fragment key={start}>
-                        {start > 0 && (
-                          <InputOTP.Separator aria-hidden="true" className="bg-muted-foreground/60" />
+                {lanTarget ? (
+                  <Field data-disabled={busy}>
+                    <FieldLabel>局域网设备</FieldLabel>
+                    <div className="lan-target">
+                      <PlatformIcon platform={lanTarget.platform} />
+                      <span className="truncate">{lanTarget.name}</span>
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="ml-auto"
+                        disabled={busy}
+                        onPress={() => { setLanTarget(null); setError(null); }}
+                      >
+                        改用设备码
+                      </Button>
+                    </div>
+                  </Field>
+                ) : (
+                  <Field data-disabled={busy}>
+                    <FieldLabel htmlFor="remote-code">设备码</FieldLabel>
+                    <InputOTP
+                      id="remote-code"
+                      className="gap-2"
+                      variant="secondary"
+                      ref={focusDeviceCodeAfterPaint}
+                      pushPasswordManagerStrategy="none"
+                      aria-label="设备码，9 位数字"
+                      maxLength={9}
+                      minLength={9}
+                      required
+                      pattern={REGEXP_ONLY_DIGITS}
+                      inputMode="numeric"
+                      value={target}
+                      onChange={setTarget}
+                      pasteTransformer={(text) => text.replace(/[\s-]/g, "")}
+                      isDisabled={busy}
+                      spellCheck={false}
+                      autoComplete="off"
+                    >
+                      {[0, 3, 6].map((start) => (
+                        <Fragment key={start}>
+                          {start > 0 && (
+                            <InputOTP.Separator aria-hidden="true" className="bg-muted-foreground/60" />
                         )}
                         <InputOTP.Group className="flex-1">
                           {[0, 1, 2].map((offset) => (
@@ -92,6 +114,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                     ))}
                   </InputOTP>
                 </Field>
+                )}
                 <Field data-disabled={busy}>
                   <FieldLabel htmlFor="remote-password">临时密码</FieldLabel>
                   <Input
@@ -115,7 +138,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={busy || !isDeviceCodeComplete}
+                  disabled={busy || !canSubmit}
                 >
                   {busy ? (
                     <LoaderCircle

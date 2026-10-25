@@ -7,6 +7,7 @@ pub mod client;
 pub mod diag;
 pub mod host;
 pub mod identity;
+pub mod lan;
 pub mod node;
 pub mod path;
 pub mod proto;

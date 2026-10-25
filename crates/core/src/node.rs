@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 use crate::client::{self, ConnectError, RemoteHost};
 use crate::host::{Host, HostDelegate};
 use crate::identity::{DeviceInfo, load_or_create_key};
+use crate::lan::{Lan, NearbyDevice};
 use crate::rendezvous::{RdvClient, RdvPush, RdvResponse, normalize_code, parse_rdv_server};
 use crate::store::{RecentDevice, RecentStore, now_secs};
 use crate::{ALPN_PUNCH, ALPN_TERM, v6};
@@ -43,6 +44,10 @@ pub struct NodeConfig {
     pub relays: Vec<String>,
     /// 测试用：不连 iroh 的公共地址查询和中继，只用明确给出的地址，结果不受外网影响
     pub offline: bool,
+    /// 局域网发现：看到同一网络里的 P2PCLI 设备，按公钥直接连，不经过牵线服务器
+    pub lan: bool,
+    /// 让同一网络里的其他设备看到本机（要先开 lan）
+    pub lan_visible: bool,
 }
 
 pub struct Node {
@@ -51,6 +56,8 @@ pub struct Node {
     pub me: DeviceInfo,
     pub host: Arc<Host>,
     pub rdv: Option<Arc<RdvClient>>,
+    /// 局域网发现，没开或者没启动成功是 None
+    pub lan: Option<Arc<Lan>>,
     pub recent: Arc<RecentStore>,
     /// 配合对方 IPv6 直连发过几次包，排查和测试用
     pub punches: Arc<std::sync::atomic::AtomicU64>,
@@ -58,19 +65,20 @@ pub struct Node {
 
 impl Node {
     pub async fn start(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>) -> Result<Arc<Self>> {
-        let node = Self::prepare(cfg, delegate, None, None, None).await?;
+        let node = Self::prepare(cfg, delegate, None, None, None, None).await?;
         node.activate();
         Ok(node)
     }
 
     pub fn transport_changed(&self, cfg: &NodeConfig) -> bool {
         self.config.proxy != cfg.proxy || self.config.relays != cfg.relays ||
-        self.config.bind_ip != cfg.bind_ip || self.config.offline != cfg.offline || self.config.relay_only != cfg.relay_only
+        self.config.bind_ip != cfg.bind_ip || self.config.offline != cfg.offline || self.config.relay_only != cfg.relay_only ||
+        self.config.lan != cfg.lan || self.config.lan_visible != cfg.lan_visible
     }
 
     pub async fn prepare_update(&self, cfg: NodeConfig, delegate: Arc<dyn HostDelegate>) -> Result<Arc<Self>> {
-        let endpoint = if self.transport_changed(&cfg) { None } else { Some(self.endpoint.clone()) };
-        Self::prepare(cfg, delegate, Some(self.host.clone()), endpoint, Some(self.recent.clone())).await
+        let (endpoint, lan) = if self.transport_changed(&cfg) { (None, None) } else { (Some(self.endpoint.clone()), self.lan.clone()) };
+        Self::prepare(cfg, delegate, Some(self.host.clone()), endpoint, lan, Some(self.recent.clone())).await
     }
 
     pub fn activate(&self) {
@@ -82,7 +90,7 @@ impl Node {
         if let Some(rdv) = &self.rdv { rdv.stop().await; }
     }
 
-    async fn prepare(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>, shared_host: Option<Arc<Host>>, existing_endpoint: Option<Endpoint>, recent: Option<Arc<RecentStore>>) -> Result<Arc<Self>> {
+    async fn prepare(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>, shared_host: Option<Arc<Host>>, existing_endpoint: Option<Endpoint>, existing_lan: Option<Arc<Lan>>, recent: Option<Arc<RecentStore>>) -> Result<Arc<Self>> {
         std::fs::create_dir_all(&cfg.data_dir)
             .with_context(|| format!("建数据目录失败：{}", cfg.data_dir.display()))?;
         let server = cfg.server.as_deref().filter(|s| !s.trim().is_empty()).map(parse_rdv_server).transpose()?;
@@ -122,6 +130,20 @@ impl Node {
             None => builder.bind().await.context("启动网络失败")?,
         };
         let me = DeviceInfo::local(cfg.device_name.clone());
+        let lan = match existing_lan {
+            Some(lan) => {
+                lan.set_info(&me);
+                Some(lan)
+            }
+            None if cfg.lan && !cfg.offline => match Lan::start(&endpoint, &me, cfg.lan_visible).await {
+                Ok(lan) => Some(lan),
+                Err(e) => {
+                    warn!("局域网发现没启动：{e:#}");
+                    None
+                }
+            },
+            None => None,
+        };
         let host = shared_host.unwrap_or_else(|| Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate)));
 
         if start_accept {
@@ -167,6 +189,7 @@ impl Node {
             me,
             host,
             rdv,
+            lan,
             recent: recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir))),
             config: cfg,
             punches,
@@ -266,6 +289,25 @@ impl Node {
                 },
             }
         }
+    }
+
+    /// 局域网里看到的设备
+    pub fn nearby(&self) -> Vec<NearbyDevice> {
+        self.lan.as_ref().map(|l| l.devices()).unwrap_or_default()
+    }
+
+    /// 按公钥连：局域网里发现的设备，或者连接历史里正好在局域网在线的设备。
+    /// 地址交给 iroh 去查（局域网 mDNS 优先，也会查公共地址），不经过牵线服务器。
+    pub async fn connect_endpoint(&self, id: EndpointId, password: Option<String>) -> Result<RemoteHost, ConnectError> {
+        if id == self.id() {
+            return Err(anyhow!("这是本机").into());
+        }
+        let remote = client::connect(&self.endpoint, EndpointAddr::new(id), &self.me, password).await?;
+        // 只更新已有的历史记录：局域网广播里的信息没法核实，不拿它新建记录
+        if let Err(e) = self.recent.touch(&id.to_string(), &remote.info.name, &remote.info.platform) {
+            warn!("更新连接历史失败：{e:#}");
+        }
+        Ok(remote)
     }
 
     /// 直接用对方公钥（加可选地址）连，开发和测试用

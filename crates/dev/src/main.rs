@@ -30,6 +30,12 @@ struct Cli {
     /// 自建中继地址，可写多个
     #[arg(long, global = true)]
     relay: Vec<String>,
+    /// 关掉局域网发现（默认开，也让别人看到本机）
+    #[arg(long, global = true)]
+    no_lan: bool,
+    /// 局域网里只看别人，不让别人看到本机
+    #[arg(long, global = true)]
+    lan_hidden: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -54,9 +60,15 @@ enum Cmd {
     },
     /// 网络诊断：IPv6、NAT 类型、中继
     Diag,
+    /// 列出局域网里发现的 P2PCLI 设备
+    Nearby {
+        /// 等多少秒再列
+        #[arg(long, default_value_t = 5)]
+        wait: u64,
+    },
     /// 连过去跑一条命令，打印输出，退出码跟对面一致
     Connect {
-        /// 9 位设备码，或 <公钥>@<ip:端口>
+        /// 9 位设备码、局域网设备的公钥，或 <公钥>@<ip:端口>
         target: String,
         #[arg(long)]
         password: Option<String>,
@@ -137,6 +149,8 @@ async fn main() -> Result<()> {
             relays: cli.relay.clone(),
             offline: false,
             proxy: None,
+            lan: !cli.no_lan,
+            lan_visible: !cli.no_lan && !cli.lan_hidden,
             session_program: None,
         },
         Arc::new(CliDelegate { approve }),
@@ -166,6 +180,18 @@ async fn main() -> Result<()> {
             node.shutdown().await;
             Ok(())
         }
+        Cmd::Nearby { wait } => {
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            let list = node.nearby();
+            if list.is_empty() {
+                println!("局域网里没发现别的 P2PCLI 设备");
+            }
+            for d in list {
+                println!("{}  {}  {}", d.endpoint_id, d.platform, d.name);
+            }
+            node.shutdown().await;
+            Ok(())
+        }
         Cmd::Diag => {
             // 给中继探测一点时间
             let _ = tokio::time::timeout(Duration::from_secs(10), node.endpoint.online()).await;
@@ -188,6 +214,8 @@ async fn main() -> Result<()> {
             let started = Instant::now();
             let res = if normalize_code(&target).is_some() {
                 node.connect_code(&target, password).await
+            } else if let Ok(id) = target.trim().parse::<iroh::EndpointId>() {
+                node.connect_endpoint(id, password).await
             } else {
                 node.connect_addr(parse_server(&target)?, password).await
             };

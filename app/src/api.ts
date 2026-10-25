@@ -75,7 +75,15 @@ export interface Overview {
   server: ServerState;
   sessions: SessionSummary[];
   recent: RecentDevice[];
+  /** 局域网里发现的设备 */
+  nearby: NearbyDevice[];
   trusted: TrustedView[];
+}
+
+export interface NearbyDevice {
+  endpoint_id: string;
+  name: string;
+  platform: string;
 }
 
 export interface IncomingRequest {
@@ -103,6 +111,7 @@ export interface SettingsView {
   effective_relay: string | null;
   default_server: string;
   server_presets: ServerPreset[];
+  lan_visible: boolean;
 }
 
 export interface ServerPreset {
@@ -140,8 +149,8 @@ export const api = {
   listTerminals: (connId: number) => invoke<TerminalSession[]>("list_terminals", { connId }),
   endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
-  saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null) =>
-    invoke("save_settings", { server, deviceName, relay, proxy }),
+  saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null, lanVisible: boolean) =>
+    invoke("save_settings", { server, deviceName, relay, proxy, lanVisible }),
   restart: () => invoke("restart"),
 };
 

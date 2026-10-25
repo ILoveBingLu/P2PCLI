@@ -231,7 +231,11 @@ export default function App() {
           <ConnectionPopover
             connection={connection}
             open={showConnect}
-            onOpenChange={setShowConnect}
+            onOpenChange={(open) => {
+              setShowConnect(open);
+              // 关掉面板就回到输设备码，下次从加号打开不会还停在局域网设备上
+              if (!open) connection.setLanTarget(null);
+            }}
           />
         }
       />
@@ -249,6 +253,7 @@ export default function App() {
           setActiveKey(key); setSessionTarget(null); setShowSettings(false);
         }}
         onConnect={(code) => void connection.doConnect(code, connection.password)}
+        onConnectLan={(device) => void connection.connectLan(device)}
         onRefresh={refresh}
       />}
       <main className={cn("workspace", showSettings && "workspace-full-width")}>
