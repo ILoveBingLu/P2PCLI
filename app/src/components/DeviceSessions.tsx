@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { ArrowUpRight, LoaderCircle, SquareArrowOutUpRight, Terminal, Trash2 } from "lucide-react";
+import { LoaderCircle, SquareArrowOutUpRight, Terminal, Trash2 } from "lucide-react";
 import { api, type DeviceStatus, type RemoteInfo, type TerminalSession } from "../api";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -17,7 +17,7 @@ export interface SidebarTab {
   state: "opening" | "open" | "exited" | "closed";
 }
 
-export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, busy, onConnect, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
+export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, busy, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
   target?: SessionTarget;
   /** 后台探测的结果：没连上时拿它显示会话列表 */
   status?: DeviceStatus;
@@ -26,7 +26,6 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
   sessionsRev: number;
   activeKey: number | null;
   busy: boolean;
-  onConnect: () => void;
   /** 没连上时点会话：先连上，再打开这个会话；null 是新建 */
   onConnectOpen: (sessionId: string | null) => void;
   onOpen: (target: SessionTarget, sessionId?: string) => void;
@@ -116,7 +115,7 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
   };
 
   if (!target) return (
-    <OfflineSessions status={status} busy={busy} onConnect={onConnect} onConnectOpen={onConnectOpen} openMenu={openMenu} />
+    <OfflineSessions status={status} busy={busy} onConnectOpen={onConnectOpen} openMenu={openMenu} />
   );
 
   return (
@@ -154,10 +153,9 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
 }
 
 /** 没连上时：显示后台探测拿到的、或者上次记住的会话，点一下就连上并打开 */
-function OfflineSessions({ status, busy, onConnect, onConnectOpen, openMenu }: {
+function OfflineSessions({ status, busy, onConnectOpen, openMenu }: {
   status?: DeviceStatus;
   busy: boolean;
-  onConnect: () => void;
   onConnectOpen: (sessionId: string | null) => void;
   openMenu: (e: MouseEvent, actions: MenuAction[]) => void;
 }) {
@@ -191,9 +189,6 @@ function OfflineSessions({ status, busy, onConnect, onConnectOpen, openMenu }: {
           <span className="shrink-0 text-[10px] text-muted-foreground">{s.attached ? "在用" : "后台运行"}</span>
         </Button>
       ))}
-      <Button variant="ghost" className="h-8 w-full justify-start px-2 text-xs" disabled={busy || offline} onClick={onConnect}>
-        {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowUpRight className="size-3.5" />}连接
-      </Button>
     </div>
   );
 }

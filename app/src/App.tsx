@@ -130,18 +130,28 @@ export default function App() {
   }, [refresh]);
 
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
+  // One path snapshot per live connection, shared by the sidebar and status bar.
+  const liveConnectionKey = [...new Set([
+    ...tabs.filter((tab) => tab.state !== "closed").map((tab) => tab.connId),
+    ...(sessionTarget ? [sessionTarget.connId] : []),
+  ])].sort((a, b) => a - b).join(",");
   useEffect(() => {
-    if (!activeTab || activeTab.state === "closed") return;
-    const connId = activeTab.connId;
-    const tick = () =>
-      api
-        .pathInfo(connId)
-        .then((p) => setPaths((m) => ({ ...m, [connId]: p })))
-        .catch(() => {});
-    tick();
-    const timer = window.setInterval(tick, 3000);
-    return () => window.clearInterval(timer);
-  }, [activeTab?.connId, activeTab?.state]);
+    if (!liveConnectionKey) return;
+    let disposed = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      await Promise.all(liveConnectionKey.split(",").map(async (id) => {
+        const connId = Number(id);
+        try {
+          const path = await api.pathInfo(connId);
+          if (!disposed) setPaths((current) => ({ ...current, [connId]: path }));
+        } catch { /* Keep the last sample until a refresh or disconnect. */ }
+      }));
+      if (!disposed) timer = window.setTimeout(() => void tick(), 3000);
+    };
+    void tick();
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [liveConnectionKey]);
 
   const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string) => {
     if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
@@ -297,9 +307,16 @@ export default function App() {
         nearbyReveal={nearbyReveal}
         onScanNearby={() => void scanNearby()}
         tabs={tabs}
+        paths={paths}
         activeKey={activeKey}
         sessionTarget={sessionTarget}
         onOpenSession={(target, id) => addTab(target.connId, target.info, target.code, id)}
+        onShowSessions={(target) => {
+          if (sessionTarget && sessionTarget.connId !== target.connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
+            void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
+          setSessionTarget(target);
+          setShowSettings(false);
+        }}
         onSelectTab={(key) => {
           if (sessionTarget && !tabs.some((tab) => tab.connId === sessionTarget.connId))
             void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));

@@ -65,6 +65,9 @@ const previewSettings: SettingsView = {
 if (s === "custom-server") previewSettings.server = "b840307fdbdff2aa164308932575e8f7396b7fd539bd7cfd1927b2456b3fc8a8@rdv.example.com:7788";
 let termSeq = 0;
 let scanSeq = 0;
+let pathSamples = 0;
+// s=latency: probe and terminal deliberately disagree; connected views must share updates.
+if (s === "latency") ov.devices[0].path!.rtt_ms = 99;
 let statusStartedAt = 0;
 const now = Math.floor(Date.now() / 1000);
 const terminalSessions: TerminalSession[] = s === "sessions" ? [
@@ -198,6 +201,7 @@ mockIPC(
         ov.sessions = ov.sessions.filter((session) => session.session !== args.session);
         return true;
       case "path_info":
+        if (s === "latency") return { kind: "ipv6", rtt_ms: ++pathSamples === 1 ? 20 : 35, remote: "[240e::1]:7788" };
         return { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" };
       case "get_settings":
         return { ...previewSettings };
