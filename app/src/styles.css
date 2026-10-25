@@ -996,10 +996,21 @@
 /* 终端铺满，不留边：全屏程序会把屏幕刷成自己的底色，留边就会露出一圈框。
    要加空也别用 padding：xterm 按父元素算行列，padding 会被算进去，最下面一行会被挤掉。 */
 .term {
+  position: relative;
   flex: 1;
   min-height: 0;
+  /* 尺寸动画期间保留原画面，超出可视区域的部分先裁掉，稳定后再统一重排行。 */
+  overflow: hidden;
   /* xterm's canvas layers have their own z-index; keep them below sibling overlays. */
   isolation: isolate;
+}
+.terminal-resize-frame {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--terminal);
 }
 /* 滚动条浮在内容上，细一点；xterm 用内联样式定宽，只能用 !important 盖掉 */
 .term .xterm-scrollable-element > .scrollbar.vertical {
@@ -1549,6 +1560,64 @@ img.agent-icon {
 }
 
 /* 认出命令行 AI 时终端下面的输入框：和终端同底色，文字框跟着内容长高，按钮贴底 */
+.agent-composer-dock {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  min-width: 0;
+}
+.agent-composer-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.agent-composer-dock[data-expanded="false"] .agent-composer-reveal {
+  grid-template-rows: 0fr;
+}
+.agent-composer-clip {
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 160ms ease;
+}
+.agent-composer-dock[data-expanded="false"] .agent-composer-clip {
+  opacity: 0;
+}
+.agent-composer-toggle[data-slot="button"] {
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% - 1px);
+  z-index: 1;
+  width: 48px;
+  min-width: 48px;
+  height: 23px;
+  min-height: 23px;
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: var(--terminal);
+  color: var(--muted-foreground);
+}
+.agent-composer-toggle[data-slot="button"]:hover {
+  background: color-mix(in oklab, var(--terminal) 94%, white);
+  color: var(--foreground);
+}
+.agent-composer-toggle svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 220ms ease;
+}
+.agent-composer-dock[data-expanded="false"] .agent-composer-toggle svg {
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-composer-reveal,
+  .agent-composer-clip,
+  .agent-composer-toggle svg {
+    transition: none;
+  }
+}
 .agent-composer {
   display: flex;
   flex: none;
@@ -1557,9 +1626,6 @@ img.agent-icon {
   padding: 8px 10px 8px 12px;
   border-top: 1px solid var(--border);
   background: var(--terminal);
-}
-.agent-composer-icon {
-  margin: 0 2px 8px 0;
 }
 .agent-composer textarea {
   flex: 1;
@@ -1633,11 +1699,4 @@ img.agent-icon {
   font-size: 12px;
   color: var(--warning);
   white-space: nowrap;
-}
-.terminal-status-compose {
-  cursor: pointer;
-  color: var(--muted-foreground);
-}
-.terminal-status-compose:hover {
-  color: var(--foreground);
 }

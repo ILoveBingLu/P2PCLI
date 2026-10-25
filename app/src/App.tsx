@@ -187,7 +187,6 @@ export default function App() {
     return snapshot.sessions.find((s) => s.id === t.sessionId)?.agent ?? null;
   };
   const activeAgent = activeTab?.state === "open" && !showSettings && !sessionTarget ? tabAgent(activeTab) : null;
-  const showComposer = !!activeAgent && !composerHidden;
   const hideComposer = (hidden: boolean) => {
     setComposerHidden(hidden);
     try { localStorage.setItem("p2pcli.composer.hidden", hidden ? "1" : "0"); } catch { /* 记不住也能用 */ }
@@ -421,7 +420,7 @@ export default function App() {
       const box = composerRef.current?.closest(".agent-composer")?.getBoundingClientRect();
       // 拖放事件给的是物理像素，换成网页的坐标再比
       const x = (at?.x ?? -1) / window.devicePixelRatio, y = (at?.y ?? -1) / window.devicePixelRatio;
-      if (box && x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return { info: activeTab.info, draftKey: activeTab.key };
+      if (!composerHidden && box && x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return { info: activeTab.info, draftKey: activeTab.key };
       return { info: activeTab.info, termId: activeTab.termId };
     }
     return { blocked: "先打开一台设备的终端，再把文件拖进来" };
@@ -430,6 +429,21 @@ export default function App() {
   dropTargetRef.current = dropTarget;
   /** 拖进终端或输入框的文件：传输编号 → 发完要填路径的终端或输入框 */
   const pendingInsert = useRef(new Map<string, { termId?: number; draftKey?: number; platform: string }>());
+
+  const uploadToComposer = async () => {
+    const target = activeTab;
+    if (!target || target.state !== "open") return;
+    try {
+      const paths = await api.pickPaths(false);
+      if (!paths.length) return;
+      const id = await api.sendFiles(target.info.endpoint_id, paths);
+      pendingInsert.current.set(id, { draftKey: target.key, platform: target.info.platform });
+      // 小文件可能在登记回填目标前就传完，主动读一次确保路径能进入草稿。
+      void api.transfers().then(setTransfers).catch(() => {});
+    } catch (error) {
+      toast.error(`上传失败：${String(error)}`);
+    }
+  };
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -467,7 +481,7 @@ export default function App() {
         const key = target.draftKey;
         setDrafts((d) => ({ ...d, [key]: (d[key] ? d[key].replace(/\s*$/, " ") : "") + quoted }));
         // 传的时候切去别的标签了就不抢焦点，路径照样留在原来那个标签的草稿里
-        if (activeTab?.key === key) composerRef.current?.focus();
+        if (activeTab?.key === key && !composerHidden && activeAgent) composerRef.current?.focus();
       } else if (target.termId != null) {
         void api.termInput(target.termId, quoted).catch(() => {});
       }
@@ -780,15 +794,21 @@ export default function App() {
                 </Tabs.Panel>
               ))}
             </div>
-            {showComposer && activeTab && activeAgent && (
+            {activeTab && activeAgent && (
               <AgentComposer
                 key={`composer-${activeTab.key}`}
                 agent={activeAgent}
+                expanded={!composerHidden}
                 draft={drafts[activeTab.key] ?? ""}
                 onDraft={(text) => setDrafts((d) => ({ ...d, [activeTab.key]: text }))}
                 onSend={(text) => sendToAgent(activeTab.key, text)}
                 onTerminal={() => termHandles.current.get(activeTab.key)?.focus()}
-                onHide={() => { hideComposer(true); termHandles.current.get(activeTab.key)?.focus(); }}
+                onToggle={() => {
+                  hideComposer(!composerHidden);
+                  if (composerHidden) window.requestAnimationFrame(() => composerRef.current?.focus());
+                  else termHandles.current.get(activeTab.key)?.focus();
+                }}
+                onUpload={uploadToComposer}
                 inputRef={composerRef}
                 tools={
                   <AgentSettingsBar
@@ -805,7 +825,6 @@ export default function App() {
             )}
             {activeTab && <TerminalStatusbar
               key={activeTab.key}
-              onShowComposer={activeAgent && composerHidden ? () => { hideComposer(false); window.requestAnimationFrame(() => composerRef.current?.focus()); } : undefined}
               sessionId={activeTab.sessionId}
               state={activeTab.state}
               path={paths[activeTab.connId]}

@@ -1,8 +1,7 @@
-import { useLayoutEffect, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ArrowUp, ChevronDown } from "lucide-react";
+import { useId, useLayoutEffect, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { ArrowUp, ChevronDown, LoaderCircle, Paperclip } from "lucide-react";
 import type { AgentInfo } from "../api";
 import { Button } from "@/components/ui/button";
-import { AgentIcon } from "./Agent";
 
 const HISTORY_KEY = "p2pcli.composer.history";
 const HISTORY_MAX = 50;
@@ -33,18 +32,22 @@ function saveHistory(list: string[]) {
 /** 认出命令行 AI 时终端下面的输入框：在本机打完一整句再发过去，中文输入法顺、远程不卡、长段落好改。
  *  回车发送，Shift+回车换行；输入框是空的时候上下箭头翻历史；Esc 回到终端。
  *  AI 在等你确认时不让发：这时候发“1”加回车，就等于替你点了“是” */
-export function AgentComposer({ agent, draft, onDraft, onSend, onTerminal, onHide, inputRef, tools }: {
+export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTerminal, onToggle, onUpload, inputRef, tools }: {
   agent: AgentInfo;
-  /** 放在输入框右边的东西，比如切模型的按钮 */
+  /** 输入框右侧的模型、思考强度和权限切换工具。 */
   tools?: ReactNode;
   draft: string;
+  expanded: boolean;
   onDraft: (text: string) => void;
   /** 整段发给终端里的 AI，再补一个回车 */
   onSend: (text: string) => void;
   onTerminal: () => void;
-  onHide: () => void;
+  onToggle: () => void;
+  onUpload: () => Promise<void>;
   inputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const panelId = useId();
+  const [picking, setPicking] = useState(false);
   const [history, setHistory] = useState(loadHistory);
   /** 正在翻第几条历史；没在翻是 null */
   const [browsing, setBrowsing] = useState<number | null>(null);
@@ -58,7 +61,13 @@ export function AgentComposer({ agent, draft, onDraft, onSend, onTerminal, onHid
     const full = el.scrollHeight + el.offsetHeight - el.clientHeight;
     el.style.height = `${Math.min(full, MAX_HEIGHT)}px`;
     el.style.overflowY = full > MAX_HEIGHT ? "auto" : "hidden";
-  }, [draft, inputRef]);
+  }, [draft, expanded, inputRef]);
+
+  const upload = async () => {
+    if (picking) return;
+    setPicking(true);
+    try { await onUpload(); } finally { setPicking(false); }
+  };
 
   const submit = () => {
     const text = draft.trim();
@@ -103,30 +112,42 @@ export function AgentComposer({ agent, draft, onDraft, onSend, onTerminal, onHid
   };
 
   return (
-    <div className="agent-composer" data-blocked={blocked ? "" : undefined}>
-      <AgentIcon kind={agent.kind} className="agent-composer-icon size-4 shrink-0" />
-      <textarea
-        ref={inputRef}
-        rows={1}
-        value={draft}
-        placeholder={blocked ?? `给 ${agent.name} 发消息，回车发送，Shift+回车换行，${COMPOSER_SHORTCUT} 切回终端`}
-        aria-label={`给 ${agent.name} 发消息`}
-        spellCheck={false}
-        onChange={(e) => {
-          onDraft(e.target.value);
-          setBrowsing(null);
-        }}
-        onKeyDown={onKeyDown}
-      />
-      {/* 已经写了字就看不到占位符，单独说一声为什么发不出去；写好的字留着，确认完再发 */}
-      {blocked && draft.trim() && <span className="agent-composer-hint">先在终端里确认</span>}
-      {tools}
-      <Button variant="ghost" size="icon-sm" aria-label="收起输入框" title={`收起输入框（${COMPOSER_SHORTCUT} 再打开）`} onPress={onHide}>
+    <div className="agent-composer-dock" data-expanded={expanded}>
+      <Button variant="ghost" size="icon-sm" className="agent-composer-toggle"
+        aria-label={expanded ? "收起输入框" : "展开输入框"}
+        aria-expanded={expanded} aria-controls={panelId}
+        title={`${expanded ? "收起" : "展开"}输入框（${COMPOSER_SHORTCUT}）`} onPress={onToggle}>
         <ChevronDown />
       </Button>
-      <Button size="icon-sm" aria-label="发送" title="发送（回车）" isDisabled={!draft.trim() || !!blocked} onPress={submit}>
-        <ArrowUp />
-      </Button>
+      <div className="agent-composer-reveal">
+        <div id={panelId} className="agent-composer-clip" inert={!expanded} aria-hidden={!expanded}>
+          <div className="agent-composer" data-blocked={blocked ? "" : undefined}>
+            <Button variant="ghost" size="icon-sm" aria-label="上传文件" title="上传文件"
+              isDisabled={picking} onPress={() => void upload()}>
+              {picking ? <LoaderCircle className="animate-spin" /> : <Paperclip />}
+            </Button>
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={draft}
+              placeholder={blocked ?? `给 ${agent.name} 发消息，回车发送，Shift+回车换行，${COMPOSER_SHORTCUT} 切回终端`}
+              aria-label={`给 ${agent.name} 发消息`}
+              spellCheck={false}
+              onChange={(e) => {
+                onDraft(e.target.value);
+                setBrowsing(null);
+              }}
+              onKeyDown={onKeyDown}
+            />
+            {/* 已经写了字就看不到占位符，单独说一声为什么发不出去；写好的字留着，确认完再发 */}
+            {blocked && draft.trim() && <span className="agent-composer-hint">先在终端里确认</span>}
+            {tools}
+            <Button size="icon-sm" aria-label="发送" title="发送（回车）" isDisabled={!draft.trim() || !!blocked} onPress={submit}>
+              <ArrowUp />
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

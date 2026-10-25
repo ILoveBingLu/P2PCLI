@@ -9,6 +9,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { TermStatus, OpenedTerminal } from "./api";
 import { useContextMenu } from "./components/ContextMenu";
 import { toast } from "./components/ui/toast";
+import { terminalResizeFrame } from "./lib/terminalResizeFrame";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -17,16 +18,17 @@ const isMac = navigator.platform.toLowerCase().includes("mac");
  * 官方 FitAddon 还按老办法给它扣掉 14px，右边会空出一条，所以自己算。
  * 读字符尺寸用的是 xterm 内部接口，FitAddon 也是这么读的；xterm 版本锁死，升级时要重看。
  */
-function fitTerminal(term: Terminal, el: HTMLElement) {
+function fitTerminal(term: Terminal, el: HTMLElement, beforeResize?: () => void) {
   const core = (term as unknown as {
-    _core: { _renderService: { clear(): void; dimensions: { css: { cell: { width: number; height: number } } } } };
+    _core: { _renderService: { dimensions: { css: { cell: { width: number; height: number } } } } };
   })._core;
   const cell = core._renderService.dimensions.css.cell;
   if (!cell.width || !cell.height || el.clientWidth === 0 || el.clientHeight === 0) return;
   const cols = Math.max(2, Math.floor(el.clientWidth / cell.width));
   const rows = Math.max(1, Math.floor(el.clientHeight / cell.height));
   if (cols === term.cols && rows === term.rows) return;
-  core._renderService.clear();
+  beforeResize?.();
+  // resize 自己会使渲染缓存失效，不要提前清空仍在显示的画布。
   term.resize(cols, rows);
 }
 
@@ -80,6 +82,7 @@ interface Props {
 export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const resizeFrameRef = useRef<ReturnType<typeof terminalResizeFrame> | null>(null);
   const inputReady = useRef(false);
   const menu = useContextMenu();
   const cb = useRef({ onStatus, onReady, onHandle });
@@ -138,7 +141,8 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     term.unicode.activeVersion = "11";
     term.open(el);
     try {
-      const gl = new WebglAddon();
+      // 保留上一帧，只有改尺寸时才复制，用于遮住远端重绘的中间画面。
+      const gl = new WebglAddon(true);
       gl.onContextLoss(() => gl.dispose());
       term.loadAddon(gl);
     } catch {
@@ -147,6 +151,8 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     termRef.current = term;
     window.__ptTest?.terms.push(term);
     fitTerminal(term, el);
+    const resizeFrame = terminalResizeFrame(term, el);
+    resizeFrameRef.current = resizeFrame;
 
     let termId: number | null = null;
     let disposed = false;
@@ -187,7 +193,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     });
 
     const output = new Channel<ArrayBuffer>();
-    output.onmessage = (buf) => { if (!disposed) term.write(new Uint8Array(buf)); };
+    output.onmessage = (buf) => { if (!disposed) resizeFrame.write(new Uint8Array(buf)); };
     const status = new Channel<TermStatus>();
     status.onmessage = (s) => {
       if (!disposed) { inputReady.current = false; cb.current.onStatus(s); }
@@ -219,15 +225,17 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       term.onData((d) => send(d)),
       term.onBinary((d) => send(d, true)),
       term.onResize(({ cols, rows }) => {
-        // 拖窗口、收展侧边栏时尺寸连着变，停下来再告诉对面，免得远程程序跟着每帧重画
-        window.clearTimeout(resizeTimer);
-        resizeTimer = window.setTimeout(() => {
-          if (termId != null) invoke("term_resize", { termId, cols, rows });
-        }, 120);
+        // 本地已等布局稳定才调整行列，立即同步远端，避免延迟后再重画一轮。
+        if (termId != null) invoke("term_resize", { termId, cols, rows });
       }),
     ];
     const ro = new ResizeObserver(() => {
-      fitTerminal(term, el);
+      // 输入框动画会逐帧改变容器高度。合并本地 fit，而不只是合并远端通知，
+      // 否则 xterm 会在动画期间多次清画布、重排行，然后再收到远端重绘。
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (!disposed) fitTerminal(term, el, resizeFrame.begin);
+      }, 120);
     });
     ro.observe(el);
 
@@ -239,6 +247,8 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       window.clearTimeout(openTimer);
       window.clearTimeout(resizeTimer);
       ro.disconnect();
+      resizeFrame.dispose();
+      if (resizeFrameRef.current === resizeFrame) resizeFrameRef.current = null;
       subs.forEach((s) => s.dispose());
       if (termId != null) invoke("term_close", { termId });
       term.dispose();
@@ -249,7 +259,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
   useEffect(() => {
     if (!active) return;
     const id = requestAnimationFrame(() => {
-      if (box.current && termRef.current) fitTerminal(termRef.current, box.current);
+      if (box.current && termRef.current) fitTerminal(termRef.current, box.current, resizeFrameRef.current?.begin);
       termRef.current?.focus();
     });
     return () => cancelAnimationFrame(id);

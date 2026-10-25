@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
-import { COMPOSER_SHORTCUT } from "./AgentComposer";
-import { CircleAlert, Folder, MessageSquareText } from "lucide-react";
+import { CircleAlert, Folder } from "lucide-react";
 import { pathLabel, type PathInfo, type TerminalSessionSnapshot } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { AGENT_STATE_TEXT, AgentIcon, AgentQuotaLabel, AgentStateLabel } from "./Agent";
@@ -9,13 +8,11 @@ function Detail({ tip, children, className = "" }: { tip: string; children: Reac
   return <Tooltip content={tip}><TooltipTrigger className={`terminal-status-detail ${className}`}>{children}</TooltipTrigger></Tooltip>;
 }
 
-export function TerminalStatusbar({ sessionId, state, path, snapshot, onShowComposer }: {
+export function TerminalStatusbar({ sessionId, state, path, snapshot }: {
   sessionId?: string;
   state: "opening" | "open" | "exited" | "closed";
   path?: PathInfo;
   snapshot?: TerminalSessionSnapshot;
-  /** AI 输入框收起来时，用它重新打开 */
-  onShowComposer?: () => void;
 }) {
   const sessions = snapshot?.sessions ?? [];
   const session = sessionId ? sessions.find((entry) => entry.id === sessionId) : undefined;
@@ -35,13 +32,6 @@ export function TerminalStatusbar({ sessionId, state, path, snapshot, onShowComp
       </Detail> : details?.command && <Detail tip="当前程序" className="terminal-status-command">
         <span className="truncate">{details.command}</span>
       </Detail>}
-      {agent && onShowComposer && (
-        <Tooltip content={`打开输入框（${COMPOSER_SHORTCUT}）`}>
-          <TooltipTrigger className="terminal-status-detail terminal-status-compose" aria-label="打开输入框" onClick={onShowComposer}>
-            <MessageSquareText /><span>输入框</span>
-          </TooltipTrigger>
-        </Tooltip>
-      )}
       <div className="terminal-status-path">
         {details?.current_path && <Detail tip={details.current_path} className="min-w-0">
           <Folder /><span className="truncate">{details.current_path}</span>
