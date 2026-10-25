@@ -562,18 +562,140 @@
 .workspace-content[hidden] {
   display: none;
 }
+/* 设置页：左边分类菜单，右边标题、内容和保存栏；内容区用悬浮滚动条，保存栏固定在底部 */
 .settings-page {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding: 24px;
+  display: flex;
 }
-.settings-page-inner {
+.settings-tabs {
+  flex: 1;
+  min-width: 0;
+  gap: 0;
+}
+.settings-nav {
+  flex: none;
+  width: 200px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  max-width: 720px;
-  margin-inline: auto;
+  gap: 12px;
+  padding: 20px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.settings-nav-title {
+  padding-inline: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.settings-nav .tabs__list {
+  display: flex;
+  gap: 2px;
+}
+.settings-nav .tabs__tab {
+  justify-content: flex-start;
+  text-align: start;
+  min-width: 0;
+  height: 32px;
+  gap: 8px;
+  padding-inline: 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.settings-nav .tabs__tab:hover,
+.settings-nav .tabs__tab[data-selected] {
+  color: var(--foreground);
+}
+.settings-nav .tabs__tab svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.settings-nav .tabs__indicator {
+  border-radius: 8px;
+  box-shadow: none;
+}
+.settings-nav-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-main-title {
+  flex: none;
+  padding: 20px 32px 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.settings-scroll {
+  flex: 1;
+}
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 640px;
+  padding: 8px 32px 28px;
+}
+.settings-content .tabs__panel {
+  padding: 0;
+}
+.settings-footer {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 32px;
+  border-top: 1px solid var(--border);
+}
+
+/* 悬浮滚动条：系统滚动条藏起来，滑块叠在内容右边，不占宽度；滚动或鼠标移进来时出现 */
+.overlay-scroll {
+  position: relative;
+  min-height: 0;
+}
+.overlay-scroll-viewport {
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.overlay-scroll-viewport::-webkit-scrollbar {
+  display: none;
+}
+.overlay-scroll-thumb {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 6px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.2);
+  opacity: 0;
+  touch-action: none;
+  transition: opacity 0.25s ease, width 0.15s ease, right 0.15s ease, background-color 0.15s ease;
+}
+.overlay-scroll:hover > .overlay-scroll-thumb,
+.overlay-scroll[data-scrolling] > .overlay-scroll-thumb {
+  opacity: 1;
+}
+.overlay-scroll-thumb:hover,
+.overlay-scroll-thumb[data-dragging] {
+  right: 2px;
+  width: 8px;
+  background: rgb(255 255 255 / 0.36);
+}
+@media (prefers-reduced-motion: reduce) {
+  .overlay-scroll-thumb {
+    transition: none;
+  }
 }
 .welcome-scroll {
   flex: 1;
