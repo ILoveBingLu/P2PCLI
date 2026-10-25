@@ -89,6 +89,11 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
     settings: { model: "bigmodel/GLM-5.3-Flash", effort: "max", mode: "build", efforts: ["low", "high", "max"],
       models: [{ id: "bigmodel/GLM-5.3", name: "GLM-5.3" }, { id: "bigmodel/GLM-5.3-Flash", name: "GLM-5.3-Flash" }, { id: "zai/glm-5.2", name: "GLM-5.2" }] } } },
   { id: "d".repeat(32), created_at: now - 90, attached: false },
+] : s.startsWith("opencode") ? [
+  { id: "e".repeat(32), created_at: now - 1200, attached: false, agent: {
+    kind: "opencode", name: "OpenCode",
+    state: s === "opencode-working" ? "working" : s === "opencode-waiting" ? "waiting" : "idle",
+  } },
 ] : [];
 // 工作室 Mac mini 的后台探测结果用同一份会话，连上前后编号对得上
 ov.devices[0].sessions = terminalSessions.map((session) => ({ ...session }));
@@ -241,7 +246,10 @@ mockIPC(
         if (!statusStartedAt) statusStartedAt = Date.now();
         attachments.set(termId, { sessionId: session.id, status: args.status });
         ((window as any).__outs ??= []).push(args.output);
-        setTimeout(() => args.output.onmessage(new TextEncoder().encode(sample).buffer), 100);
+        const screen = session.agent?.kind === "opencode"
+          ? "\x1b[1;36mOpenCode\x1b[0m\r\n\r\nBuild · 模型由当前供应商配置提供\r\n\r\n这是界面预览；控制按键记录在浏览器控制台。\r\n"
+          : sample;
+        setTimeout(() => args.output.onmessage(new TextEncoder().encode(screen).buffer), 100);
         // Reproduce disconnected overlays alongside another mounted terminal tab.
         if (s === "disconnected" && termId === 1) {
           setTimeout(() => args.status.onmessage({ type: "closed", reason: "网络中断，连接超时" }), 1500);
@@ -334,6 +342,7 @@ mockIPC(
         return { path: "/Users/me/.local/bin/p2pcli", installed: true, on_path: true, bundled: true };
       case "term_input":
         ((window as any).__inputs ??= []).push(args.data);
+        if (s.startsWith("opencode")) console.info("OpenCode preview input", JSON.stringify(args.data));
         fakeAgentInput(args.termId, args.data);
         return null;
       case "selftest_config":

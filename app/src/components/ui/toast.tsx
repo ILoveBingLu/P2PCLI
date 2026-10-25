@@ -14,7 +14,7 @@ export const toast = {
 
 export function Toaster() {
   return (
-    <Toast.Provider placement="bottom end" width={360}>
+    <Toast.Provider placement="top" width={360}>
       {({ toast: item }) => (
         <Toast toast={item} variant={item.content.variant}>
           <Toast.Indicator>

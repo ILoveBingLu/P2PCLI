@@ -824,6 +824,18 @@ export default function App() {
                       sendToAgent(activeTab.key, command);
                       termHandles.current.get(activeTab.key)?.focus();
                     }}
+                    onPalette={(query) => {
+                      const key = activeTab.key;
+                      const handle = termHandles.current.get(key);
+                      if (!handle || tabAgent(activeTab)?.state !== "idle") return;
+                      handle.keys("\x10"); // OpenCode 默认 Ctrl+P 打开命令面板
+                      handle.focus();
+                      window.setTimeout(() => {
+                        if (termHandles.current.get(key) !== handle) return;
+                        // 只过滤权限命令，不发送回车，避免直接开启自动批准。
+                        handle.paste(query);
+                      }, 120);
+                    }}
                   />
                 }
               />

@@ -1655,7 +1655,7 @@ img.agent-icon {
   flex: none;
   align-items: center;
   gap: 2px;
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 .agent-chip-wrap {
   display: inline-flex;
@@ -1663,15 +1663,21 @@ img.agent-icon {
 .agent-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  max-width: 132px;
-  height: 24px;
-  padding: 0 8px;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  min-width: 28px;
+  height: 32px;
+  padding: 0;
   border-radius: 7px;
   font-size: 12px;
   color: var(--muted-foreground);
   white-space: nowrap;
   transition: background-color 0.15s ease, color 0.15s ease;
+}
+.agent-chip > svg {
+  width: 16px;
+  height: 16px;
 }
 .agent-chip:hover,
 .agent-chip[data-pressed],

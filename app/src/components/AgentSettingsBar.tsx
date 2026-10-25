@@ -1,8 +1,9 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { Description, Dropdown, Header, Label } from "@heroui/react";
-import { ChevronDown, LoaderCircle } from "lucide-react";
+import { Box, Brain, LoaderCircle, ShieldCheck, type LucideIcon } from "lucide-react";
 import type { AgentInfo, AgentSettings } from "../api";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface Choice {
   id: string;
@@ -72,13 +73,15 @@ const NOTES: Record<string, Record<AgentSetting, string>> = {
 
 /** 输入框旁边的模型、思考强度、权限模式。Claude Code、ZCode 点了直接切；Codex 的选项随账号变，打开它自己的选择框。
  *  在等你确认时都不让切：这时按的键会被当成选项；模型和强度要等它这一轮干完 */
-export function AgentSettingsBar({ agent, switching, onSwitch, onPicker }: {
+export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalette }: {
   agent: AgentInfo;
   /** 正在切哪一项 */
   switching: AgentSetting | null;
   onSwitch: (what: AgentSetting, id: string) => void;
   /** 在终端里打开 AI 自己的选择框，比如 Codex 的 /model */
   onPicker: (command: string) => void;
+  /** 打开命令面板并搜索，只定位入口，不替用户确认权限变更。 */
+  onPalette: (query: string) => void;
 }) {
   // 等你确认时确认框会盖住 ZCode 的状态栏、Claude Code 的权限模式，读不到的项沿用上次的，按钮不跟着闪
   const last = useRef<AgentSettings>({});
@@ -94,15 +97,27 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker }: {
   last.current = settings;
 
   const waiting = agent.state === "waiting";
+  if (agent.kind === "opencode") {
+    const disabled = agent.state !== "idle" || switching != null;
+    const reason = waiting ? "先在终端里完成当前确认" : agent.state === "working" ? "等当前任务完成后再切换" : null;
+    return (
+      <div className="agent-settings">
+        <IconAction label="模型" icon={Box} disabled={disabled}
+          tip={reason ? `模型：${reason}` : "模型：打开 OpenCode 的模型列表"} onPress={() => onPicker("/models")} />
+        <IconAction label="思考强度" icon={Brain} disabled={disabled}
+          tip={reason ? `思考强度：${reason}` : "思考强度：选择当前模型支持的档位"} onPress={() => onPicker("/variants")} />
+        <IconAction label="权限" icon={ShieldCheck} disabled={disabled}
+          tip={reason ? `权限：${reason}` : "权限：打开命令入口，在终端内确认（默认 Ctrl+P）"} onPress={() => onPalette("permissions")} />
+      </div>
+    );
+  }
   if (agent.kind === "codex") {
     return (
       <div className="agent-settings">
-        <Button variant="ghost" size="xs" className="agent-chip" isDisabled={waiting} title="在终端里打开 Codex 的模型和推理强度选择" onPress={() => onPicker("/model")}>
-          模型
-        </Button>
-        <Button variant="ghost" size="xs" className="agent-chip" isDisabled={waiting} title="在终端里打开 Codex 的权限选择" onPress={() => onPicker("/permissions")}>
-          权限
-        </Button>
+        <IconAction label="模型和思考强度" icon={Box} disabled={waiting}
+          tip={waiting ? "模型和思考强度：先在终端里完成当前确认" : "模型和思考强度：打开 Codex 的选择菜单"} onPress={() => onPicker("/model")} />
+        <IconAction label="权限" icon={ShieldCheck} disabled={waiting}
+          tip={waiting ? "权限：先在终端里完成当前确认" : "权限：打开 Codex 的权限选择"} onPress={() => onPicker("/permissions")} />
       </div>
     );
   }
@@ -124,6 +139,7 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker }: {
   return (
     <div className="agent-settings">
       <Chip
+        icon={Box}
         title="模型"
         value={modelText ?? "模型"}
         choices={models}
@@ -136,8 +152,9 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker }: {
       />
       {(efforts.length > 0 || !zcode) && (
         <Chip
+          icon={Brain}
           title="思考强度"
-          value={`思考 ${choiceLabel(efforts, settings.effort) ?? "默认"}`}
+          value={choiceLabel(efforts, settings.effort) ?? "默认"}
           choices={efforts}
           current={settings.effort ?? null}
           note={notes.effort}
@@ -148,6 +165,7 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker }: {
         />
       )}
       <Chip
+        icon={ShieldCheck}
         title="权限模式"
         value={choiceLabel(modeChoices(agent.kind), settings.mode) ?? "权限"}
         choices={modeChoices(agent.kind)}
@@ -163,7 +181,32 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker }: {
   );
 }
 
-function Chip({ title, value, choices, current, note, spinning, disabled, reason, onPick }: {
+function ControlTip({ tip, children }: { tip: string; children: ReactNode }) {
+  return (
+    <Tooltip content={tip}>
+      <TooltipTrigger<"span"> render={(props) => <span {...props} />}
+        role="presentation" tabIndex={-1} className="agent-chip-wrap">
+        {children}
+      </TooltipTrigger>
+    </Tooltip>
+  );
+}
+
+function IconAction({ label, icon: Icon, tip, disabled, onPress }: {
+  label: string; icon: LucideIcon; tip: string; disabled: boolean; onPress: () => void;
+}) {
+  return (
+    <ControlTip tip={tip}>
+      <Button variant="ghost" size="icon-sm" className="agent-chip" aria-label={label}
+        isDisabled={disabled} onPress={onPress}>
+        <Icon aria-hidden="true" />
+      </Button>
+    </ControlTip>
+  );
+}
+
+function Chip({ icon: Icon, title, value, choices, current, note, spinning, disabled, reason, onPick }: {
+  icon: LucideIcon;
   title: string;
   value: string;
   choices: Choice[];
@@ -177,14 +220,11 @@ function Chip({ title, value, choices, current, note, spinning, disabled, reason
 }) {
   return (
     <Dropdown>
-      {/* 禁用的按钮收不到鼠标事件，提示挂在外面一层 */}
-      <span className="agent-chip-wrap" title={reason ?? title}>
-        <Dropdown.Trigger className="agent-chip" isDisabled={disabled} aria-label={`${title}：${value}`}>
-          {spinning && <LoaderCircle className="size-3 animate-spin" />}
-          <span className="truncate">{value}</span>
-          <ChevronDown className="size-3 shrink-0 opacity-60" />
+      <ControlTip tip={`${title}：${value}${reason ? ` · ${reason}` : ""}`}>
+        <Dropdown.Trigger className="agent-chip" isDisabled={disabled} aria-label={`${title}：${value}`} aria-busy={spinning}>
+          {spinning ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Icon aria-hidden="true" />}
         </Dropdown.Trigger>
-      </span>
+      </ControlTip>
       <Dropdown.Popover placement="top end" className="agent-chip-menu">
         <Dropdown.Menu
           aria-label={title}
