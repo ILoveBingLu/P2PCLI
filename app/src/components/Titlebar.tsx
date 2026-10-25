@@ -5,7 +5,8 @@ import logo from "@/assets/logo.svg";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import type { Overview } from "../api";
+import type { Overview, SessionSummary } from "../api";
+import { InUseIndicator } from "./InUseIndicator";
 import { LocalDevicePopover } from "./LocalDevicePopover";
 import { sidebarShortcut } from "./useSidebar";
 
@@ -22,6 +23,7 @@ export function Titlebar({
   sidebarOpen,
   onBack,
   onToggleSidebar,
+  onKick,
 }: {
   ov: Overview | null;
   onRefresh: () => void;
@@ -35,6 +37,8 @@ export function Titlebar({
   sidebarOpen: boolean;
   onBack?: () => void;
   onToggleSidebar: () => void;
+  /** 断开一个正连着本机的设备 */
+  onKick: (session: SessionSummary) => void;
 }) {
   const nativeMac = isTauri() && /Macintosh/.test(navigator.userAgent);
   const nativeWindows = isTauri() && /Windows/.test(navigator.userAgent);
@@ -76,6 +80,7 @@ export function Titlebar({
       </Button>
       <div className="titlebar-spacer titlebar-drag" data-tauri-drag-region />
       <div className="titlebar-actions">
+        <InUseIndicator sessions={ov?.sessions ?? []} onKick={onKick} />
         <Badge variant="outline">{terminalCount} 个终端</Badge>
         {connectionAction}
         <LocalDevicePopover ov={ov} onRefresh={onRefresh} open={localDeviceOpen} onOpenChange={onLocalDeviceOpenChange} />

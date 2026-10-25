@@ -13,15 +13,12 @@ import {
   History,
   House,
   Plus,
-  Radio,
-  Unplug,
   X,
 } from "lucide-react";
 import { Tabs } from "@heroui/react";
 import { toast, Toaster } from "@/components/ui/toast";
 import {
   api,
-  platformLabel,
   shellQuote,
   type FileRequest,
   type HostEvent,
@@ -508,6 +505,7 @@ export default function App() {
       <UpdateIsland updater={updater} />
       <Titlebar
         ov={ov}
+        onKick={(session) => void api.kick(session.session).then(refresh).catch((e) => toast.error(String(e)))}
         onRefresh={refresh}
         localDeviceOpen={showLocalDevice}
         onLocalDeviceOpenChange={setShowLocalDevice}
@@ -580,42 +578,6 @@ export default function App() {
             </Alert>
           </div>
         )}
-        {ov && ov.sessions.length > 0 && (
-          <div className="workspace-notice">
-            <Alert variant="warning">
-              <Radio />
-              <AlertTitle>本机终端正在被远程使用</AlertTitle>
-              <AlertDescription>
-                <span>
-                  {ov.sessions
-                    .map(
-                      (s) => s.name + "（" + platformLabel(s.platform) + "）",
-                    )
-                    .join("、")}
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  {ov.sessions.map((s) => (
-                    <Button
-                      key={s.session}
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        api
-                          .kick(s.session)
-                          .then(refresh)
-                          .catch((e) => toast.error(String(e)))
-                      }
-                    >
-                      <Unplug data-icon="inline-start" />
-                      断开{ov.sessions.length > 1 ? " " + s.name : "连接"}
-                    </Button>
-                  ))}
-                </div>
-              </AlertDescription>
-            </Alert>
-          </div>
-        )}
-
         {showSettings && ov && (
           <SettingsPage ov={ov} onChanged={refresh} updater={updater} />
         )}

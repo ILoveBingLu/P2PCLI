@@ -13,9 +13,13 @@ const ov: Overview = {
   password: "ankab7",
   password_fixed: false,
   server: { state: "online" },
+  // s=busy：有人正连着本机用终端；s=busy-many：两台同时连着
   sessions:
-    s === "busy"
-      ? [{ session: 3, remote: "f9bb5fbc3f", name: "小王的 ThinkPad", platform: "windows", terminals: 1, since: 0 }]
+    s === "busy" || s === "busy-many"
+      ? [
+          { session: 3, remote: "f9bb5fbc3f", name: "小王的 ThinkPad", platform: "windows", terminals: 1, since: Math.floor(Date.now() / 1000) - 25 * 60 },
+          ...(s === "busy-many" ? [{ session: 4, remote: "a1b2c3d4e5", name: "工作室 Mac mini", platform: "macos", terminals: 2, since: Math.floor(Date.now() / 1000) - 3 * 3600 - 10 * 60 }] : []),
+        ]
       : [],
   recent: [
     { code: "123456789", endpoint_id: "x", name: "工作室 Mac mini", platform: "macos", last_used: 3 },
@@ -180,8 +184,8 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "overview":
-        // s=agents 会改设备状态，返回新对象界面才会重画
-        return s === "agents" ? { ...ov, devices: ov.devices.map((d) => ({ ...d })) } : ov;
+        // 跟真实接口一样每次给新对象：s=agents 会改设备状态、断开会改 sessions，同一个对象界面不会重画
+        return { ...ov, devices: ov.devices.map((d) => ({ ...d })) };
       case "notify":
         console.info("系统通知", args.title, args.body);
         return null;
