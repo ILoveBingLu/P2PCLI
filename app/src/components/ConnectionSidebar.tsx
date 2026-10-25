@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, Plus, Radar, RefreshCw, Signal, SignalHigh, SignalLow, SignalMedium, SignalZero, Trash2 } from "lucide-react";
 import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -275,16 +275,33 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   );
 }
 
-/** 设备行右边的在线状态：在线显示延迟（直连绿色、中继黄色），离线、旧版本各有提示 */
+/** 设备行右边的在线状态：在线显示信号格和延迟（直连绿色、中继黄色），离线、旧版本各有提示 */
 function PresenceLabel({ status, connected, path }: { status?: DeviceStatus; connected: boolean; path?: PathInfo }) {
   if (connected || status?.state === "online") {
     const p = connected ? path : status?.path;
     const label = connected ? "已连接" : "在线";
     const tip = `${label} · ${connected ? "终端连接" : "后台探测"} · ${pathLabel(p)}${p?.remote ? ` · ${p.remote}` : ""}`;
-    return <span className="presence-label" data-kind={p?.kind ?? "unknown"} title={tip}>{p?.rtt_ms != null && p.kind !== "unknown" ? `${p.rtt_ms} ms` : label}</span>;
+    const rtt = p?.rtt_ms != null && p.kind !== "unknown" ? p.rtt_ms : null;
+    return (
+      <span className="presence-label" data-kind={p?.kind ?? "unknown"} title={tip}>
+        {rtt != null ? <><SignalBars ms={rtt} />{rtt} ms</> : label}
+      </span>
+    );
   }
   if (!status) return null;
-  if (status.state === "offline") return <span className="presence-label" data-kind="off" title="离线">离线</span>;
+  if (status.state === "offline") return <span className="presence-label" data-kind="off" title="离线"><SignalBars ms={null} />离线</span>;
   if (status.state === "old_version") return <span className="presence-label" title="对方的 P2PCLI 版本旧，升级后能显示延迟和会话">需更新</span>;
   return null;
+}
+
+/** 延迟换成信号格：60 ms 内满格，150 ms 内三格，300 ms 内两格，再慢一格，离线没有格。
+ *  四格一直暗着打底，有几格亮几格，跟手机的信号栏一样 */
+function SignalBars({ ms }: { ms: number | null }) {
+  const Icon = ms == null ? SignalZero : ms < 60 ? Signal : ms < 150 ? SignalHigh : ms < 300 ? SignalMedium : SignalLow;
+  return (
+    <span className="signal-bars" aria-hidden="true">
+      <Signal className="signal-track" strokeWidth={2.5} />
+      <Icon strokeWidth={2.5} />
+    </span>
+  );
 }

@@ -508,9 +508,28 @@
 /* 连接历史里设备右边的在线状态：直连绿色、中继黄色、离线灰色 */
 .presence-label {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
+}
+/* 信号格：四格暗着打底，亮的那几格叠在上面，颜色跟着文字（直连绿、中继黄、离线灰） */
+.signal-bars {
+  position: relative;
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.signal-bars svg {
+  position: absolute;
+  inset: 0;
+  width: 12px;
+  height: 12px;
+}
+.signal-bars .signal-track {
+  opacity: 0.25;
 }
 .presence-label[data-kind="ipv6"],
 .presence-label[data-kind="ipv4"] {

@@ -70,6 +70,22 @@ let scanSeq = 0;
 let pathSamples = 0;
 // s=latency: probe and terminal deliberately disagree; connected views must share updates.
 if (s === "latency") ov.devices[0].path!.rtt_ms = 99;
+// s=signal: 连接历史里各档延迟都有一台，看信号格
+if (s === "signal") {
+  const at = Math.floor(Date.now() / 1000);
+  const extra = [
+    { id: "s1", name: "家里的 iMac", platform: "macos", kind: "ipv4", rtt: 99 },
+    { id: "s2", name: "公司服务器", platform: "linux", kind: "relay", rtt: 180 },
+    { id: "s3", name: "海外 VPS", platform: "linux", kind: "relay", rtt: 420 },
+  ] as const;
+  for (const [i, d] of extra.entries()) {
+    ov.recent.push({ code: String(i + 1).repeat(9), endpoint_id: d.id, name: d.name, platform: d.platform, last_used: 1 - i });
+    ov.devices.push({
+      endpoint_id: d.id, state: "online", paired: true, path: { kind: d.kind, rtt_ms: d.rtt, remote: null },
+      sessions: [], sessions_live: true, sessions_at: at,
+    });
+  }
+}
 let statusStartedAt = 0;
 const now = Math.floor(Date.now() / 1000);
 const terminalSessions: TerminalSession[] = s === "sessions" ? [
