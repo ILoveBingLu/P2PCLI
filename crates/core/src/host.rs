@@ -43,6 +43,19 @@ pub struct IncomingRequest {
     pub platform: String,
 }
 
+/// 没配对过的设备要发文件过来，问主人收不收
+#[derive(Debug, Clone, Serialize)]
+pub struct FileRequest {
+    pub id: u64,
+    pub remote: String,
+    pub name: String,
+    pub platform: String,
+    pub files: usize,
+    pub total: u64,
+    /// 前几项的名字（文件或文件夹）
+    pub items: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     /// trust 为真时记成受信设备，以后免密码免弹窗
@@ -65,6 +78,15 @@ pub enum HostEvent {
     Disconnected { session: u64 },
     TerminalOpened { session: u64 },
     TerminalClosed { session: u64 },
+    /// 收到一批文件，已经放好
+    FilesReceived {
+        from: String,
+        from_name: String,
+        files: usize,
+        total: u64,
+        dir: String,
+        paths: Vec<String>,
+    },
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -73,6 +95,10 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub trait HostDelegate: Send + Sync + 'static {
     fn approve(&self, req: IncomingRequest) -> BoxFuture<Decision>;
     fn event(&self, ev: HostEvent);
+    /// 没配对过的设备发文件来，问主人收不收；没有界面的默认不收
+    fn approve_files(&self, _req: FileRequest) -> BoxFuture<bool> {
+        Box::pin(async { false })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -150,7 +176,7 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// 对面报的名字要显示在弹窗里，去掉控制字符并限长
-fn clean_name(s: &str) -> String {
+pub(crate) fn clean_name(s: &str) -> String {
     let s: String = s.chars().filter(|c| !c.is_control()).take(48).collect();
     if s.trim().is_empty() {
         "未命名设备".into()
@@ -266,6 +292,27 @@ impl Host {
 
     fn next(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// 弹窗问主人收不收这批文件；没人点、对方走了都算不收
+    pub async fn ask_files(&self, mut req: FileRequest, conn: &Connection) -> bool {
+        req.id = self.next();
+        let id = req.id;
+        tokio::select! {
+            ok = self.delegate.approve_files(req) => ok,
+            _ = tokio::time::sleep(APPROVE_TIMEOUT) => {
+                self.delegate.event(HostEvent::RequestCancelled { id });
+                false
+            }
+            _ = conn.closed() => {
+                self.delegate.event(HostEvent::RequestCancelled { id });
+                false
+            }
+        }
+    }
+
+    pub fn notify(&self, ev: HostEvent) {
+        self.delegate.event(ev);
     }
 
     fn check_password(&self, remote: &EndpointId, given: Option<&str>) -> Option<RejectCode> {

@@ -4,6 +4,8 @@
 node_modules/
 /app/src-tauri/gen/
 /.cache/session-tools/
+# 命令行工具 p2pcli 每次打包时现编，不进仓库
+/app/src-tauri/binaries/p2pcli-*
 
 # Cloudflare 本地运行状态（里面有本地测试的设备库）和本地密钥
 .wrangler/

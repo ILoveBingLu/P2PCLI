@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use iroh::{EndpointAddr, TransportAddr};
 use p2pcli_core::client::{ConnectError, TermEvent, asks_cursor_position};
-use p2pcli_core::host::{BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest};
+use p2pcli_core::files::TransferState;
+use p2pcli_core::host::{BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest};
 use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::proto::RejectCode;
 
@@ -14,6 +15,8 @@ struct TestDelegate {
     decision: Mutex<Decision>,
     requests: Mutex<Vec<IncomingRequest>>,
     events: Mutex<Vec<HostEvent>>,
+    accept_files: Mutex<bool>,
+    file_requests: Mutex<Vec<FileRequest>>,
 }
 
 impl TestDelegate {
@@ -22,6 +25,8 @@ impl TestDelegate {
             decision: Mutex::new(Decision::Deny),
             requests: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
+            accept_files: Mutex::new(false),
+            file_requests: Mutex::new(Vec::new()),
         })
     }
     fn set(&self, d: Decision) {
@@ -40,6 +45,11 @@ impl HostDelegate for TestDelegate {
     }
     fn event(&self, ev: HostEvent) {
         self.events.lock().unwrap().push(ev);
+    }
+    fn approve_files(&self, req: FileRequest) -> BoxFuture<bool> {
+        self.file_requests.lock().unwrap().push(req);
+        let ok = *self.accept_files.lock().unwrap();
+        Box::pin(async move { ok })
     }
 }
 
@@ -436,4 +446,123 @@ async fn presence_probe_paired_unpaired_and_old_version() {
     for n in [paired, stranger] {
         n.shutdown().await;
     }
+}
+
+/// 传文件：配对过的直接收，文件夹和权限原样，重名不覆盖；断点续传接得上，半截坏了查得出来；陌生设备要主人同意
+#[tokio::test(flavor = "multi_thread")]
+async fn file_transfer_paired_resume_and_stranger() {
+    use p2pcli_core::files::Direction;
+
+    let delegate = TestDelegate::new();
+    let host_dir = temp_dir("files-host");
+    let inbox = host_dir.join("inbox");
+    let host = Node::start(
+        NodeConfig { data_dir: host_dir.clone(), device_name: Some("收件机".into()), offline: true, inbox_dir: Some(inbox.clone()), ..Default::default() },
+        delegate.clone(),
+    )
+    .await
+    .unwrap();
+    let start = |tag: &str, name: &str| {
+        let (dir, name) = (temp_dir(tag), name.to_string());
+        async move {
+            Node::start(NodeConfig { data_dir: dir, device_name: Some(name), offline: true, ..Default::default() }, TestDelegate::new())
+                .await
+                .unwrap()
+        }
+    };
+    let sender = start("files-sender", "发件机").await;
+    let stranger = start("files-stranger", "陌生机").await;
+    host.host.set_password("abc234");
+    let addr = local_addr(&host);
+    delegate.set(Decision::Allow { trust: false });
+    sender.connect_addr(addr.clone(), Some("abc234".into())).await.expect("应该连上").close();
+
+    // 要发的东西：一个文件，一个带子文件夹、空文件、可执行文件的文件夹
+    let src = temp_dir("files-src");
+    std::fs::create_dir_all(src.join("proj/sub")).unwrap();
+    let big: Vec<u8> = (0..3_000_000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+    std::fs::write(src.join("a.txt"), "你好，文件").unwrap();
+    std::fs::write(src.join("proj/big.bin"), &big).unwrap();
+    std::fs::write(src.join("proj/sub/empty.txt"), b"").unwrap();
+    std::fs::write(src.join("proj/run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(src.join("proj/run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let t = sender.send_files(addr.clone(), "收件机", vec![src.join("a.txt"), src.join("proj")]).await;
+    assert_eq!(t.state, TransferState::Done, "配对过的应该直接收：{:?}", t.error);
+    assert!(delegate.file_requests.lock().unwrap().is_empty(), "配对过的不该弹窗");
+    assert_eq!((t.files, t.total, t.done), (4, big.len() as u64 + 15 + 18, big.len() as u64 + 15 + 18));
+    let dest = inbox.join("发件机");
+    assert_eq!(t.paths, [dest.join("a.txt").display().to_string(), dest.join("proj").display().to_string()]);
+    assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "你好，文件");
+    assert_eq!(std::fs::read(dest.join("proj/big.bin")).unwrap(), big);
+    assert_eq!(std::fs::read(dest.join("proj/sub/empty.txt")).unwrap(), b"");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(std::fs::metadata(dest.join("proj/run.sh")).unwrap().permissions().mode() & 0o111, 0, "可执行权限要保留");
+    }
+    let received = host.files.transfers();
+    assert_eq!(received[0].direction, Direction::Receive);
+    assert_eq!(received[0].state, TransferState::Done);
+    assert_eq!(host.files.inbox(10)[0].from_name, "发件机");
+    assert!(delegate.events.lock().unwrap().iter().any(|e| matches!(e, HostEvent::FilesReceived { files: 4, .. })));
+
+    // 再发一次：不覆盖，加 (1)
+    let t = sender.send_files(addr.clone(), "收件机", vec![src.join("a.txt"), src.join("proj")]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(t.paths, [dest.join("a (1).txt").display().to_string(), dest.join("proj (1)").display().to_string()]);
+
+    // 续传：收件方已经有前一半，接着发后一半
+    let only = src.join("proj/big.bin");
+    let modified = std::fs::metadata(&only).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let partial = |path: &str| {
+        let mut h = blake3::Hasher::new();
+        h.update(sender.id().as_bytes());
+        h.update(path.as_bytes());
+        h.update(&(big.len() as u64).to_le_bytes());
+        h.update(&modified.to_le_bytes());
+        inbox.join(".partial").join(&h.finalize().to_hex()[..32])
+    };
+    std::fs::write(partial("big.bin"), &big[..1_000_000]).unwrap();
+    let t = sender.send_files(addr.clone(), "收件机", vec![only.clone()]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(std::fs::read(dest.join("big.bin")).unwrap(), big);
+    assert!(!partial("big.bin").exists(), "收完半截文件要挪走");
+
+    // 半截文件坏了：校验不过就报错并丢掉半截，再发一次就好
+    let mut bad = big[..1_000_000].to_vec();
+    bad[10] ^= 0xff;
+    std::fs::write(partial("big.bin"), &bad).unwrap();
+    let t = sender.send_files(addr.clone(), "收件机", vec![only.clone()]).await;
+    assert_eq!(t.state, TransferState::Failed);
+    assert!(t.error.as_deref().unwrap_or_default().contains("校验没通过"), "{:?}", t.error);
+    assert!(!partial("big.bin").exists(), "坏的半截要删掉");
+    let t = sender.send_files(addr.clone(), "收件机", vec![only.clone()]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(std::fs::read(dest.join("big (1).bin")).unwrap(), big);
+
+    // 陌生设备：弹窗问，不同意就不收
+    let t = stranger.send_files(addr.clone(), "收件机", vec![src.join("a.txt")]).await;
+    assert_eq!(t.state, TransferState::Failed);
+    assert_eq!(t.error.as_deref(), Some("对方拒绝接收"));
+    assert_eq!(delegate.file_requests.lock().unwrap().len(), 1);
+    assert_eq!(delegate.file_requests.lock().unwrap()[0].name, "陌生机");
+    *delegate.accept_files.lock().unwrap() = true;
+    let t = stranger.send_files(addr.clone(), "收件机", vec![src.join("a.txt")]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert!(inbox.join("陌生机/a.txt").exists());
+
+    // 发不存在的文件：本机就报错，不连对方
+    let t = sender.send_files(addr.clone(), "收件机", vec![src.join("没有这个")]).await;
+    assert_eq!(t.state, TransferState::Failed);
+    assert!(t.error.unwrap().contains("找不到"));
+
+    for n in [host, sender, stranger] {
+        n.shutdown().await;
+    }
+    let _ = std::fs::remove_dir_all(&src);
 }

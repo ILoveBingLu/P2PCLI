@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Copy, History, House, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -111,6 +111,17 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   };
   const copyCode = (code: string) =>
     navigator.clipboard.writeText(code).then(() => toast.success("设备码已复制"), () => toast.error("复制失败"));
+  /** 选好文件就在后台发，进度在左下角 */
+  const sendTo = async (endpointId: string, folders: boolean) => {
+    try {
+      const picked = await api.pickPaths(folders);
+      if (picked.length) await api.sendFiles(endpointId, picked);
+    } catch (error) { toast.error(`发不了：${String(error)}`); }
+  };
+  const sendActions = (endpointId: string, disabled: boolean): MenuAction[] => [
+    { id: "send-files", label: "发送文件…", icon: <FileUp className="size-4" />, disabled, separated: true, onAction: () => void sendTo(endpointId, false) },
+    { id: "send-folder", label: "发送文件夹…", icon: <FolderUp className="size-4" />, disabled, onAction: () => void sendTo(endpointId, true) },
+  ];
 
   // 设备和附近设备的右键菜单；会话行的菜单在 DeviceSessions 里，先接到就不会冒泡到这里
   const onContextMenu = (e: MouseEvent) => {
@@ -135,6 +146,7 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
         ];
       actions = [
         ...actions,
+        ...sendActions(endpointId, !target && offline),
         { id: "copy", label: "复制设备码", icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
         { id: "forget", label: "从连接历史移除", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => void forget(endpointId) },
       ];
@@ -145,6 +157,7 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
       actions = target
         ? [{ id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
         : [{ id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
+      actions = [...actions, ...sendActions(endpointId, !target && !device.online)];
     }
     if (actions.length) menu.open(e, actions);
   };

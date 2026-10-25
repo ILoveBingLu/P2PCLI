@@ -53,7 +53,7 @@ pub enum PresenceResp {
     Pong,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PresenceState {
     /// 还没探测过
@@ -95,15 +95,19 @@ pub async fn connect(endpoint: &Endpoint, addr: EndpointAddr) -> Result<Connecti
         Ok(Ok(conn)) => Ok(conn),
         Ok(Err(e)) => {
             let text = format!("{e:#}");
-            // 对方的 TLS 握手里没有这个协议号，会回 no_application_protocol（警报码 120）
-            let lower = text.to_lowercase();
-            if lower.contains("application protocol") || lower.contains("alpn") || lower.contains("error 120") {
+            if is_unknown_protocol(&text) {
                 Err(ProbeError::OldVersion)
             } else {
                 Err(ProbeError::Unreachable(text))
             }
         }
     }
+}
+
+/// 连上了但对方不认这个协议号：对方的 TLS 握手会回 no_application_protocol（警报码 120），说明是旧版本
+pub(crate) fn is_unknown_protocol(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("application protocol") || lower.contains("alpn") || lower.contains("error 120")
 }
 
 /// 在探测连接上问一次会话列表；None 表示对方没跟我配对过

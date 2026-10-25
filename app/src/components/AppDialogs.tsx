@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Check,
+  FileDown,
   Laptop,
   LoaderCircle,
   Radio,
@@ -12,8 +13,10 @@ import {
 import { Checkbox, Description } from "@heroui/react";
 import {
   api,
+  formatSize,
   platformLabel,
   type Diagnosis,
+  type FileRequest,
   type IncomingRequest,
 } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -175,6 +178,110 @@ export function ApproveDialog({
               <Check data-icon="inline-start" />
             )}
             允许连接
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/** 没配对过的设备要发文件过来：60 秒内不点就当不收 */
+export function FileApproveDialog({
+  req,
+  inboxDir,
+  onRespond,
+}: {
+  req: FileRequest;
+  /** 收件目录，显示文件会放在哪 */
+  inboxDir: string | null;
+  onRespond: (r: FileRequest, accept: boolean) => Promise<void>;
+}) {
+  const [left, setLeft] = useState(60);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const deadline = useRef(Date.now() + 60000);
+  const sending = useRef(false);
+
+  const respond = useCallback(
+    async (accept: boolean) => {
+      if (sending.current) return;
+      sending.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        await onRespond(req, accept);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        sending.current = false;
+        setBusy(false);
+      }
+    },
+    [onRespond, req],
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setLeft(Math.max(0, Math.ceil((deadline.current - Date.now()) / 1000))),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (left === 0) void respond(false);
+  }, [left, respond]);
+
+  const more = req.files > req.items.length ? `等 ${req.files} 个文件` : `${req.files} 个文件`;
+  return (
+    <AlertDialog open>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <div className="dialog-symbol">
+            <FileDown />
+          </div>
+          <AlertDialogTitle>有设备要发文件给你</AlertDialogTitle>
+          <AlertDialogDescription>
+            这台设备没跟你配对过，要你同意才收。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="request-device">
+          <div className="device-symbol">
+            <Laptop />
+          </div>
+          <div className="min-w-0">
+            <strong className="block truncate">{req.name}</strong>
+            <span>{platformLabel(req.platform)}</span>
+          </div>
+          <Badge variant="outline">{formatSize(req.total)}</Badge>
+        </div>
+        <div className="flex min-w-0 flex-col gap-1 text-sm">
+          <span className="truncate" title={req.items.join("、")}>{req.items.join("、")}{req.files > 1 ? `，${more}` : ""}</span>
+          {inboxDir && (
+            <span className="truncate text-xs text-muted-foreground" title={inboxDir}>
+              会放在 {inboxDir} 下的 {req.name} 文件夹
+            </span>
+          )}
+        </div>
+        <div className="fingerprint">
+          <span>设备指纹</span>
+          <Tooltip content={req.remote}>
+            <TooltipTrigger role="group" aria-label="完整设备指纹" className="ml-auto">
+              <code>{req.remote.slice(0, 16)}</code>
+            </TooltipTrigger>
+          </Tooltip>
+        </div>
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <AlertDialogFooter>
+          <Button variant="outline" disabled={busy} autoFocus onClick={() => respond(false)}>
+            不收{left > 0 ? `（${left}s）` : ""}
+          </Button>
+          <Button disabled={busy || left === 0} onClick={() => respond(true)}>
+            {busy ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Check data-icon="inline-start" />}
+            接收
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

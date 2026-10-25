@@ -1,0 +1,19 @@
+[package]
+name = "p2pcli-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 随桌面端一起发：装好以后终端里能用 p2pcli 发文件，AI 也能调
+
+[[bin]]
+name = "p2pcli"
+path = "src/main.rs"
+
+[dependencies]
+p2pcli-core.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }

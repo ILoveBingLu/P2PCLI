@@ -17,7 +17,8 @@
   },
   "bundle": {
     "externalBin": [
-      "binaries/psmux"
+      "binaries/psmux",
+      "binaries/p2pcli"
     ],
     "resources": {
       "resources/session-tools/windows/": "session-tools/"

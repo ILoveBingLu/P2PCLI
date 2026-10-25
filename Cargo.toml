@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/dev", "crates/server", "app/src-tauri"]
+members = ["crates/core", "crates/cli", "crates/dev", "crates/server", "app/src-tauri"]
 exclude = ["vendor/tauri-plugin-window-controls"]
 
 [patch.crates-io]

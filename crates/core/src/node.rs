@@ -8,18 +8,21 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use iroh::endpoint::{Connection, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::client::{self, ConnectError, RemoteHost};
+use crate::files::{Files, Transfer, default_inbox_dir};
 use crate::host::{Host, HostDelegate};
 use crate::identity::{DeviceInfo, load_or_create_key};
 use crate::lan::{Lan, NearbyDevice};
-use crate::presence::{DeviceStatus, Prober};
+use crate::path::PathInfo;
+use crate::presence::{DeviceStatus, PresenceState, Prober};
 use crate::proto::RejectCode;
 use crate::rendezvous::{RdvClient, RdvPush, RdvResponse, normalize_code, parse_rdv_server};
 use crate::store::{RecentDevice, RecentStore, now_secs};
-use crate::{ALPN_PRESENCE, ALPN_PUNCH, ALPN_TERM, v6};
+use crate::{ALPN_FILE, ALPN_PRESENCE, ALPN_PUNCH, ALPN_TERM, v6};
 
 /// IPv6 直连先跑这么久，还没通就同时走常规流程（中继加打洞），谁先通用谁
 const V6_HEAD_START: Duration = Duration::from_millis(1500);
@@ -50,6 +53,25 @@ pub struct NodeConfig {
     pub lan: bool,
     /// 让同一网络里的其他设备看到本机（要先开 lan）
     pub lan_visible: bool,
+    /// 收到的文件放哪；空着是下载文件夹里的 P2PCLI
+    pub inbox_dir: Option<PathBuf>,
+}
+
+/// 本机知道的一台设备：连接历史、配对过的、局域网里看到的合在一起，命令行列设备、按名字找设备用
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KnownDevice {
+    pub endpoint_id: String,
+    pub name: String,
+    pub platform: String,
+    /// 连接历史里记的设备码
+    pub code: Option<String>,
+    /// 连接历史里的设备才探测在线；局域网里看到的算在线；其余不知道
+    pub state: Option<PresenceState>,
+    pub path: Option<PathInfo>,
+    /// 局域网里看到了
+    pub lan: bool,
+    /// 对方认不认我：认的话发文件过去不用它点同意；不知道是 None
+    pub paired: Option<bool>,
 }
 
 pub struct Node {
@@ -63,13 +85,15 @@ pub struct Node {
     pub recent: Arc<RecentStore>,
     /// 后台探测连接历史里的设备：在线、延迟、会话列表
     pub prober: Arc<Prober>,
+    /// 收发文件
+    pub files: Arc<Files>,
     /// 配合对方 IPv6 直连发过几次包，排查和测试用
     pub punches: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Node {
     pub async fn start(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>) -> Result<Arc<Self>> {
-        let node = Self::prepare(cfg, delegate, None, None, None, None).await?;
+        let node = Self::prepare(cfg, delegate, None, None, None, None, None).await?;
         node.activate();
         Ok(node)
     }
@@ -82,7 +106,7 @@ impl Node {
 
     pub async fn prepare_update(&self, cfg: NodeConfig, delegate: Arc<dyn HostDelegate>) -> Result<Arc<Self>> {
         let (endpoint, lan) = if self.transport_changed(&cfg) { (None, None) } else { (Some(self.endpoint.clone()), self.lan.clone()) };
-        Self::prepare(cfg, delegate, Some(self.host.clone()), endpoint, lan, Some(self.recent.clone())).await
+        Self::prepare(cfg, delegate, Some(self.host.clone()), endpoint, lan, Some(self.recent.clone()), Some(self.files.clone())).await
     }
 
     pub fn activate(&self) {
@@ -97,7 +121,8 @@ impl Node {
         if let Some(rdv) = &self.rdv { rdv.stop().await; }
     }
 
-    async fn prepare(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>, shared_host: Option<Arc<Host>>, existing_endpoint: Option<Endpoint>, existing_lan: Option<Arc<Lan>>, recent: Option<Arc<RecentStore>>) -> Result<Arc<Self>> {
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare(cfg: NodeConfig, delegate: Arc<dyn HostDelegate>, shared_host: Option<Arc<Host>>, existing_endpoint: Option<Endpoint>, existing_lan: Option<Arc<Lan>>, recent: Option<Arc<RecentStore>>, shared_files: Option<Arc<Files>>) -> Result<Arc<Self>> {
         std::fs::create_dir_all(&cfg.data_dir)
             .with_context(|| format!("建数据目录失败：{}", cfg.data_dir.display()))?;
         let server = cfg.server.as_deref().filter(|s| !s.trim().is_empty()).map(parse_rdv_server).transpose()?;
@@ -105,7 +130,7 @@ impl Node {
         let proxy = cfg.proxy.as_deref().map(crate::proxy::parse_proxy).transpose()?;
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(key)
-            .alpns(vec![ALPN_TERM.to_vec(), ALPN_PRESENCE.to_vec()])
+            .alpns(vec![ALPN_TERM.to_vec(), ALPN_PRESENCE.to_vec(), ALPN_FILE.to_vec()])
             .path_selector(std::sync::Arc::new(crate::path::Ipv6First));
         if let Some(proxy) = &proxy {
             builder = builder.proxy_url(proxy.clone());
@@ -152,13 +177,20 @@ impl Node {
             None => None,
         };
         let host = shared_host.unwrap_or_else(|| Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate)));
+        let recent = recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir)));
+        let files = shared_files.unwrap_or_else(|| {
+            let inbox = cfg.inbox_dir.clone().unwrap_or_else(default_inbox_dir);
+            Files::new(host.clone(), recent.clone(), &cfg.data_dir, inbox)
+        });
 
         if start_accept {
         let ep = endpoint.clone();
         let h = host.clone();
+        let f = files.clone();
         tokio::spawn(async move {
             while let Some(incoming) = ep.accept().await {
                 let h = h.clone();
+                let f = f.clone();
                 tokio::spawn(async move {
                     let conn = match incoming.accept() {
                         Ok(a) => match a.await {
@@ -171,6 +203,8 @@ impl Node {
                         h.handle(conn).await;
                     } else if conn.alpn() == ALPN_PRESENCE {
                         h.handle_presence(conn).await;
+                    } else if conn.alpn() == ALPN_FILE {
+                        f.handle(conn).await;
                     }
                 });
             }
@@ -193,7 +227,6 @@ impl Node {
         let punches = Arc::new(std::sync::atomic::AtomicU64::new(0));
         spawn_punch_handler(endpoint.clone(), push_rx, punches.clone());
 
-        let recent = recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir)));
         let prober = Prober::new(endpoint.clone(), rdv.clone(), recent.clone());
 
         Ok(Arc::new(Self {
@@ -204,6 +237,7 @@ impl Node {
             lan,
             recent,
             prober,
+            files,
             config: cfg,
             punches,
         }))
@@ -316,6 +350,129 @@ impl Node {
     /// 局域网里看到的设备
     pub fn nearby(&self) -> Vec<NearbyDevice> {
         self.lan.as_ref().map(|l| l.devices()).unwrap_or_default()
+    }
+
+    /// 本机知道的所有设备：连接历史在前，然后是连过我的、受信的、局域网里看到的
+    pub fn known_devices(&self) -> Vec<KnownDevice> {
+        let statuses: HashMap<String, DeviceStatus> = self.devices().into_iter().map(|d| (d.endpoint_id.clone(), d)).collect();
+        let mut out: Vec<KnownDevice> = Vec::new();
+        let recent = self.recent.list().into_iter().map(|d| (d.endpoint_id, d.name, d.platform, Some(d.code)));
+        let others = self.host.paired.list().into_iter().chain(self.host.trust.list()).map(|(id, d)| (id, d.name, d.platform, None));
+        for (id, name, platform, code) in recent.chain(others) {
+            if let Some(d) = out.iter_mut().find(|d| d.endpoint_id == id) {
+                d.code = d.code.take().or(code);
+                continue;
+            }
+            let s = statuses.get(&id);
+            out.push(KnownDevice {
+                state: s.map(|s| s.state),
+                path: s.and_then(|s| s.path.clone()),
+                paired: s.and_then(|s| s.paired),
+                endpoint_id: id,
+                name,
+                platform,
+                code,
+                lan: false,
+            });
+        }
+        for n in self.nearby() {
+            let online = n.online.then_some(PresenceState::Online);
+            match out.iter_mut().find(|d| d.endpoint_id == n.endpoint_id) {
+                Some(d) => {
+                    d.lan = true;
+                    d.state = d.state.or(online);
+                }
+                None => out.push(KnownDevice {
+                    endpoint_id: n.endpoint_id,
+                    name: n.name,
+                    platform: n.platform,
+                    code: None,
+                    state: online,
+                    path: None,
+                    lan: true,
+                    paired: None,
+                }),
+            }
+        }
+        out
+    }
+
+    /// 按设备码、公钥（或开头几位）、名字找设备；名字可以只写一部分，对上多台就报错让人说清楚
+    pub fn find_device(&self, query: &str) -> Result<KnownDevice> {
+        let q = query.trim();
+        if q.is_empty() {
+            bail!("没写发给哪台设备");
+        }
+        let all = self.known_devices();
+        if let Some(code) = normalize_code(q) {
+            return all
+                .into_iter()
+                .find(|d| d.code.as_deref() == Some(code.as_str()))
+                .ok_or_else(|| anyhow!("连接历史里没有设备码 {code}，先在 P2PCLI 里连一次"));
+        }
+        let lower = q.to_lowercase();
+        let pick = |found: Vec<&KnownDevice>| -> Option<Result<KnownDevice>> {
+            match found.as_slice() {
+                [] => None,
+                [one] => Some(Ok((*one).clone())),
+                many => {
+                    let names: Vec<String> = many
+                        .iter()
+                        .map(|d| format!("{}（{}）", d.name, d.code.clone().unwrap_or_else(|| d.endpoint_id[..8].to_string())))
+                        .collect();
+                    Some(Err(anyhow!("有好几台都对得上：{}，换成设备码或公钥开头几位", names.join("、"))))
+                }
+            }
+        };
+        let rules: [&dyn Fn(&KnownDevice) -> bool; 4] = [
+            &|d| d.endpoint_id == q,
+            &|d| d.name.to_lowercase() == lower,
+            &|d| q.len() >= 6 && d.endpoint_id.starts_with(&lower),
+            &|d| d.name.to_lowercase().contains(&lower),
+        ];
+        for rule in rules {
+            if let Some(result) = pick(all.iter().filter(|d| rule(d)).collect()) {
+                return result;
+            }
+        }
+        bail!("没找到 {q}，用 p2pcli devices 看看有哪些设备")
+    }
+
+    /// 发文件的地址：连接历史里有设备码就先问牵线服务器拿最新地址，没有就交给 iroh 自己查
+    async fn addr_for(&self, id: EndpointId) -> EndpointAddr {
+        let key = id.to_string();
+        let code = self.recent.list().into_iter().find(|d| d.endpoint_id == key).map(|d| d.code);
+        if let (Some(rdv), Some(code)) = (&self.rdv, code)
+            && let Ok(Ok(RdvResponse::Found { endpoint_id, addr: Some(addr), .. })) =
+                tokio::time::timeout(Duration::from_secs(8), rdv.lookup(&code)).await
+            && endpoint_id == id
+            && addr.id == id
+        {
+            return addr;
+        }
+        EndpointAddr::new(id)
+    }
+
+    /// 在后台给一台设备发文件，马上返回传输编号，进度在 files.transfers() 里看
+    pub fn start_send(self: &Arc<Self>, device: &KnownDevice, paths: Vec<PathBuf>) -> Result<String> {
+        let id: EndpointId = device.endpoint_id.parse().map_err(|_| anyhow!("设备公钥不对"))?;
+        if id == self.id() {
+            bail!("这是本机");
+        }
+        let transfer = self.files.begin(&id, &device.name, &paths);
+        let node = self.clone();
+        let t = transfer.clone();
+        tokio::spawn(async move {
+            let addr = node.addr_for(id).await;
+            node.files.run_send(&t, &node.endpoint, addr, &node.me, paths).await;
+        });
+        Ok(transfer)
+    }
+
+    /// 按地址发文件并等对方收好，测试和开发命令行用
+    pub async fn send_files(&self, addr: EndpointAddr, peer_name: &str, paths: Vec<PathBuf>) -> Transfer {
+        let transfer = self.files.begin(&addr.id, peer_name, &paths);
+        self.files.run_send(&transfer, &self.endpoint, addr, &self.me, paths).await
     }
 
     /// 按公钥连：局域网里发现的设备，或者连接历史里正好在局域网在线的设备。

@@ -4,7 +4,9 @@
 //! 桌面端（Tauri）和开发用命令行都只调这里的接口。
 
 pub mod client;
+pub mod control;
 pub mod diag;
+pub mod files;
 pub mod host;
 pub mod identity;
 pub mod lan;
@@ -26,6 +28,8 @@ pub const ALPN_TERM: &[u8] = b"p2pcli/term/1";
 pub const ALPN_RDV: &[u8] = b"p2pcli/rdv/1";
 /// 在线探测用的协议号：只看在线、延迟和配对过的会话列表，不弹窗、不开终端
 pub const ALPN_PRESENCE: &[u8] = b"p2pcli/presence/1";
+/// 传文件用的协议号：配对过的设备直接收，没配对过的弹窗问
+pub const ALPN_FILE: &[u8] = b"p2pcli/file/1";
 /// IPv6 直连时被连方往外发包用的协议号，对面不接，只为打开本机防火墙
 pub const ALPN_PUNCH: &[u8] = b"p2pcli/punch/1";
 /// 终端协议版本，两边不一致直接拒

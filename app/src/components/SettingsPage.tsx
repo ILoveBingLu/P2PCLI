@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Download, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { ArrowDownUp, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
 import { Tabs, Checkbox, Description, Radio, RadioGroup } from "@heroui/react";
-import { api, platformLabel, type Overview, type SettingsView } from "../api";
+import { api, platformLabel, type CliStatus, type Overview, type SettingsView } from "../api";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -36,6 +36,22 @@ export function SettingsPage({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [cli, setCli] = useState<CliStatus | null>(null);
+  const [installingCli, setInstallingCli] = useState(false);
+  useEffect(() => {
+    api.cliStatus().then(setCli).catch(() => {});
+  }, []);
+  const installCli = async () => {
+    setInstallingCli(true);
+    try {
+      setCli(await api.installCli());
+      toast.success("命令行工具装好了，新开的终端窗口里就能用");
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setInstallingCli(false);
+    }
+  };
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -109,6 +125,11 @@ export function SettingsPage({
             <Tabs.Tab id="proxy">
               <Network />
               代理设置
+              <Tabs.Indicator />
+            </Tabs.Tab>
+            <Tabs.Tab id="files">
+              <ArrowDownUp />
+              文件传输
               <Tabs.Indicator />
             </Tabs.Tab>
             <Tabs.Tab id="trusted">
@@ -247,6 +268,61 @@ export function SettingsPage({
                   </Field>
                 </FieldGroup>
               )}
+            </Tabs.Panel>
+            <Tabs.Panel id="files" className="pt-5">
+              <FieldGroup className="gap-6">
+                <Field>
+                  <FieldLabel>收到的文件放在</FieldLabel>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <code className="min-w-0 flex-1 truncate rounded-md bg-muted-surface px-2 py-1.5 text-xs" title={ov.inbox_dir}>{ov.inbox_dir}</code>
+                    <Button variant="outline" size="sm" onClick={() => void api.openFolder(ov.inbox_dir).catch((e) => toast.error(String(e)))}>
+                      <FolderOpen data-icon="inline-start" />
+                      打开
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    按发送的设备分文件夹，重名的自动加编号，不会覆盖。配对过的设备、你连过的设备发来的直接收；别的设备发来要你点同意。
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel>发文件</FieldLabel>
+                  <FieldDescription>
+                    在左边设备上右键选发送文件；或者把文件拖进某台设备的终端窗口，发完会把文件在对方电脑上的路径填进终端，正在用的 AI 直接就能读。
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel>命令行工具 p2pcli</FieldLabel>
+                  <FieldDescription>
+                    终端里的 AI 也能用它在设备之间传文件，要 P2PCLI 开着。
+                  </FieldDescription>
+                  <pre className="overflow-x-auto rounded-md bg-muted-surface px-3 py-2 text-xs leading-relaxed [font-variant-ligatures:none]">{[
+                    "p2pcli devices                列出设备、在线和延迟",
+                    "p2pcli send 设备名 文件...      发文件或文件夹，打印对方电脑上的路径",
+                    "p2pcli inbox                  看最近收到的文件",
+                    "p2pcli devices --json         加 --json 输出给程序和 AI 读",
+                  ].join("\n")}</pre>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SquareTerminal className="size-4 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+                      {!cli
+                        ? "正在检查…"
+                        : !cli.bundled
+                          ? "开发版没有带命令行工具，正式安装包里才有。"
+                          : cli.installed && cli.on_path
+                            ? `已装好：${cli.path}，终端里直接用 p2pcli。`
+                            : cli.installed
+                              ? `已装在 ${cli.path}，但这个目录还不在终端的 PATH 里，可以用完整路径，或者点右边加进去。`
+                              : "还没装到终端里。"}
+                    </span>
+                    {cli?.bundled && !(cli.installed && cli.on_path) && (
+                      <Button size="sm" variant="outline" onClick={() => void installCli()} disabled={installingCli}>
+                        {installingCli ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Download data-icon="inline-start" />}
+                        {cli.installed ? "加到 PATH" : "安装"}
+                      </Button>
+                    )}
+                  </div>
+                </Field>
+              </FieldGroup>
             </Tabs.Panel>
             <Tabs.Panel id="trusted" className="pt-5">
               <p className="detail-note mb-4">

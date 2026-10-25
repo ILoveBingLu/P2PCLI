@@ -7,7 +7,7 @@ use iroh::endpoint::Connection;
 use iroh::endpoint::transports::{
     AddrKind, PathSelection, PathSelectionContext, PathSelectionData, PathSelector,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// IPv6 比 IPv4 慢多少以内仍然用 IPv6
 const IPV6_SLACK: Duration = Duration::from_millis(50);
@@ -78,7 +78,7 @@ impl PathSelector for Ipv6First {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PathKind {
     Ipv6,
@@ -98,7 +98,7 @@ impl PathKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PathInfo {
     pub kind: PathKind,
     pub rtt_ms: Option<u64>,

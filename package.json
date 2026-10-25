@@ -11,7 +11,8 @@
     "check": "tsc --project app/tsconfig.json --noEmit",
     "build:web": "tsc --project app/tsconfig.json --noEmit && vite build app",
     "check:session-tools": "node scripts/check-session-tools.mjs",
-    "prepare:session-tools": "node scripts/prepare-session-tools.mjs"
+    "prepare:session-tools": "node scripts/prepare-session-tools.mjs",
+    "prepare:cli": "node scripts/prepare-cli.mjs"
   },
   "dependencies": {
     "@heroui/react": "^3.2.6",

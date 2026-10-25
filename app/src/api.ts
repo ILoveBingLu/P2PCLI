@@ -91,6 +91,8 @@ export interface Overview {
   trusted: TrustedView[];
   /** 同意过一次的设备：能在后台看延迟和自己的会话列表 */
   paired: TrustedView[];
+  /** 收到的文件放在哪 */
+  inbox_dir: string;
 }
 
 export type PresenceState = "checking" | "online" | "offline" | "old_version";
@@ -121,8 +123,49 @@ export interface IncomingRequest {
   platform: string;
 }
 
+/** 没配对过的设备要发文件过来 */
+export interface FileRequest {
+  id: number;
+  remote: string;
+  name: string;
+  platform: string;
+  files: number;
+  total: number;
+  /** 前几项的名字 */
+  items: string[];
+}
+
+export type TransferState = "connecting" | "waiting" | "running" | "done" | "failed";
+export interface Transfer {
+  id: string;
+  direction: "send" | "receive";
+  peer: string;
+  peer_name: string;
+  label: string;
+  files: number;
+  total: number;
+  done: number;
+  state: TransferState;
+  error: string | null;
+  /** 存在接收方哪个目录、第一层每一项的路径，都是接收方电脑上的路径 */
+  dir: string | null;
+  paths: string[];
+  started_at: number;
+  finished_at: number | null;
+}
+
+/** 终端里用的命令行工具 p2pcli */
+export interface CliStatus {
+  path: string | null;
+  installed: boolean;
+  on_path: boolean;
+  /** 开发版没带 */
+  bundled: boolean;
+}
+
 export type HostEvent =
   | { type: "request_cancelled"; id: number }
+  | { type: "files_received"; from: string; from_name: string; files: number; total: number; dir: string; paths: string[] }
   | { type: "connected"; session: number; remote: string; name: string; platform: string; trusted: boolean }
   | { type: "disconnected"; session: number }
   | { type: "terminal_opened"; session: number }
@@ -140,6 +183,8 @@ export interface SettingsView {
   default_server: string;
   server_presets: ServerPreset[];
   lan_visible: boolean;
+  /** 收到的文件放在哪 */
+  inbox_dir: string;
 }
 
 /** 发布页上比本机新的版本 */
@@ -190,6 +235,17 @@ export const api = {
     return invoke("install_update", { progress });
   },
   respond: (id: number, allow: boolean, trust: boolean) => invoke("respond_request", { id, allow, trust }),
+  respondFiles: (id: number, accept: boolean) => invoke("respond_files", { id, accept }),
+  /** 在后台发文件，返回传输编号；target 是设备公钥、设备码或名字 */
+  sendFiles: (target: string, paths: string[]) => invoke<string>("send_files", { target, paths }),
+  transfers: () => invoke<Transfer[]>("transfers"),
+  /** 系统选择框，没选返回空 */
+  pickPaths: (folders: boolean) => invoke<string[]>("pick_paths", { folders }),
+  revealPath: (path: string) => invoke("reveal_path", { path }),
+  openFolder: (path: string) => invoke("open_folder", { path }),
+  cliStatus: () => invoke<CliStatus>("cli_status"),
+  installCli: () => invoke<CliStatus>("install_cli"),
+  termInput: (termId: number, data: string) => invoke("term_input", { termId, data, binary: false }),
   kick: (session: number) => invoke<boolean>("kick", { session }),
   removeTrusted: (endpointId: string) => invoke("remove_trusted", { endpointId }),
   forgetRecent: (code: string) => invoke("forget_recent", { code }),
@@ -217,4 +273,22 @@ export function pathLabel(p: PathInfo | null | undefined): string {
   if (!p) return "连接中";
   const name = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", unknown: "连接中" }[p.kind];
   return p.rtt_ms != null && p.kind !== "unknown" ? `${name} · ${p.rtt_ms} ms` : name;
+}
+
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+/** 把路径写成对方终端能直接用的样子：普通字符原样，带空格、中文这些就加单引号（PowerShell 和 sh 都认） */
+export function shellQuote(path: string, platform: string): string {
+  if (/^[\w@%+=:,./~-]+$/.test(path) && !(platform === "windows" && path.includes("~"))) return path;
+  return platform === "windows" ? `'${path.replace(/'/g, "''")}'` : `'${path.replace(/'/g, `'\\''`)}'`;
 }

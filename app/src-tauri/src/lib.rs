@@ -1,5 +1,6 @@
 //! 桌面端：把核心库包成界面能调的命令，管弹窗、托盘和窗口。
 
+mod cli;
 mod update;
 
 use std::collections::HashMap;
@@ -8,8 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use p2pcli_core::client::{ConnectError, RemoteHost, RemoteInfo, TermEvent};
+use p2pcli_core::files::Transfer;
 use p2pcli_core::host::{
-    BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest, SessionSummary,
+    BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest, SessionSummary,
 };
 use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::path::PathInfo;
@@ -117,6 +119,8 @@ fn effective_relay(s: &Settings) -> Option<String> {
 struct UiDelegate {
     app: AppHandle,
     pending: Mutex<HashMap<u64, oneshot::Sender<Decision>>>,
+    /// 等主人决定收不收的文件
+    pending_files: Mutex<HashMap<u64, oneshot::Sender<bool>>>,
 }
 
 impl HostDelegate for UiDelegate {
@@ -141,6 +145,7 @@ impl HostDelegate for UiDelegate {
     fn event(&self, ev: HostEvent) {
         if let HostEvent::RequestCancelled { id } = &ev {
             self.pending.lock().unwrap().remove(id);
+            self.pending_files.lock().unwrap().remove(id);
         }
         if let HostEvent::Connected { name, .. } = &ev {
             let _ = self
@@ -151,8 +156,49 @@ impl HostDelegate for UiDelegate {
                 .body(format!("{name} 正在使用你的终端"))
                 .show();
         }
+        if let HostEvent::FilesReceived { from_name, files, total, dir, .. } = &ev {
+            let _ = self
+                .app
+                .notification()
+                .builder()
+                .title(format!("收到 {from_name} 发来的文件"))
+                .body(format!("{files} 个文件，{}，放在 {dir}", human_size(*total)))
+                .show();
+        }
         let _ = self.app.emit("host-event", &ev);
     }
+
+    fn approve_files(&self, req: FileRequest) -> BoxFuture<bool> {
+        let (tx, rx) = oneshot::channel();
+        self.pending_files.lock().unwrap().insert(req.id, tx);
+        show_main(&self.app);
+        if let Some(w) = self.app.get_webview_window("main") {
+            let _ = w.request_user_attention(Some(tauri::UserAttentionType::Critical));
+        }
+        let _ = self
+            .app
+            .notification()
+            .builder()
+            .title("有设备要发文件给你")
+            .body(format!("{} 想发 {} 个文件（{}）", req.name, req.files, human_size(req.total)))
+            .show();
+        let _ = self.app.emit("file-request", &req);
+        Box::pin(async move { rx.await.unwrap_or(false) })
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }
 
 fn platform_label(p: &str) -> &str {
@@ -224,6 +270,8 @@ struct Overview {
     trusted: Vec<TrustedView>,
     /// 同意过一次的设备：能在后台看延迟和自己的会话列表
     paired: Vec<TrustedView>,
+    /// 收到的文件放在哪
+    inbox_dir: String,
 }
 
 #[tauri::command]
@@ -245,6 +293,7 @@ fn overview(state: State<'_, AppState>) -> Overview {
         recent: node.recent.list(),
         nearby: node.nearby(),
         devices: node.devices(),
+        inbox_dir: node.files.inbox_root().display().to_string(),
         paired: node
             .host
             .paired
@@ -307,6 +356,89 @@ fn respond_request(state: State<'_, AppState>, id: u64, allow: bool, trust: bool
             Decision::Deny
         });
     }
+}
+
+#[tauri::command]
+fn respond_files(state: State<'_, AppState>, id: u64, accept: bool) {
+    if let Some(tx) = state.delegate.pending_files.lock().unwrap().remove(&id) {
+        let _ = tx.send(accept);
+    }
+}
+
+/// 在后台给一台设备发文件，返回传输编号；进度从 transfers 事件里看
+#[tauri::command]
+async fn send_files(state: State<'_, AppState>, target: String, paths: Vec<String>) -> Result<String, String> {
+    let node = state.node();
+    let device = node.find_device(&target).map_err(|e| format!("{e:#}"))?;
+    node.start_send(&device, paths.into_iter().map(PathBuf::from).collect()).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn transfers(state: State<'_, AppState>) -> Vec<Transfer> {
+    state.node().files.transfers()
+}
+
+/// 弹系统的选择框选要发的文件或文件夹，没选返回空
+#[tauri::command]
+async fn pick_paths(app: AppHandle, folders: bool) -> Result<Vec<String>, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+    let (tx, rx) = oneshot::channel();
+    let dialog = app.dialog().file().set_title(if folders { "选要发的文件夹" } else { "选要发的文件" });
+    let done = move |picked: Option<Vec<FilePath>>| {
+        let _ = tx.send(picked.unwrap_or_default());
+    };
+    if folders { dialog.pick_folders(done) } else { dialog.pick_files(done) }
+    let picked = rx.await.map_err(|e| e.to_string())?;
+    Ok(picked.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect())
+}
+
+/// 在访达或资源管理器里选中这个文件；只是显示位置，不打开它
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err(format!("找不到 {}", path.display()));
+    }
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+    #[cfg(windows)]
+    let r = std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(path.parent().unwrap_or(&path)).spawn();
+    r.map(|_| ()).map_err(|e| format!("打不开：{e}"))
+}
+
+/// 打开一个文件夹；只认文件夹，免得误把程序当文件夹打开
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    std::fs::create_dir_all(&path).map_err(|e| format!("建文件夹失败：{e}"))?;
+    if !path.is_dir() {
+        return Err(format!("{} 不是文件夹", path.display()));
+    }
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg("-a").arg("Finder").arg(&path).spawn();
+    #[cfg(windows)]
+    let r = std::process::Command::new("explorer").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(&path).spawn();
+    r.map(|_| ()).map_err(|e| format!("打不开：{e}"))
+}
+
+#[tauri::command]
+async fn cli_status(state: State<'_, AppState>) -> Result<cli::CliStatus, String> {
+    let dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || cli::status(&dir)).await.map_err(|e| e.to_string())
+}
+
+/// 装命令行工具并加进 PATH
+#[tauri::command]
+async fn install_cli(state: State<'_, AppState>) -> Result<cli::CliStatus, String> {
+    let dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || cli::install(&dir, true))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -580,6 +712,8 @@ struct SettingsView {
     default_server: &'static str,
     server_presets: Vec<ServerPreset>,
     lan_visible: bool,
+    /// 收到的文件放在哪
+    inbox_dir: String,
 }
 
 #[tauri::command]
@@ -592,6 +726,7 @@ fn get_settings(state: State<'_, AppState>) -> SettingsView {
         default_server: default_server(),
         server_presets: server_presets(),
         lan_visible: !s.lan_hidden,
+        inbox_dir: state.node().files.inbox_root().display().to_string(),
         server: s.server,
         device_name: s.device_name,
         relay: s.relay,
@@ -716,6 +851,7 @@ pub fn run() {
             show_main(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(update::PendingUpdate::default())
         .setup(|app| {
@@ -730,6 +866,7 @@ pub fn run() {
             let delegate = Arc::new(UiDelegate {
                 app: app.handle().clone(),
                 pending: Mutex::new(HashMap::new()),
+                pending_files: Mutex::new(HashMap::new()),
             });
             let cfg = NodeConfig {
                 data_dir: data_dir.clone(),
@@ -751,7 +888,7 @@ pub fn run() {
                 node: RwLock::new(node),
                 config_gate: tokio::sync::Mutex::new(()),
                 delegate,
-                data_dir,
+                data_dir: data_dir.clone(),
                 settings: Mutex::new(settings),
                 remotes: Mutex::new(HashMap::new()),
                 terms: Mutex::new(HashMap::new()),
@@ -759,6 +896,30 @@ pub fn run() {
             });
 
             update::auto_install_for_test(app.handle());
+
+            // 本机控制口：终端里的 p2pcli 通过它让软件发文件、列设备
+            let handle = app.handle().clone();
+            let source: p2pcli_core::control::NodeSource = Arc::new(move || handle.state::<AppState>().node());
+            if let Err(e) = tauri::async_runtime::block_on(p2pcli_core::control::serve(&data_dir, source)) {
+                warn!("本机控制口没起来，命令行 p2pcli 用不了：{e:#}");
+            }
+            let dir = data_dir.clone();
+            std::thread::spawn(move || cli::auto_install(&dir));
+
+            // 传输进度：有变化就推给界面
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut previous = serde_json::Value::Null;
+                let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+                loop {
+                    tick.tick().await;
+                    let current = serde_json::to_value(handle.state::<AppState>().node().files.transfers()).unwrap_or_default();
+                    if current != previous {
+                        let _ = handle.emit("transfers", &current);
+                        previous = current;
+                    }
+                }
+            });
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -848,6 +1009,14 @@ pub fn run() {
             check_update,
             install_update,
             respond_request,
+            respond_files,
+            send_files,
+            transfers,
+            pick_paths,
+            reveal_path,
+            open_folder,
+            cli_status,
+            install_cli,
             kick,
             remove_trusted,
             forget_recent,

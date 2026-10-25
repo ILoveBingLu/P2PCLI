@@ -1,8 +1,9 @@
-// Validate the checked-in sidecar before starting Tauri. No download or compilation.
+// Validate the checked-in sidecar and build the bundled p2pcli CLI before starting Tauri. No download.
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { main as check } from "./check-session-tools.mjs";
+import { main as prepareCli } from "./prepare-cli.mjs";
 
 const args = process.argv.slice(2);
 let target;
@@ -11,7 +12,12 @@ for (let i = 0; i < args.length && args[i] !== "--"; i++) {
   else if (args[i].startsWith("--target=")) target = args[i].slice(9);
 }
 try {
-  if (!args.includes("--help") && !args.includes("-h")) await check(target ? ["--target", target] : []);
+  if (!args.includes("--help") && !args.includes("-h")) {
+    await check(target ? ["--target", target] : []);
+    // 安装包里带的命令行工具，开发时也要先编好，不然 Tauri 编译时找不到
+    if (target) process.env.TAURI_ENV_TARGET_TRIPLE = target;
+    prepareCli({ release: false });
+  }
   const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
   const child = spawn(process.execPath, [cli, "dev", ...args], {
     cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: "inherit", windowsHide: true,

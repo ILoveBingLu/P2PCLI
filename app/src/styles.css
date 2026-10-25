@@ -924,3 +924,107 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* 传文件：工作区左下角的进度列表。锚点是工作区最底下一个零高度的块，列表往上长，避开右下角的通知 */
+.transfer-anchor {
+  position: relative;
+  height: 0;
+}
+.transfer-panel {
+  position: absolute;
+  left: 16px;
+  bottom: 40px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(320px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.transfer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+  pointer-events: auto;
+}
+.transfer-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.transfer-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.transfer-row[data-state="done"] .transfer-icon {
+  color: var(--success);
+}
+.transfer-bar {
+  height: 3px;
+  margin: 5px 0 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--muted-surface);
+}
+.transfer-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+.transfer-status {
+  overflow: hidden;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-row[data-state="failed"] .transfer-status {
+  color: var(--danger);
+  white-space: normal;
+}
+
+/* 把文件拖进窗口时的提示：松开发给当前终端的设备 */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 0.45);
+  pointer-events: none;
+}
+.drop-overlay > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 420px;
+  padding: 24px 32px;
+  border: 1.5px dashed var(--primary);
+  border-radius: 16px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  text-align: center;
+}
+.drop-overlay[data-blocked] > div {
+  border-color: var(--border);
+}
+.drop-overlay svg {
+  width: 28px;
+  height: 28px;
+  color: var(--primary);
+}
+.drop-overlay[data-blocked] svg {
+  color: var(--muted-foreground);
+}

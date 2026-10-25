@@ -21,7 +21,8 @@
   },
   "bundle": {
     "externalBin": [
-      "binaries/tmux"
+      "binaries/tmux",
+      "binaries/p2pcli"
     ],
     "resources": {
       "resources/session-tools/macos/": "session-tools/"

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use p2pcli_core::client::{ConnectError, RemoteHost, TermEvent, asks_cursor_position};
-use p2pcli_core::host::{BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest};
+use p2pcli_core::host::{BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest};
 use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::rendezvous::{format_code, normalize_code, parse_server};
 
@@ -36,6 +36,9 @@ struct Cli {
     /// 局域网里只看别人，不让别人看到本机
     #[arg(long, global = true)]
     lan_hidden: bool,
+    /// 收到的文件放哪，默认下载文件夹里的 P2PCLI
+    #[arg(long, global = true)]
+    inbox: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -124,6 +127,28 @@ impl HostDelegate for CliDelegate {
     fn event(&self, ev: HostEvent) {
         eprintln!("【事件】{}", serde_json_line(&ev));
     }
+
+    fn approve_files(&self, req: FileRequest) -> BoxFuture<bool> {
+        eprintln!("【收文件请求】{}（{}）{} 个文件 {} 字节：{}", req.name, req.platform, req.files, req.total, req.items.join("、"));
+        let approve = self.approve;
+        Box::pin(async move {
+            let ok = match approve {
+                Approve::Yes | Approve::Trust => true,
+                Approve::No => false,
+                Approve::Ask => tokio::task::spawn_blocking(|| {
+                    eprint!("收吗？y 收 / 其他不收：");
+                    let _ = std::io::stderr().flush();
+                    let mut line = String::new();
+                    let _ = std::io::stdin().lock().read_line(&mut line);
+                    line.trim() == "y"
+                })
+                .await
+                .unwrap_or(false),
+            };
+            eprintln!("【决定】{}", if ok { "收" } else { "不收" });
+            ok
+        })
+    }
 }
 
 fn serde_json_line(ev: &HostEvent) -> String {
@@ -161,6 +186,7 @@ async fn main() -> Result<()> {
             lan: !cli.no_lan,
             lan_visible: !cli.no_lan && !cli.lan_hidden,
             session_program: None,
+            inbox_dir: cli.inbox.clone(),
         },
         Arc::new(CliDelegate { approve }),
     )
@@ -173,6 +199,12 @@ async fn main() -> Result<()> {
             }
             eprintln!("本机公钥：{}", node.id());
             eprintln!("配对密码：{}", node.host.password());
+            // 开本机控制口，p2pcli 命令行能通过它发文件
+            let shared = node.clone();
+            match p2pcli_core::control::serve(&cli.data_dir, Arc::new(move || shared.clone())).await {
+                Ok(()) => eprintln!("收件目录：{}", node.files.inbox_root().display()),
+                Err(e) => eprintln!("控制口没起来：{e:#}"),
+            }
             if let Some(rdv) = &node.rdv {
                 let mut code = rdv.watch_code();
                 let got = tokio::time::timeout(Duration::from_secs(30), code.wait_for(|c| c.is_some())).await;

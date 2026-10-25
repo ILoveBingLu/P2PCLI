@@ -6,8 +6,10 @@ import {
   type ComponentProps,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   Download,
+  FileUp,
   LoaderCircle,
   History,
   Plus,
@@ -20,12 +22,15 @@ import { toast, Toaster } from "@/components/ui/toast";
 import {
   api,
   platformLabel,
+  shellQuote,
+  type FileRequest,
   type HostEvent,
   type IncomingRequest,
   type Overview,
   type PathInfo,
   type RemoteInfo,
   type TermStatus,
+  type Transfer,
 } from "./api";
 import { TerminalView } from "./TerminalView";
 import { TerminalStatusbar } from "./components/TerminalStatusbar";
@@ -38,7 +43,9 @@ import { progressText, useUpdater } from "./components/useUpdater";
 import {
   ApproveDialog,
   DiagDialog,
+  FileApproveDialog,
 } from "./components/AppDialogs";
+import { TransferPanel } from "./components/TransferPanel";
 import { RemoteSessions, type SessionTarget } from "./components/RemoteSessions";
 import { SettingsPage } from "./components/SettingsPage";
 import { Welcome } from "./components/Welcome";
@@ -62,7 +69,12 @@ interface Tab {
   state: "opening" | "open" | "exited" | "closed";
   note: string | null;
   sessionId?: string;
+  /** 终端打开以后才有；拖进来的文件发完把路径填进这个终端 */
+  termId?: number;
 }
+
+/** 拖文件进窗口时的提示：发给谁，或者为什么发不了 */
+type DropHint = { name: string } | { blocked: string };
 
 export default function App() {
   const tabSeq = useRef(1);
@@ -71,6 +83,9 @@ export default function App() {
   const [activeKey, setActiveKey] = useState<number | null>(null);
   const [paths, setPaths] = useState<Record<number, PathInfo>>({});
   const [requests, setRequests] = useState<IncomingRequest[]>([]);
+  const [fileRequests, setFileRequests] = useState<FileRequest[]>([]);
+  const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [dropHint, setDropHint] = useState<DropHint | null>(null);
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
@@ -108,10 +123,17 @@ export default function App() {
       }),
       listen<HostEvent>("host-event", (e) => {
         const ev = e.payload;
-        if (ev.type === "request_cancelled")
+        if (ev.type === "request_cancelled") {
           setRequests((r) => r.filter((x) => x.id !== ev.id));
+          setFileRequests((r) => r.filter((x) => x.id !== ev.id));
+        }
+        if (ev.type === "files_received") toast.success(`收到 ${ev.from_name} 发来的 ${ev.files} 个文件`);
         refresh();
       }),
+      listen<FileRequest>("file-request", (e) => {
+        setFileRequests((r) => r.some((x) => x.id === e.payload.id) ? r : [...r, e.payload]);
+      }),
+      listen<Transfer[]>("transfers", (e) => setTransfers(e.payload)),
       listen("server-status", refresh),
       listen<{ conn_id: number; reason: string }>("remote-closed", (e) => {
         const { conn_id, reason } = e.payload;
@@ -123,6 +145,7 @@ export default function App() {
         );
       }),
     ];
+    void api.transfers().then(setTransfers).catch(() => {});
     return () => {
       window.clearInterval(timer);
       unsubs.forEach((p) => p.then((u) => u()));
@@ -254,6 +277,52 @@ export default function App() {
       }),
     );
   };
+
+  /** 拖进来的文件发给哪台设备：正在看的终端，或者正在看的会话页；终端里的还要在发完后把路径填进去 */
+  const dropTarget = (): { info: RemoteInfo; termId?: number } | { blocked: string } => {
+    if (showSettings) return { blocked: "先回到终端，再把文件拖进来" };
+    if (sessionTarget) return { info: sessionTarget.info };
+    if (activeTab && (activeTab.state === "open" || activeTab.state === "opening")) return { info: activeTab.info, termId: activeTab.termId };
+    return { blocked: "先打开一台设备的终端，再把文件拖进来" };
+  };
+  const dropTargetRef = useRef(dropTarget);
+  dropTargetRef.current = dropTarget;
+  /** 拖进终端的文件：传输编号 → 发完要填路径的终端 */
+  const pendingInsert = useRef(new Map<string, { termId: number; platform: string }>());
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void getCurrentWebview().onDragDropEvent(async (event) => {
+      const e = event.payload;
+      if (e.type === "leave") return setDropHint(null);
+      const target = dropTargetRef.current();
+      if (e.type === "enter" || e.type === "over") {
+        return setDropHint("blocked" in target ? { blocked: target.blocked } : { name: target.info.name });
+      }
+      setDropHint(null);
+      if ("blocked" in target) return toast.error(target.blocked);
+      if (!e.paths.length) return;
+      try {
+        const id = await api.sendFiles(target.info.endpoint_id, e.paths);
+        if (target.termId != null) pendingInsert.current.set(id, { termId: target.termId, platform: target.info.platform });
+      } catch (error) {
+        toast.error(`发不了：${String(error)}`);
+      }
+    }).then((u) => { if (disposed) u(); else unlisten = u; }).catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+
+  // 拖进终端的文件发完了：把对方电脑上的路径填进那个终端，像本机拖文件进终端一样
+  useEffect(() => {
+    for (const [id, target] of pendingInsert.current) {
+      const t = transfers.find((x) => x.id === id);
+      if (!t || t.finished_at == null) continue;
+      pendingInsert.current.delete(id);
+      if (t.state === "done" && t.paths.length)
+        void api.termInput(target.termId, t.paths.map((p) => shellQuote(p, target.platform)).join(" ") + " ").catch(() => {});
+    }
+  }, [transfers]);
 
   const respond = useCallback(
     async (req: IncomingRequest, allow: boolean, trust: boolean) => {
@@ -514,11 +583,11 @@ export default function App() {
                     connId={t.connId}
                     sessionId={t.sessionId}
                     active={!showSettings && !sessionTarget && t.key === activeKey}
-                    onReady={(_termId, sessionId) =>
+                    onReady={(termId, sessionId) =>
                       setTabs((ts) =>
                         ts.map((x) =>
                           x.key === t.key && x.state === "opening"
-                            ? { ...x, state: "open", sessionId }
+                            ? { ...x, state: "open", sessionId, termId }
                             : x,
                         ),
                       )
@@ -596,6 +665,7 @@ export default function App() {
         )}
 
         </div>
+        <TransferPanel transfers={transfers} />
       </main>
       {showDiag && <DiagDialog publicKey={ov?.endpoint_id ?? null} onClose={() => setShowDiag(false)} />}
       {requests.length > 0 && (
@@ -604,6 +674,32 @@ export default function App() {
           req={requests[0]}
           onRespond={respond}
         />
+      )}
+      {requests.length === 0 && fileRequests.length > 0 && (
+        <FileApproveDialog
+          key={fileRequests[0].id}
+          req={fileRequests[0]}
+          inboxDir={ov?.inbox_dir ?? null}
+          onRespond={async (req, accept) => {
+            await api.respondFiles(req.id, accept);
+            setFileRequests((r) => r.filter((x) => x.id !== req.id));
+          }}
+        />
+      )}
+      {dropHint && (
+        <div className="drop-overlay" data-blocked={"blocked" in dropHint ? "" : undefined} aria-hidden="true">
+          <div>
+            <FileUp />
+            {"blocked" in dropHint ? (
+              <span className="text-sm">{dropHint.blocked}</span>
+            ) : (
+              <>
+                <strong className="text-sm">松开发给 {dropHint.name}</strong>
+                <span className="text-xs text-muted-foreground">文件放在对方的下载文件夹里，拖进终端的会把路径填进去</span>
+              </>
+            )}
+          </div>
+        </div>
       )}
       <Toaster />
     </div>

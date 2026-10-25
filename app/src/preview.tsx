@@ -1,7 +1,7 @@
 // 开发用：浏览器里假数据渲染界面，看排版。不进正式包。
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Overview, SettingsView, TerminalSession } from "./api";
+import type { Overview, SettingsView, TerminalSession, Transfer } from "./api";
 
 const s = new URLSearchParams(location.search).get("s") ?? "empty";
 
@@ -41,6 +41,7 @@ const ov: Overview = {
     },
   ],
   paired: [{ endpoint_id: "zz", name: "小王的 ThinkPad", platform: "windows", added_at: 0 }],
+  inbox_dir: "/Users/me/Downloads/P2PCLI",
 };
 
 if (s === "unconfigured") {
@@ -56,6 +57,7 @@ const previewSettings: SettingsView = {
   effective_relay: null, effective_server: "wss://p2pcli.aiqji.cn",
   default_server: "wss://p2pcli.aiqji.cn",
   lan_visible: true,
+  inbox_dir: "/Users/me/Downloads/P2PCLI",
   server_presets: [
     { address: "wss://p2pcli.aiqji.cn", label: "国内服务器", note: "国内节点，在国内用连得最快" },
     { address: "wss://p2pcli.yscopy.cn", label: "Cloudflare", note: "海外节点，适合在国外用，国内访问有时不稳" },
@@ -78,6 +80,40 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
 // 工作室 Mac mini 的后台探测结果用同一份会话，连上前后编号对得上
 ov.devices[0].sessions = terminalSessions.map((session) => ({ ...session }));
 const attachments = new Map<number, { sessionId: string; status: any }>();
+
+// 传文件：s=transfers 一开始就有几条在传、传完、失败的；发文件时模拟进度
+const transfers: Transfer[] = [];
+const transferBase = { files: 1, error: null, dir: null, paths: [] as string[], started_at: now, finished_at: null as number | null };
+if (s === "transfers") {
+  transfers.push(
+    { ...transferBase, id: "t1", direction: "send", peer: "x", peer_name: "工作室 Mac mini", label: "设计稿 等 3 项", files: 12, total: 420_000_000, done: 168_000_000, state: "running" },
+    { ...transferBase, id: "t2", direction: "receive", peer: "y", peer_name: "办公室 PC", label: "报告.pdf", total: 2_400_000, done: 2_400_000, state: "done", finished_at: now + 3600, paths: ["/Users/me/Downloads/P2PCLI/办公室 PC/报告.pdf"] },
+    { ...transferBase, id: "t3", direction: "send", peer: "y", peer_name: "办公室 PC", label: "素材.zip", total: 80_000_000, done: 0, state: "failed", finished_at: now + 3600, error: "30 秒内没连上对方，对方可能不在线" },
+  );
+}
+const emitTransfers = () => void emit("transfers", transfers.map((t) => ({ ...t })));
+function fakeSend(target: string, paths: string[]) {
+  const id = `t${Date.now()}`;
+  const name = paths[0]?.split("/").pop() ?? "文件";
+  const peer = ov.recent.find((d) => d.endpoint_id === target)?.name ?? "设备";
+  const t: Transfer = { ...transferBase, id, direction: "send", peer: target, peer_name: peer, label: paths.length > 1 ? `${name} 等 ${paths.length} 项` : name, total: 30_000_000, done: 0, state: "connecting", started_at: Math.floor(Date.now() / 1000) };
+  transfers.unshift(t);
+  let step = 0;
+  const timer = setInterval(() => {
+    step += 1;
+    if (step === 1) t.state = "running";
+    else t.done = Math.min(t.total, t.done + 6_000_000);
+    if (t.done >= t.total) {
+      t.state = "done";
+      t.finished_at = Math.floor(Date.now() / 1000);
+      t.paths = paths.map((p) => `/Users/me/Downloads/P2PCLI/我的 MacBook Pro/${p.split("/").pop()}`);
+      clearInterval(timer);
+    }
+    emitTransfers();
+  }, 500);
+  emitTransfers();
+  return id;
+}
 
 const sample = [
   "\x1b[1;32mme@studio\x1b[0m \x1b[1;34m~\x1b[0m % claude\r\n",
@@ -215,6 +251,23 @@ mockIPC(
         return null;
       case "restart":
         return null;
+      case "transfers":
+        return transfers.map((t) => ({ ...t }));
+      case "pick_paths":
+        return args.folders ? ["/Users/me/Projects/demo"] : ["/Users/me/Desktop/截图 1.png", "/Users/me/Desktop/notes.md"];
+      case "send_files":
+        return fakeSend(args.target, args.paths);
+      case "respond_files":
+        return null;
+      case "cli_status":
+        return s === "cli-missing"
+          ? { path: "/Users/me/.local/bin/p2pcli", installed: false, on_path: false, bundled: true }
+          : { path: "/Users/me/.local/bin/p2pcli", installed: true, on_path: true, bundled: true };
+      case "install_cli":
+        return { path: "/Users/me/.local/bin/p2pcli", installed: true, on_path: true, bundled: true };
+      case "term_input":
+        ((window as any).__inputs ??= []).push(args.data);
+        return null;
       case "selftest_config":
         return null;
       case "diagnose":
@@ -252,6 +305,11 @@ mockIPC(
 );
 
 await import("./main");
+// 测拖文件这类系统事件：页面里调 window.__emit("tauri://drag-drop", { paths, position })
+(window as any).__emit = emit;
+if (s === "file-request") {
+  setTimeout(() => emit("file-request", { id: 11, remote: "f9bb5fbc3f0a1b2c3d4e5f60718293a4", name: "客厅的 Windows", platform: "windows", files: 3, total: 12_582_912, items: ["照片", "说明.txt"] }), 300);
+}
 if (s === "request") {
   setTimeout(() => emit("host-request", { id: 9, remote: "f9bb5fbc3f0a1b2c3d4e5f60718293a4", name: "小王的 ThinkPad", platform: "windows" }), 300);
 }

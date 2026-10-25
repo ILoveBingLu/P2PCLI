@@ -151,6 +151,21 @@ async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, kind: u8, body: &[u8]) ->
 
 /// 读一帧；对面正常关流返回 None
 pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Frame>> {
+    Ok(match read_frame_as(r).await? {
+        Some(AnyFrame::Msg(m)) => Some(Frame::Msg(m)),
+        Some(AnyFrame::Data(d)) => Some(Frame::Data(d)),
+        None => None,
+    })
+}
+
+/// 同样的帧，控制消息换成别的类型（传文件用）
+#[derive(Debug, PartialEq)]
+pub enum AnyFrame<T> {
+    Msg(T),
+    Data(Bytes),
+}
+
+pub async fn read_frame_as<R: AsyncRead + Unpin, T: DeserializeOwned>(r: &mut R) -> Result<Option<AnyFrame<T>>> {
     let mut head = [0u8; 5];
     match r.read_exact(&mut head).await {
         Ok(_) => {}
@@ -164,8 +179,8 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Frame>
     let mut body = vec![0u8; len];
     r.read_exact(&mut body).await.context("帧内容没读完连接就断了")?;
     match head[0] {
-        KIND_MSG => Ok(Some(Frame::Msg(serde_json::from_slice(&body)?))),
-        KIND_DATA => Ok(Some(Frame::Data(Bytes::from(body)))),
+        KIND_MSG => Ok(Some(AnyFrame::Msg(serde_json::from_slice(&body)?))),
+        KIND_DATA => Ok(Some(AnyFrame::Data(Bytes::from(body)))),
         k => bail!("未知帧类型 {k}"),
     }
 }
