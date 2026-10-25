@@ -51,6 +51,7 @@ const previewSettings: SettingsView = {
 if (s === "custom-server") previewSettings.server = "b840307fdbdff2aa164308932575e8f7396b7fd539bd7cfd1927b2456b3fc8a8@rdv.example.com:7788";
 let termSeq = 0;
 let scanSeq = 0;
+let statusStartedAt = 0;
 const now = Math.floor(Date.now() / 1000);
 const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false },
@@ -105,12 +106,20 @@ mockIPC(
           ),
         );
       }
-      case "list_terminals":
+      case "list_terminals": {
+        // s=status-live: change metadata, fail briefly, then recover without a reload.
+        const elapsed = statusStartedAt ? Date.now() - statusStartedAt : 0;
+        if (s === "status-live" && elapsed >= 12000 && elapsed < 18000)
+          return Promise.reject("模拟状态查询暂时失败");
+        const changed = s === "status-live" && elapsed >= 6000;
         // 模拟网络往返，看得出刷新时列表有没有闪
         return new Promise((r) => setTimeout(() => r(terminalSessions.map((session) => ({
           ...session,
-          details: { window_index: 0, window_name: "工作终端", window_count: 1, command: "zsh", current_path: "/Users/demo/Projects/P2PCLI" },
+          details: changed
+            ? { window_index: 1, window_name: "编辑器", window_count: 2, command: "vim", current_path: "/Users/demo/Projects/updated" }
+            : { window_index: 0, window_name: "工作终端", window_count: 1, command: "zsh", current_path: "/Users/demo/Projects/P2PCLI" },
         }))), 300));
+      }
       case "end_terminal": {
         await new Promise((r) => setTimeout(r, 500));
         const index = terminalSessions.findIndex((session) => session.id === args.sessionId);
@@ -126,6 +135,7 @@ mockIPC(
         if (!session) { session = { id: crypto.randomUUID().replaceAll("-", ""), created_at: Math.floor(Date.now() / 1000), attached: true }; terminalSessions.push(session); }
         session.attached = true;
         const termId = ++termSeq;
+        if (!statusStartedAt) statusStartedAt = Date.now();
         attachments.set(termId, { sessionId: session.id, status: args.status });
         ((window as any).__outs ??= []).push(args.output);
         setTimeout(() => args.output.onmessage(new TextEncoder().encode(sample).buffer), 100);

@@ -11,7 +11,7 @@ use tokio::process::Command;
 
 use crate::proto::{TerminalDetails, TerminalSession};
 
-const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_attached}\t#{window_index}\t#{window_name}\t#{session_windows}\t#{pane_current_command}\t#{pane_current_path}";
+const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_attached}\t#{status}\t#{window_index}\t#{window_name}\t#{session_windows}\t#{pane_current_command}\t#{pane_current_path}";
 
 pub struct SessionManager {
     namespace: String,
@@ -53,6 +53,17 @@ impl SessionManager {
         Ok(())
     }
 
+    async fn hide_status(&self, name: &str) -> Result<()> {
+        self.checked(&["set-option", "-t", name, "status", "off"]).await?;
+        // psmux can return success with a warning when no session was targeted.
+        // Read back the effective option before trusting that the bar is hidden.
+        let out = self.command(&["show-options", "-t", name, "-v", "status"]).await?;
+        if !out.status.success() || !status_hidden(String::from_utf8_lossy(&out.stdout).trim()) {
+            bail!("无法确认原生终端状态栏已关闭：{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
     pub async fn list(&self, owner: &str) -> Result<Vec<TerminalSession>> {
         let out = self.command(&["list-sessions", "-F", SESSION_FORMAT]).await?;
         if !out.status.success() {
@@ -66,7 +77,7 @@ impl SessionManager {
         let prefix = format!("p2pcli-{owner}-");
         let mut sessions = Vec::new();
         for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let mut parts = line.splitn(8, '\t');
+            let mut parts = line.splitn(9, '\t');
             let Some(id) = parts.next().and_then(|n| n.strip_prefix(&prefix)) else { continue };
             if Self::name(owner, id).is_err() { continue; }
             let mut session = TerminalSession {
@@ -75,6 +86,11 @@ impl SessionManager {
                 attached: parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0,
                 details: None,
             };
+            // Also repair restored sessions or options changed inside the terminal.
+            // Normal polling needs no extra process when status is already off.
+            if !status_hidden(parts.next().unwrap_or_default()) {
+                self.hide_status(&Self::name(owner, id)?).await?;
+            }
             let details = TerminalDetails {
                 window_index: parts.next().and_then(|v| v.parse().ok()),
                 window_name: status_text(parts.next()),
@@ -105,7 +121,7 @@ impl SessionManager {
             self.checked(&["set-option", "-t", &name, "destroy-unattached", "off"]).await?;
         }
         // 新建和恢复旧会话都隐藏原生状态栏；只改当前受管会话，不改全局选项。
-        self.checked(&["set-option", "-t", &name, "status", "off"]).await?;
+        self.hide_status(&name).await?;
         let mut cmd = CommandBuilder::new(executable(self.program.as_deref())?);
         cmd.args(["-L", &self.namespace, "attach-session", "-t", &name]);
         cmd.env_remove("TMUX");
@@ -123,6 +139,10 @@ impl SessionManager {
         let name = Self::name(owner, id)?;
         self.checked(&["kill-session", "-t", &name]).await
     }
+}
+
+fn status_hidden(value: &str) -> bool {
+    matches!(value, "off" | "0")
 }
 
 fn status_text(value: Option<&str>) -> Option<String> {
