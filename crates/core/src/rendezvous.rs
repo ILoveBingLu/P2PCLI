@@ -24,8 +24,8 @@ use crate::proto::{read_json, write_json};
 use crate::rdv_ws::WsLink;
 use crate::v6;
 
-/// 软件默认用的牵线服务器（部署在 Cloudflare，见 cloudflare/）；用户可以在设置里换成自己部署的
-pub const DEFAULT_SERVER: &str = "wss://p2pcli.yscopy.cn";
+/// 软件默认用的牵线服务器（自建服务器，藏在 CDN 后面走 WebSocket）；用户可以在设置里换成自己部署的
+pub const DEFAULT_SERVER: &str = "wss://p2pcli.aiqji.cn";
 
 /// 多久看一次自己的地址有没有变，变了就报
 const CHECK_ADDR_EVERY: Duration = Duration::from_secs(20);
@@ -110,13 +110,14 @@ pub fn parse_server(s: &str) -> Result<EndpointAddr> {
 /// 牵线服务器的两种接法
 #[derive(Debug, Clone, PartialEq)]
 pub enum RdvServer {
-    /// 自建服务器，走 UDP（iroh），写法 `公钥@IP:端口`
-    Quic(EndpointAddr),
+    /// 自建服务器，走 UDP（iroh），写法 `公钥@IP:端口` 或 `公钥@域名:端口`，可以逗号分隔写多个；
+    /// 域名每次连接时现解析，服务器换了 IP 改解析就行
+    Quic { id: EndpointId, addrs: Vec<String> },
     /// 走 WebSocket，可以放在 Cloudflare 这类只支持 HTTP 的平台，写法 `wss://域名`
     Ws(String),
 }
 
-/// 识别服务器地址写法：`wss://`、`ws://`、`https://` 开头的走 WebSocket，其余按 `公钥@IP:端口`
+/// 识别服务器地址写法：`wss://`、`ws://`、`https://` 开头的走 WebSocket，其余按 `公钥@IP或域名:端口`
 pub fn parse_rdv_server(s: &str) -> Result<RdvServer> {
     let s = s.trim();
     let ws = if let Some(rest) = s.strip_prefix("https://") {
@@ -129,7 +130,7 @@ pub fn parse_rdv_server(s: &str) -> Result<RdvServer> {
         None
     };
     let Some(mut url) = ws else {
-        return Ok(RdvServer::Quic(parse_server(s)?));
+        return parse_quic_server(s);
     };
     // 只写了域名就补上默认路径
     let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or("");
@@ -146,6 +147,41 @@ pub fn parse_rdv_server(s: &str) -> Result<RdvServer> {
         bail!("牵线服务器地址里没有域名");
     }
     Ok(RdvServer::Ws(url))
+}
+
+fn parse_quic_server(s: &str) -> Result<RdvServer> {
+    let (id, rest) = s.split_once('@').unwrap_or((s, ""));
+    let id = EndpointId::from_str(id.trim()).context("牵线服务器公钥格式不对")?;
+    let mut addrs = Vec::new();
+    for a in rest.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+        if a.parse::<SocketAddr>().is_err() {
+            let host_ok = a.rsplit_once(':').is_some_and(|(host, port)| {
+                !host.is_empty()
+                    && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+                    && port.parse::<u16>().is_ok_and(|p| p > 0)
+            });
+            if !host_ok {
+                bail!("牵线服务器地址格式不对：{a}（要写成 IP:端口 或 域名:端口）");
+            }
+        }
+        addrs.push(a.to_string());
+    }
+    Ok(RdvServer::Quic { id, addrs })
+}
+
+/// 把 `IP:端口`、`域名:端口` 解析成连得上的地址；一个都解析不出来才算失败
+async fn resolve_quic_server(id: EndpointId, addrs: &[String]) -> Result<EndpointAddr> {
+    let mut ips = Vec::new();
+    for a in addrs {
+        match tokio::net::lookup_host(a.as_str()).await {
+            Ok(found) => ips.extend(found.map(TransportAddr::Ip)),
+            Err(e) => debug!("解析牵线服务器地址 {a} 失败：{e}"),
+        }
+    }
+    if ips.is_empty() && !addrs.is_empty() {
+        bail!("解析不了牵线服务器地址：{}", addrs.join(", "));
+    }
+    Ok(EndpointAddr::from_parts(id, ips))
 }
 
 /// 和牵线服务器的一条连接，UDP 或 WebSocket
@@ -279,11 +315,13 @@ impl RdvClient {
     /// 新开一条到牵线服务器的连接；服务器的推送都转到 pushes
     async fn open_link(&self) -> Result<Link> {
         match &self.server {
-            RdvServer::Quic(addr) => {
-                let conn = timeout(Duration::from_secs(20), self.endpoint.connect(addr.clone(), ALPN_RDV))
-                    .await
-                    .map_err(|_| anyhow!("连接牵线服务器超时"))?
-                    .map_err(|e| anyhow!("连不上牵线服务器：{e}"))?;
+            RdvServer::Quic { id, addrs } => {
+                let conn = timeout(Duration::from_secs(20), async {
+                    let addr = resolve_quic_server(*id, addrs).await?;
+                    self.endpoint.connect(addr, ALPN_RDV).await.map_err(|e| anyhow!("连不上牵线服务器：{e}"))
+                })
+                .await
+                .map_err(|_| anyhow!("连接牵线服务器超时"))??;
                 let c = conn.clone();
                 let pushes = self.pushes.clone();
                 tokio::spawn(async move {
@@ -416,7 +454,20 @@ mod tests {
     #[test]
     fn rdv_server_kinds() {
         let id = iroh::SecretKey::generate().public();
-        assert!(matches!(parse_rdv_server(&format!("{id}@192.0.2.10:7788")).unwrap(), RdvServer::Quic(_)));
+        let quic = |s: &str| match parse_rdv_server(s).unwrap() {
+            RdvServer::Quic { id, addrs } => (id, addrs),
+            other => panic!("应该是 UDP：{other:?}"),
+        };
+        assert_eq!(quic(&format!("{id}@192.0.2.10:7788")), (id, vec!["192.0.2.10:7788".to_string()]));
+        assert_eq!(
+            quic(&format!("{id}@rdv.example.com:7788, [::1]:7788")).1,
+            vec!["rdv.example.com:7788".to_string(), "[::1]:7788".to_string()]
+        );
+        assert!(quic(&id.to_string()).1.is_empty());
+        for bad in ["rdv.example.com", "rdv.example.com:0", "rdv.example.com:99999", "a b:7788", ":7788"] {
+            assert!(parse_rdv_server(&format!("{id}@{bad}")).is_err(), "{bad} 应该报错");
+        }
+        assert!(parse_rdv_server("bad@rdv.example.com:7788").is_err());
         let ws = |s: &str| match parse_rdv_server(s).unwrap() {
             RdvServer::Ws(u) => u,
             other => panic!("应该是 WebSocket：{other:?}"),
@@ -426,6 +477,16 @@ mod tests {
         assert_eq!(ws("ws://127.0.0.1:8787"), "ws://127.0.0.1:8787/v1/ws");
         assert_eq!(ws("wss://rdv.example.com/custom/ws"), "wss://rdv.example.com/custom/ws");
         assert!(parse_rdv_server("wss://").is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_server_hosts() {
+        let id = iroh::SecretKey::generate().public();
+        let a = resolve_quic_server(id, &["127.0.0.1:7788".into(), "localhost:7789".into()]).await.unwrap();
+        assert!(a.ip_addrs().any(|s| *s == "127.0.0.1:7788".parse().unwrap()));
+        assert!(a.ip_addrs().any(|s| s.port() == 7789 && s.ip().is_loopback()));
+        assert!(resolve_quic_server(id, &["no-such-host.invalid:7788".into()]).await.is_err());
+        assert_eq!(resolve_quic_server(id, &[]).await.unwrap().ip_addrs().count(), 0);
     }
 
     #[test]

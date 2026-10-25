@@ -31,7 +31,7 @@ if (s === "unconfigured") {
 if (s === "offline") ov.server = { state: "offline", error: "无法连接牵线服务器" };
 const previewSettings: SettingsView = {
   server: null, device_name: null, relay: null, proxy: null,
-  effective_relay: null, effective_server: "wss://p2pcli.yscopy.cn",
+  effective_relay: null, effective_server: "wss://p2pcli.aiqji.cn",
   data_dir: "~/Library/Application Support/io.github.ilovebinglu.p2pcli",
 };
 let termSeq = 0;

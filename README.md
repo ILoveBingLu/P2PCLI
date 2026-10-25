@@ -19,7 +19,7 @@
 - macOS：打开时提示无法验证开发者，到 系统设置 → 隐私与安全性，点 仍要打开
 - Windows：提示 Windows 已保护你的电脑，点 更多信息 → 仍要运行
 
-软件默认用 `wss://p2pcli.yscopy.cn` 牵线，装好就能用。想用自己部署的牵线服务器（自建或 Cloudflare，见下文），在软件标题栏的设置里换掉。
+软件默认用 `wss://p2pcli.aiqji.cn` 牵线，装好就能用。想用自己部署的牵线服务器（自建或 Cloudflare，见下文），在软件标题栏的设置里换掉。
 
 ## 怎么用
 
@@ -57,7 +57,7 @@ IPv6 直连（`crates/core/src/v6.rs`）：公网 IPv6 没有 NAT，网卡地址
 
 | 写法 | 通道 | 适合 |
 | --- | --- | --- |
-| `公钥@IP:端口` | UDP（iroh，加密并认证服务器身份） | 自己有公网服务器 |
+| `公钥@IP:端口` 或 `公钥@域名:端口` | UDP（iroh，加密并认证服务器身份） | 自己有公网服务器 |
 | `wss://域名` | WebSocket（TLS） | 放在 Cloudflare Workers 这类只支持 HTTP 的平台，不用自己维护服务器 |
 
 两种接法连的是不同的服务器时，设备之间互相查不到；同一台自建服务器同时开两个入口时，走 UDP 和走 WebSocket 的设备能互相查到。
@@ -68,7 +68,7 @@ IPv6 直连（`crates/core/src/v6.rs`）：公网 IPv6 没有 NAT，网卡地址
 p2pcli-server --data-dir /var/lib/p2pcli --port 7788 --ws-port 7789 --public-ip <公网IP>
 ```
 
-放行 UDP 7788。启动时会打印 UDP 写法要填的地址（`公钥@IP:端口`）。`--ws-port` 开的是明文 WebSocket，对外用 `wss://` 时在前面加反向代理（例如 Caddy：`rdv.example.com { reverse_proxy 127.0.0.1:7789 }`），或者把域名放在 Cloudflare 代理后面。
+放行 UDP 7788。启动时会打印 UDP 写法要填的地址（`公钥@IP:端口`），IP 也可以换成直接解析到服务器的域名，每次连接时现解析，服务器换 IP 改解析就行。`--ws-port` 开的是明文 WebSocket，对外用 `wss://` 时在前面加反向代理（例如 Caddy：`rdv.example.com { reverse_proxy 127.0.0.1:7789 }`），或者把域名放在 Cloudflare、阿里云 ESA 这类 CDN 后面。CDN 只转 HTTP，域名走了 CDN 就只能用 `wss://` 写法，好处是服务器 IP 不公开，CDN 帮着挡攻击。
 
 ### Cloudflare Workers
 
@@ -140,7 +140,7 @@ pnpm remove <包名>    # 移除依赖
 
 | 变量 | 作用 |
 | --- | --- |
-| `P2PCLI_SERVER` | 牵线服务器，`公钥@IP:端口` 或 `wss://域名`，默认 `wss://p2pcli.yscopy.cn` |
+| `P2PCLI_SERVER` | 牵线服务器，`公钥@IP或域名:端口` 或 `wss://域名`，默认 `wss://p2pcli.aiqji.cn` |
 | `P2PCLI_RELAY` | 自建中继地址，逗号分隔 |
 | `P2PCLI_DATA_DIR` | 数据目录，一台机器开两份测试时用 |
 | `RUST_LOG` | 日志级别，日志在数据目录的 `p2pcli.log` |
