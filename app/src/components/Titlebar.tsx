@@ -43,7 +43,7 @@ export function Titlebar({
         <img className="brand-symbol" src={appIcon} alt="" draggable={false} />
         <div className="flex items-center gap-1.5">
           <strong>P2PCLI</strong>
-          <Badge className="bg-accent text-accent-foreground">Beta</Badge>
+          <Badge className="border border-[#b78c3f]/50 bg-[#17130c] text-[#e7c477]">Beta</Badge>
         </div>
       </div>
       <Button
