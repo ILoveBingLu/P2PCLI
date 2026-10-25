@@ -28,6 +28,8 @@ use tracing::{info, warn};
 
 /// 每批推给界面的终端输出上限，太碎会拖慢界面
 const OUTPUT_BATCH: usize = 64 * 1024;
+/// 后端定时扫描，窗口隐藏后也继续检测；界面通过现有状态事件获取变化。
+const NEARBY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Tauri externalBin is next to the app executable in both development and
 /// installed builds (Contents/MacOS on macOS). It is selected at package time.
@@ -727,6 +729,23 @@ pub fn run() {
             });
 
             update::auto_install_for_test(app.handle());
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut tick = tokio::time::interval(NEARBY_REFRESH_INTERVAL);
+                // 睡眠恢复或扫描耗时较长时跳过错过的轮次，不集中补扫。
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    // 每轮读取当前节点，配置更新后不再扫描旧网络实例。
+                    let node = handle.state::<AppState>().node();
+                    if let Some(lan) = &node.lan {
+                        if let Err(error) = lan.scan(node.id()).await {
+                            tracing::debug!("附近设备自动刷新失败：{error:#}");
+                        }
+                    }
+                }
+            });
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

@@ -119,7 +119,14 @@ impl Lan {
 
     /// 临时启动短周期查询；不重建现有 endpoint，也不改变本机可见性。
     pub async fn scan(&self, me: EndpointId) -> Result<Vec<NearbyDevice>> {
-        let _guard = self.scan_lock.try_lock().context("正在扫描附近设备")?;
+        let _guard = match self.scan_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // 自动与手动刷新共享这一轮检测，等待完成即可，不排队重复扫描。
+                let _running = self.scan_lock.lock().await;
+                return Ok(self.devices());
+            }
+        };
         let probe = MdnsAddressLookup::builder()
             .service_name(SERVICE_NAME)
             .advertise(false)
