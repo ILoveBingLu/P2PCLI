@@ -30,6 +30,12 @@ export interface TerminalSession {
   agent?: AgentInfo | null;
 }
 
+/** 同一条连接共享的会话快照；读取失败后不能再把旧 AI 状态当成实时状态。 */
+export interface TerminalSessionSnapshot {
+  sessions: TerminalSession[] | null;
+  error: string | null;
+}
+
 /** AI 在干什么：干活中、等你确认、空闲 */
 export type AgentState = "working" | "waiting" | "idle";
 export interface AgentInfo {

@@ -1,22 +1,20 @@
 //! Persistent terminals live in tmux (macOS/Linux) or psmux (native Windows).
 //! The authenticated remote key is part of every name; clients only supply a random suffix.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use portable_pty::CommandBuilder;
 use tokio::process::Command;
 
-use crate::agents::{self, AgentInfo, AgentState, Processes, Quotas};
+use crate::agents::{self, AgentInfo, Processes, Quotas};
 use crate::proto::{TerminalDetails, TerminalSession};
 
 // 标题放最后：里面可能有制表符，分割时多出来的都归它
 const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_attached}\t#{status}\t#{window_index}\t#{window_name}\t#{session_windows}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_title}";
-/// AI 刚才还在干活、这次没看到干活的迹象时，先接着算干活：输出的间隙里转圈那一行会短暂消失
-const WORKING_HOLD: Duration = Duration::from_secs(4);
 const HEALTH_FORMAT: &str = "#{session_name}\t#{pid}\t#{socket_path}";
 
 #[derive(Default)]
@@ -33,8 +31,6 @@ pub struct SessionManager {
     health: std::sync::Mutex<Health>,
     /// 认会话里的 AI 用的进程表
     processes: std::sync::Mutex<Processes>,
-    /// 每个会话里的 AI 最后一次看到在干活的时间
-    working: std::sync::Mutex<HashMap<String, Instant>>,
     /// 各种 AI 账号的额度
     quotas: std::sync::Mutex<Quotas>,
 }
@@ -49,7 +45,6 @@ impl SessionManager {
             gate: tokio::sync::Mutex::new(()),
             health: Default::default(),
             processes: Default::default(),
-            working: Default::default(),
             quotas: Default::default(),
         }
     }
@@ -151,15 +146,8 @@ impl SessionManager {
             Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
             _ => String::new(),
         };
-        let mut state = agents::state(title, &screen);
-        let mut working = self.working.lock().unwrap();
-        if state == AgentState::Working {
-            working.insert(name.to_string(), Instant::now());
-            working.retain(|_, at| at.elapsed() < Duration::from_secs(60));
-        } else if state == AgentState::Idle && working.get(name).is_some_and(|at| at.elapsed() < WORKING_HOLD) {
-            state = AgentState::Working;
-        }
-        drop(working);
+        // 屏幕已经明确显示完成或空闲时立即生效；不能用固定延迟把完成状态重新盖成“干活中”。
+        let state = agents::state(title, &screen);
         let quota = self.quotas.lock().unwrap().get(kind);
         Some(AgentInfo { kind: kind.to_string(), name: display.to_string(), state, quota })
     }

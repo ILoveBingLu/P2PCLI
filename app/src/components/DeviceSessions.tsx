@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { LoaderCircle, SquareArrowOutUpRight, Terminal, Trash2 } from "lucide-react";
-import { api, type DeviceStatus, type RemoteInfo, type TerminalSession } from "../api";
+import { api, type DeviceStatus, type RemoteInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/components/ui/toast";
 import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 import { AGENT_STATE_TEXT, AgentIcon, AgentStateLabel } from "./Agent";
-import { relativeTime, sessionLabels, sessionTitles } from "./sessionText";
+import { sessionLabels, sessionTitles } from "./sessionText";
 
 export interface SidebarTab {
   key: number;
@@ -18,52 +18,30 @@ export interface SidebarTab {
   state: "opening" | "open" | "exited" | "closed";
 }
 
-export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, busy, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
+export function DeviceSessions({ target, status, tabs, snapshot, activeKey, busy, onChangeSessions, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
   target?: SessionTarget;
   /** 后台探测的结果：没连上时拿它显示会话列表 */
   status?: DeviceStatus;
   tabs: SidebarTab[];
-  /** 会话增减时变，变了就在后台重读 */
-  sessionsRev: number;
+  /** 与终端底部栏、标签共享的实时快照 */
+  snapshot?: TerminalSessionSnapshot;
   activeKey: number | null;
   busy: boolean;
   /** 没连上时点会话：先连上，再打开这个会话；null 是新建 */
+  onChangeSessions: (sessions: TerminalSession[]) => void;
   onConnectOpen: (sessionId: string | null) => void;
   onOpen: (target: SessionTarget, sessionId?: string) => void;
   onSelect: (key: number) => void;
   onEnded: (sessionId: string) => void;
   openMenu: (e: MouseEvent, actions: MenuAction[]) => void;
 }) {
-  const [sessions, setSessions] = useState<TerminalSession[]>([]);
-  const [loading, setLoading] = useState(!!target);
-  const [error, setError] = useState<string | null>(null);
   const [ending, setEnding] = useState<{ id: string; label: string } | null>(null);
-  // 只有第一次读的时候显示“读取会话…”，之后在后台刷新，列表不闪
-  const loaded = useRef(false);
-  const tabRevision = tabs.map((tab) => `${tab.key}:${tab.sessionId}:${tab.state}`).join("|");
   const connId = target?.connId;
-
-  useEffect(() => {
-    if (connId == null) return;
-    let alive = true, pending = false;
-    const load = async () => {
-      if (pending) return;
-      pending = true;
-      if (!loaded.current) setLoading(true);
-      try {
-        const value = await api.listTerminals(connId);
-        if (alive) { setSessions(value); setError(null); loaded.current = true; }
-      } catch (e) {
-        if (alive) setError(String(e));
-      } finally {
-        pending = false;
-        if (alive) setLoading(false);
-      }
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 5000);
-    return () => { alive = false; window.clearInterval(timer); };
-  }, [connId, tabRevision, sessionsRev]);
+  const sessions = snapshot?.sessions ?? [];
+  const loading = !!target && !snapshot;
+  const error = snapshot?.error ?? null;
+  // 刷新失败时保留会话基本信息，但旧 AI 状态不能再当作实时状态展示。
+  const live = snapshot?.sessions != null && !error;
 
   const listed = new Set(sessions.map((session) => session.id));
   const labels = sessionLabels(sessions);
@@ -75,7 +53,7 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
     label: titles.get(session.id) ?? "会话",
     number: labels.get(session.id) ?? "会话",
     status: session.attached ? "已连接" : "后台运行",
-    agent: session.agent ?? null,
+    agent: live ? session.agent ?? null : null,
   }));
   for (const tab of tabs) {
     if (tab.sessionId && listed.has(tab.sessionId)) continue;
@@ -95,7 +73,7 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
     if (!session || connId == null) return;
     setEnding(null);
     // 先从列表里拿掉，失败了下次刷新会放回来
-    setSessions((list) => list.filter((s) => s.id !== session.id));
+    onChangeSessions(sessions.filter((s) => s.id !== session.id));
     try {
       await api.endTerminal(connId, session.id);
       onEnded(session.id);
@@ -136,12 +114,14 @@ export function DeviceSessions({ target, status, tabs, sessionsRev, activeKey, b
           <span className="min-w-0 flex-1 truncate text-left">{row.label}</span>
           {row.agent
             ? <AgentStateLabel agent={row.agent} className="shrink-0 text-[10px]" />
-            : <span className="shrink-0 text-[10px] text-muted-foreground">{row.status}</span>}
+            : row.tab && row.tab.state !== "open"
+              ? <span className="shrink-0 text-[10px] text-muted-foreground">{row.status}</span>
+              : null}
         </Button>
       ))}
       {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
       {error && <p className="px-2 py-1 text-xs text-destructive break-words" role="alert">{error}</p>}
-      {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话，右键设备可以新建</p>}
+      {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
       {ending && (
         <AlertDialog open>
           <AlertDialogContent>
@@ -171,11 +151,6 @@ function OfflineSessions({ status, busy, onConnectOpen, openMenu }: {
   const titles = sessionTitles(sessions);
   const stale = !status?.sessions_live;
   const offline = status?.state === "offline";
-  const hint = sessions.length
-    ? stale && status?.sessions_at ? `上次看到 · ${relativeTime(status.sessions_at)}` : null
-    : status?.paired === false || status?.state === "old_version"
-      ? "连接一次以后，这里会显示会话"
-      : offline ? "离线，没有记住的会话" : status?.state === "online" ? "暂无会话" : null;
   return (
     <div className="flex min-w-0 flex-col gap-1" data-stale={stale ? "" : undefined}
       onContextMenu={(e) => {
@@ -185,7 +160,7 @@ function OfflineSessions({ status, busy, onConnectOpen, openMenu }: {
           { id: "open", label: "连接并打开", icon: <SquareArrowOutUpRight className="size-4" />, disabled: busy || offline, onAction: () => onConnectOpen(id) },
         ]);
       }}>
-      {hint && <p className="px-2 pt-0.5 text-[10px] text-muted-foreground">{hint}</p>}
+      {sessions.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
       {sessions.map((s) => (
         <Button key={s.id} variant="ghost" data-offline-session={s.id}
           className="offline-session h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
@@ -194,9 +169,7 @@ function OfflineSessions({ status, busy, onConnectOpen, openMenu }: {
           onClick={() => onConnectOpen(s.id)}>
           {s.agent ? <AgentIcon kind={s.agent.kind} className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
           <span className="min-w-0 flex-1 truncate text-left">{titles.get(s.id) ?? "会话"}</span>
-          {s.agent && !stale && !offline
-            ? <AgentStateLabel agent={s.agent} className="shrink-0 text-[10px]" />
-            : <span className="shrink-0 text-[10px] text-muted-foreground">{s.attached ? "在用" : "后台运行"}</span>}
+          {s.agent && !stale && !offline && <AgentStateLabel agent={s.agent} className="shrink-0 text-[10px]" />}
         </Button>
       ))}
     </div>

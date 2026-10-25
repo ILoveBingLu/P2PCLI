@@ -29,10 +29,13 @@ import {
   type Overview,
   type PathInfo,
   type RemoteInfo,
+  type TerminalSession,
+  type TerminalSessionSnapshot,
   type TermStatus,
   type Transfer,
 } from "./api";
 import { TerminalView } from "./TerminalView";
+import { pollConnections } from "./lib/pollConnections";
 import { TerminalStatusbar } from "./components/TerminalStatusbar";
 import { selftestSawOverview } from "./selftest";
 import { ConnectionPopover } from "./components/ConnectionPopover";
@@ -92,8 +95,9 @@ export default function App() {
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
-  /** 会话页里结束了会话就加一，侧边栏的会话列表跟着在后台刷新 */
+  /** 会话页里结束了会话就加一，各处共享的会话快照跟着在后台刷新 */
   const [sessionsRev, setSessionsRev] = useState(0);
+  const [liveSessions, setLiveSessions] = useState<Record<number, TerminalSessionSnapshot>>({});
   const [showConnect, setShowConnect] = useState(false);
   const [showLocalDevice, setShowLocalDevice] = useState(false);
   const [scanningNearby, setScanningNearby] = useState(false);
@@ -166,33 +170,44 @@ export default function App() {
       return tab ? () => { setShowSettings(false); setSessionTarget(null); setActiveKey(tab.key); } : null;
     },
   );
-  /** 标签对应的会话里跑着的 AI：用后台探测的结果，探测拿不到最新的就不显示 */
+  /** 标签、底部栏和侧边栏使用同一份实时快照，不再各自猜测当前状态。 */
   const tabAgent = (t: Tab) => {
-    const device = ov?.devices.find((d) => d.endpoint_id === t.info.endpoint_id);
-    if (!t.sessionId || !device?.sessions_live) return null;
-    return device.sessions.find((s) => s.id === t.sessionId)?.agent ?? null;
+    const snapshot = liveSessions[t.connId];
+    if (!t.sessionId || t.state === "closed" || !snapshot?.sessions || snapshot.error) return null;
+    return snapshot.sessions.find((s) => s.id === t.sessionId)?.agent ?? null;
   };
   // One path snapshot per live connection, shared by the sidebar and status bar.
   const liveConnectionKey = [...new Set([
     ...tabs.filter((tab) => tab.state !== "closed").map((tab) => tab.connId),
     ...(sessionTarget ? [sessionTarget.connId] : []),
   ])].sort((a, b) => a - b).join(",");
+  const updateLiveSessions = useCallback((connId: number, sessions: TerminalSession[]) => {
+    setLiveSessions((current) => ({
+      ...current,
+      [connId]: { sessions, error: current[connId]?.error ?? null },
+    }));
+  }, []);
+  // 一条连接只轮询一次，底部栏、侧边栏和标签共同消费同一个快照。
   useEffect(() => {
     if (!liveConnectionKey) return;
-    let disposed = false;
-    let timer: number | undefined;
-    const tick = async () => {
-      await Promise.all(liveConnectionKey.split(",").map(async (id) => {
-        const connId = Number(id);
-        try {
-          const path = await api.pathInfo(connId);
-          if (!disposed) setPaths((current) => ({ ...current, [connId]: path }));
-        } catch { /* Keep the last sample until a refresh or disconnect. */ }
-      }));
-      if (!disposed) timer = window.setTimeout(() => void tick(), 3000);
-    };
-    void tick();
-    return () => { disposed = true; window.clearTimeout(timer); };
+    return pollConnections(
+      liveConnectionKey.split(",").map(Number),
+      (connId) => api.listTerminals(connId),
+      (connId, sessions) => setLiveSessions((current) => ({ ...current, [connId]: { sessions, error: null } })),
+      (connId, error) => setLiveSessions((current) => ({
+        ...current,
+        [connId]: { sessions: current[connId]?.sessions ?? null, error: String(error) },
+      })),
+    );
+  }, [liveConnectionKey, sessionsRev]);
+  useEffect(() => {
+    if (!liveConnectionKey) return;
+    return pollConnections(
+      liveConnectionKey.split(",").map(Number),
+      (connId) => api.pathInfo(connId),
+      (connId, path) => setPaths((current) => ({ ...current, [connId]: path })),
+      () => { /* Keep the last sample until a refresh or disconnect. */ },
+    );
   }, [liveConnectionKey]);
 
   const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string) => {
@@ -386,9 +401,10 @@ export default function App() {
       />
       {!showSettings && <ConnectionSidebar
         ov={ov}
-        sessionsRev={sessionsRev}
+        liveSessions={liveSessions}
         onSessionEnded={sessionEnded}
         onSessionsChanged={() => setSessionsRev((v) => v + 1)}
+        onSessionsLocalChange={updateLiveSessions}
         onPendingOpen={(endpointId, sessionId) => { pendingOpen.current = { endpointId, sessionId }; }}
         busy={connection.busy}
         open={sidebar.open}
@@ -646,12 +662,11 @@ export default function App() {
             </div>
             {activeTab && <TerminalStatusbar
               key={activeTab.key}
-              connId={activeTab.connId}
               sessionId={activeTab.sessionId}
               info={activeTab.info}
               state={activeTab.state}
               path={paths[activeTab.connId]}
-              visible={!showSettings && !sessionTarget}
+              snapshot={liveSessions[activeTab.connId]}
             />}
           </Tabs>
 

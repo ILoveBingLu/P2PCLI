@@ -1,7 +1,7 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
 import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
-import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo } from "../api";
+import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
@@ -12,10 +12,9 @@ import type { SessionTarget } from "./RemoteSessions";
 
 const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
 
-export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onPendingOpen }: {
+export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onSessionsLocalChange, onPendingOpen }: {
   ov: Overview | null;
-  /** 会话被结束时变，设备下面的会话列表跟着刷新 */
-  sessionsRev: number;
+  liveSessions: Record<number, TerminalSessionSnapshot>;
   busy: boolean;
   open: boolean;
   scanning: boolean;
@@ -36,6 +35,7 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   onSessionEnded: (endpointId: string, sessionId: string) => void;
   /** 要所有会话列表重读一遍 */
   onSessionsChanged: () => void;
+  onSessionsLocalChange: (connId: number, sessions: TerminalSession[]) => void;
   /** 没连上的设备上点了会话：连上以后直接打开它（null 是新建） */
   onPendingOpen: (endpointId: string, sessionId: string | null) => void;
 }) {
@@ -253,8 +253,10 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
                       <div className="pb-2">
                         <div className="ml-4 min-w-0 border-l border-border pl-2">
                           {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
-                            key={target?.connId ?? "disconnected"} target={target} status={status} tabs={deviceTabs} sessionsRev={sessionsRev}
+                            key={target?.connId ?? "disconnected"} target={target} status={status} tabs={deviceTabs}
+                            snapshot={target ? liveSessions[target.connId] : undefined}
                             activeKey={sessionTarget ? null : activeKey} busy={busy}
+                            onChangeSessions={(sessions) => target && onSessionsLocalChange(target.connId, sessions)}
                             onConnectOpen={(id) => connectOpen(device, id)}
                             onOpen={onOpenSession} onSelect={onSelectTab}
                             onEnded={(id) => onSessionEnded(device.endpoint_id, id)}

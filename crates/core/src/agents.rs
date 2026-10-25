@@ -196,17 +196,38 @@ const CURSORS: &[&str] = &["❯", "›", ">", "▶", "▸", "➤", "●", "◉",
 const SPINNERS: &[char] = &['✻', '✶', '✳', '✢', '·', '✽', '*', '∗', '◐', '◓', '◑', '◒'];
 
 /// 按会话标题和屏幕内容判断 AI 的状态。
-/// 先看是不是在等你，再看是不是在干活：确认框里也有“Esc to cancel”这种字
+/// 确认框优先；忙碌和完成提示按屏幕从下往上的顺序判断，避免上一轮状态盖过新一轮。
 pub fn state(title: &str, screen: &str) -> AgentState {
     let mut lines: Vec<String> = screen.lines().rev().map(clean).filter(|l| !l.is_empty()).take(18).collect();
     lines.reverse();
     if waiting(&lines) {
         AgentState::Waiting
-    } else if working(title, &lines) {
-        AgentState::Working
     } else {
-        AgentState::Idle
+        for (depth, line) in lines.iter().rev().take(14).enumerate() {
+            if depth < 8 && completed_line(line) {
+                return AgentState::Idle;
+            }
+            if working_line(line) {
+                return AgentState::Working;
+            }
+        }
+        // 没有明确的屏幕状态时才使用标题；完成后标题里的转圈符号可能还没清掉。
+        if title.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)) {
+            AgentState::Working
+        } else {
+            AgentState::Idle
+        }
     }
+}
+
+/// Claude Code、Codex 等结束后会留下 “Worked for …” 一行。
+/// 只看靠下的完成标记，避免把回复正文里提到的同类文字误认为已经完成。
+fn completed_line(line: &str) -> bool {
+    let mut chars = line.chars();
+    let marked = chars.next().is_some_and(|c| SPINNERS.contains(&c) || matches!(c, '•' | '✦' | '✓'))
+        && chars.next() == Some(' ');
+    let lower = chars.as_str().to_lowercase();
+    marked && ["worked for ", "completed in ", "finished in "].iter().any(|prefix| lower.starts_with(prefix))
 }
 
 /// 去掉首尾空白和框线（CodeBuddy 的确认框整个包在 │ 里）
@@ -252,16 +273,9 @@ fn option(line: &str) -> Option<(bool, u32)> {
     Some((cursor, rest[..digits].parse().ok()?))
 }
 
-fn working(title: &str, lines: &[String]) -> bool {
-    // 标题里有盲文转圈符号
-    if title.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)) {
-        return true;
-    }
-    let tail = &lines[lines.len().saturating_sub(14)..];
-    tail.iter().any(|l| {
-        let lower = l.to_lowercase();
-        BUSY_HINTS.iter().any(|h| lower.contains(h)) || spinner_line(l)
-    })
+fn working_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    BUSY_HINTS.iter().any(|h| lower.contains(h)) || spinner_line(line)
 }
 
 /// “✻ Cogitating…”这种：开头一个转圈符号，第一个词以省略号结尾。干完会变成“✻ Worked for 2s”，没有省略号
@@ -622,5 +636,32 @@ mod tests {
         // AI 回复里普通的编号列表不算在等你确认
         assert_eq!(state("", CHAT_LIST), Idle);
         assert_eq!(state("", ""), Idle);
+    }
+
+    #[test]
+    fn completion_overrides_stale_busy_evidence() {
+        use AgentState::*;
+        // 完成行上方还留着忙碌提示时，不能继续把历史文本当成当前状态。
+        let with_history = format!("✽ Cogitating… (4s · thinking)\n{CLAUDE_DONE}");
+        assert_eq!(state("", &with_history), Idle);
+        // 某些 CLI 的 pane 标题会晚一步清掉 spinner，也不能盖过明确的完成行。
+        assert_eq!(state("⠙ claude", CLAUDE_DONE), Idle);
+        assert_eq!(state("", "• Worked for 3s\n› Ask Codex to do anything"), Idle);
+        // 没有完成标记时，标题 spinner 仍然是有效的忙碌信号。
+        assert_eq!(state("⠙ gemini", "> Type your message"), Working);
+    }
+
+    #[test]
+    fn latest_screen_state_wins_across_turns() {
+        use AgentState::*;
+        // 上一轮完成行还在，但新一轮已经开始；不能误报空闲或发送完成通知。
+        assert_eq!(state("", "✻ Worked for 2s\n❯ Continue\n✽ Cogitating… (1s)\n❯"), Working);
+        assert_eq!(state("", "• Worked for 3s\n› Continue\nWorking (esc to interrupt)"), Working);
+        // 新一轮也完成后，以最下面的完成标记为准。
+        assert_eq!(state("⠙ claude", "✻ Worked for 2s\n✽ Cogitating… (1s)\n✓ Completed in 4s\n❯"), Idle);
+        // 确认框仍然优先，里面的取消提示不是忙碌信号。
+        assert_eq!(state("", "✻ Worked for 2s\n❯ 1. Yes\n2. No\nEnter to confirm · Esc to cancel"), Waiting);
+        // 正文中引用完成短语不能覆盖有效的标题忙碌信号。
+        assert_eq!(state("⠙ claude", "• The message says worked for 3s"), Working);
     }
 }

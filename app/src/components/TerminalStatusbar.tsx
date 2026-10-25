@@ -1,58 +1,44 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { CircleAlert, Folder, Layers } from "lucide-react";
-import { api, pathLabel, type PathInfo, type RemoteInfo, type TerminalSession } from "../api";
+import type { ReactNode } from "react";
+import { CircleAlert, Folder, Layers, SquareTerminal } from "lucide-react";
+import { pathLabel, type PathInfo, type RemoteInfo, type TerminalSessionSnapshot } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { AGENT_STATE_TEXT, AgentIcon, AgentQuotaLabel, AgentStateLabel } from "./Agent";
+import { sessionLabels } from "./sessionText";
 
 function Detail({ tip, children, className = "" }: { tip: string; children: ReactNode; className?: string }) {
   return <Tooltip content={tip}><TooltipTrigger className={`terminal-status-detail ${className}`}>{children}</TooltipTrigger></Tooltip>;
 }
 
-export function TerminalStatusbar({ connId, sessionId, info, state, path, visible }: {
-  connId: number;
+export function TerminalStatusbar({ sessionId, info, state, path, snapshot }: {
   sessionId?: string;
   info: RemoteInfo;
   state: "opening" | "open" | "exited" | "closed";
   path?: PathInfo;
-  visible: boolean;
+  snapshot?: TerminalSessionSnapshot;
 }) {
-  const [snapshot, setSnapshot] = useState<{ session: TerminalSession } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!visible || !sessionId || state === "opening" || state === "closed") return;
-    let disposed = false;
-    let timer: number | undefined;
-    const refresh = async () => {
-      try {
-        const sessions = await api.listTerminals(connId);
-        if (disposed) return;
-        const session = sessions.find((entry) => entry.id === sessionId);
-        setSnapshot(session ? { session } : null);
-        setError(session ? null : "会话已结束或暂时不可用");
-      } catch {
-        if (!disposed) setError("状态暂时无法更新，显示上次读取的信息");
-      } finally {
-        // 完成后再调度，慢请求不叠加；切换页面或断开后停止。
-        if (!disposed) timer = window.setTimeout(() => void refresh(), 3000);
-      }
-    };
-    void refresh();
-    return () => { disposed = true; window.clearTimeout(timer); };
-  }, [connId, sessionId, state, visible]);
-
-  const details = snapshot?.session.details;
-  const agent = snapshot?.session.agent;
+  const sessions = snapshot?.sessions ?? [];
+  const session = sessionId ? sessions.find((entry) => entry.id === sessionId) : undefined;
+  const label = session ? sessionLabels(sessions).get(session.id) ?? "会话" : null;
+  const error = snapshot?.error ??
+    (sessionId && snapshot?.sessions && !session ? "会话已结束或暂时不可用" : null);
+  const details = session?.details;
+  // 断开或刷新失败时，旧的“干活中”不能继续冒充实时状态。
+  const agent = state !== "closed" && !error ? session?.agent : null;
   const stateText = { opening: "打开中", open: "已连接", exited: "已脱离", closed: "已断开" }[state];
   const windowText = details?.window_name
     ? `${details.window_index == null ? "" : `${details.window_index}: `}${details.window_name}`
     : details?.window_index != null ? `窗口 ${details.window_index}` : null;
+  const created = session?.created_at
+    ? new Date(session.created_at * 1000).toLocaleString("zh-CN") : null;
 
   return (
     <footer className="terminal-statusbar" aria-label="当前终端状态">
       <Detail tip={`${info.name} · ${info.user}`}>
         <span className="status-dot" data-kind={state === "open" ? path?.kind ?? "unknown" : "off"} />
         <span>{stateText}</span>
+      </Detail>
+      <Detail tip={created ? `创建于 ${created}` : "后台会话"}>
+        <SquareTerminal /><span>{label ?? "会话"}</span>
       </Detail>
       {windowText && <Detail tip={details?.window_count ? `当前窗口 · 共 ${details.window_count} 个窗口` : "当前窗口"} className="terminal-status-window">
         <Layers /><span className="truncate">{windowText}</span>

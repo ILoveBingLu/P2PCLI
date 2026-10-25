@@ -249,10 +249,18 @@ impl Prober {
         if !paired {
             return;
         }
-        if let Ok(Some(list)) = ask_sessions(conn).await
-            && let Some(seen) = self.seen.lock().unwrap().get_mut(&key)
-        {
-            seen.sessions = Some((list, now_secs()));
+        let result = ask_sessions(conn).await;
+        if let Some(seen) = self.seen.lock().unwrap().get_mut(&key) {
+            match result {
+                Ok(Some(list)) => seen.sessions = Some((list, now_secs())),
+                // 查询失败或对方不支持实时会话时，回退到缓存并标记为非实时，
+                // 不能让最后一次“干活中”无限期冒充当前状态。
+                Ok(None) => {
+                    seen.paired = Some(false);
+                    seen.sessions = None;
+                }
+                Err(_) => seen.sessions = None,
+            }
         }
     }
 
