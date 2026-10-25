@@ -1,7 +1,7 @@
 //! 被连方：起一个真终端（macOS 登录 shell，Windows PowerShell），接到一条流上。
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -156,6 +156,9 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
     });
 
     let (exit_tx, mut exit_rx) = oneshot::channel::<Option<u32>>();
+    // 子进程真的退出了：写入线程等这个信号才放掉写入端，见下面
+    let gone = Arc::new((Mutex::new(false), Condvar::new()));
+    let wait_gone = gone.clone();
     let wait_session = session_id.clone();
     std::thread::spawn(move || {
         let code = match child.wait() {
@@ -173,6 +176,9 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
                 None
             }
         };
+        let (lock, cvar) = &*wait_gone;
+        *lock.lock().unwrap() = true;
+        cvar.notify_all();
         let _ = exit_tx.send(code);
     });
 
@@ -184,6 +190,16 @@ where R: AsyncRead + Unpin + Send + 'static, W: AsyncWrite + Unpin + Send {
                 break;
             }
             let _ = writer.flush();
+        }
+        // portable-pty 放掉写入端时会往终端里写“换行 + Ctrl+D”，好让里面的程序读到输入结束。
+        // 可这里跑的是 tmux 的附着客户端，它会把这两个字节原样转给会话里的 shell，shell 一退出后台会话就没了；
+        // 断开时这边同时在杀附着客户端，谁先谁后看运气。所以等客户端真的退出了再放；等不到就宁可不放，漏一个文件描述符
+        let (lock, cvar) = &*gone;
+        let exited = cvar.wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |gone| !*gone).unwrap().0;
+        if *exited {
+            drop(writer);
+        } else {
+            std::mem::forget(writer);
         }
     });
 
