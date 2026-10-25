@@ -4,6 +4,7 @@ import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Settings, Wifi } from "lucide
 import appIcon from "../../src-tauri/icons/128x128.png";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import type { Overview } from "../api";
 import { LocalDevicePopover } from "./LocalDevicePopover";
 import { sidebarShortcut } from "./useSidebar";
@@ -49,7 +50,6 @@ export function Titlebar({
       <Button
         variant="ghost"
         size="icon-sm"
-        className="mr-2"
         aria-label="设置"
         title="设置"
         disabled={!settingsEnabled}
@@ -57,6 +57,7 @@ export function Titlebar({
       >
         <Settings />
       </Button>
+      <Separator orientation="vertical" className="mx-2 h-4 shrink-0 self-center" />
       <Button
         variant={onBack ? "secondary" : "ghost"}
         size={onBack ? "sm" : "icon-sm"}
