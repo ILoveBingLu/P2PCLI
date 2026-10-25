@@ -14,6 +14,8 @@ export function useUpdater() {
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
+  /** 下载安装失败的原因；和后台检查失败分开，检查失败不算更新失败 */
+  const [installError, setInstallError] = useState<string | null>(null);
   /** 点了“稍后”的版本，这次运行里不再提示；有更新的版本照样提示 */
   const [dismissed, setDismissed] = useState<string | null>(null);
   const busy = useRef(false);
@@ -37,11 +39,13 @@ export function useUpdater() {
   const install = useCallback(async () => {
     setInstalling(true);
     setError(null);
+    setInstallError(null);
     setProgress(null);
     try {
       await api.installUpdate(setProgress);
     } catch (e) {
       setError(String(e));
+      setInstallError(String(e));
       setInstalling(false);
     }
   }, []);
@@ -63,6 +67,7 @@ export function useUpdater() {
     checkedAt,
     error,
     installing,
+    installError,
     progress,
     check,
     install,

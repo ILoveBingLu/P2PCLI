@@ -209,13 +209,32 @@ mockIPC(
       }
       case "plugin:app|version":
         return "0.1.0";
-      // s=update：发布页上有新版本
+      // s=update：发布页上有新版本；s=update-fail：下载到一半失败
       case "check_update":
-        return s === "update"
+        return s === "update" || s === "update-fail"
           ? { version: "0.1.1", current_version: "0.1.0", notes: "局域网发现更稳定\n修复连接面板偶尔不弹出" }
           : null;
-      case "install_update":
-        return new Promise(() => {});
+      case "install_update": {
+        // 模拟下载 30 MB，大约 12 秒下完，然后进入安装（真软件这时会重启，这里停在安装）
+        const total = 30 * 1024 * 1024;
+        let index = 0;
+        let downloaded = 0;
+        const send = (message: unknown) =>
+          (window as any).__TAURI_INTERNALS__.runCallback(args.progress.id, { index: index++, message });
+        return new Promise((_, reject) => {
+          const timer = window.setInterval(() => {
+            downloaded = Math.min(total, downloaded + 160 * 1024 * (3 + Math.random() * 4));
+            send({ event: "downloading", downloaded, total });
+            if (s === "update-fail" && downloaded > total * 0.4) {
+              window.clearInterval(timer);
+              reject("下载更新失败：网络连接中断，稍后再试");
+            } else if (downloaded >= total) {
+              window.clearInterval(timer);
+              send({ event: "installing" });
+            }
+          }, 250);
+        });
+      }
       case "set_password_fixed":
         ov.password_fixed = !!args.fixed;
         return null;

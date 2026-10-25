@@ -1193,3 +1193,167 @@
 .drop-overlay[data-blocked] svg {
   color: var(--muted-foreground);
 }
+
+/* 更新提示：标题栏正中的胶囊，像灵动岛。收起时一小条，下载中鼠标移上去撑开成卡片；
+   宽高由组件按当前那层内容量出来，变化时一起过渡，带一点回弹 */
+.update-island {
+  position: fixed;
+  top: 7px;
+  left: 50%;
+  z-index: 40;
+  translate: -50% 0;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 15px;
+  background: #161618;
+  color: #f5f5f7;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  transition:
+    width 0.42s cubic-bezier(0.32, 1.2, 0.5, 1),
+    height 0.42s cubic-bezier(0.32, 1.2, 0.5, 1),
+    border-radius 0.42s cubic-bezier(0.32, 1.2, 0.5, 1);
+}
+.update-island[data-open] {
+  border-radius: 20px;
+}
+.island-layer {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% 0;
+  transition: opacity 0.18s ease;
+}
+.island-layer[aria-hidden="true"] {
+  opacity: 0;
+  pointer-events: none;
+}
+.update-island[data-open] .island-expanded {
+  transition-delay: 0.08s;
+}
+.island-compact {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px 0 11px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.island-compact:has(button) {
+  padding-right: 4px;
+}
+.island-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 340px;
+  padding: 14px 16px;
+  font-size: 13px;
+}
+/* 百分比留够三位数的宽度，数字变了胶囊也不跟着抖 */
+.island-percent {
+  min-width: 4ch;
+  font-variant-numeric: tabular-nums;
+}
+.island-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+.island-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.island-muted {
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: rgb(245 245 247 / 0.5);
+}
+.island-pill-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+.island-pill-button:hover {
+  filter: brightness(1.1);
+}
+.island-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: -3px;
+  border-radius: 999px;
+  color: rgb(245 245 247 / 0.5);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.island-close:hover {
+  background: rgb(255 255 255 / 0.1);
+  color: #f5f5f7;
+}
+.island-close svg {
+  width: 13px;
+  height: 13px;
+}
+.island-ring {
+  rotate: -90deg;
+  fill: none;
+  stroke-width: 2.2;
+}
+.island-ring circle:first-child {
+  stroke: rgb(255 255 255 / 0.18);
+}
+.island-ring circle:last-child {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.3s ease;
+}
+.island-bar {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 0.1);
+}
+.island-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.island-bar[data-indeterminate] > span {
+  width: 35%;
+  animation: island-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes island-indeterminate {
+  from { left: -35%; }
+  to { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-island,
+  .island-layer,
+  .island-ring circle:last-child,
+  .island-bar > span {
+    transition: none;
+  }
+  .island-bar[data-indeterminate] > span {
+    animation: none;
+  }
+}
