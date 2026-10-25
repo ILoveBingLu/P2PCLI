@@ -408,6 +408,99 @@ async fn agent_in_session_is_recognized_with_its_state() {
     host.shutdown().await;
 }
 
+/// 真的跑一个 Claude Code：会话列表里要读出它的模型、思考强度和权限模式，照输入框的做法切换后跟着变。
+/// /model、/effort 会写进 Claude Code 的配置当新会话的默认值，所以必须用临时配置目录（CLAUDE_CONFIG_DIR）和假的 API key，
+/// 不碰自己的 ~/.claude 和登录；切这几样不调接口，假 key 就够了。要真的起 tmux 和 Claude Code，所以默认不跑：
+/// P2PCLI_TEST_SESSION_PROGRAM=<tmux> P2PCLI_TEST_CLAUDE=<claude> CLAUDE_CONFIG_DIR=<空的临时目录> cargo test -p p2pcli-core --test e2e claude_settings -- --ignored
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux and Claude Code"]
+async fn claude_settings_are_read_and_switched() {
+    use p2pcli_core::agents::AgentSettings;
+
+    let claude = std::env::var("P2PCLI_TEST_CLAUDE").expect("P2PCLI_TEST_CLAUDE 要指向 claude 程序");
+    let config = std::path::PathBuf::from(std::env::var("CLAUDE_CONFIG_DIR").expect("CLAUDE_CONFIG_DIR 要设成临时目录"));
+    assert_ne!(Some(config.clone()), std::env::home_dir().map(|h| h.join(".claude")), "不能用自己的 Claude Code 配置跑");
+    let work = temp_dir("claude-work");
+    std::fs::create_dir_all(&work).unwrap();
+    let work = work.canonicalize().unwrap();
+    let key = "sk-ant-api03-p2pcli-test-not-a-real-key";
+    // 跳过第一次启动的引导、信任目录、确认 API key 三个问题
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join(".claude.json"), serde_json::json!({
+        "hasCompletedOnboarding": true,
+        "customApiKeyResponses": { "approved": [&key[key.len() - 20..]], "rejected": [] },
+        "projects": { work.to_string_lossy(): { "hasTrustDialogAccepted": true } },
+    }).to_string()).unwrap();
+
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig {
+        data_dir: temp_dir("claude-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("claude-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let (mut input, output) = remote.open_terminal(120, 40).await.unwrap();
+    let id = output.session_id.clone();
+    input.write(format!("cd '{}' && ANTHROPIC_API_KEY={key} exec '{claude}' --bare\r", work.display()).as_bytes()).await.unwrap();
+
+    let settings = || {
+        let (remote, id) = (&remote, &id);
+        async move {
+            let sessions = remote.list_terminals().await.unwrap();
+            sessions.into_iter().find(|s| &s.id == id).and_then(|s| s.agent).and_then(|a| a.settings).unwrap_or_default()
+        }
+    };
+    async fn wait_for(what: &str, read: impl AsyncFn() -> AgentSettings, ok: impl Fn(&AgentSettings) -> bool) -> AgentSettings {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let s = read().await;
+                if ok(&s) {
+                    return s;
+                }
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+        }).await.unwrap_or_else(|_| panic!("等不到{what}"))
+    }
+    // 刚开的会话还没有对话记录，模型和强度从横幅和底栏读
+    let first = wait_for("开头的模型、强度和权限模式", &settings, |s| s.model.is_some() && s.effort.is_some() && s.mode.is_some()).await;
+    assert_eq!(first.mode.as_deref(), Some("default"), "新配置默认是手动确认：{first:?}");
+    eprintln!("刚开：{first:?}");
+
+    // 输入框的发法：整段粘贴，再补一个回车
+    for (command, what) in [("/model sonnet", "换成 Sonnet"), ("/effort high", "强度变成 high")] {
+        input.write(format!("\x1b[200~{command}\x1b[201~").as_bytes()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        input.write(b"\r").await.unwrap();
+        let s = wait_for(what, &settings, |s| match command {
+            "/model sonnet" => s.model.as_deref().is_some_and(|m| m.starts_with("Sonnet")),
+            _ => s.effort.as_deref() == Some("high"),
+        }).await;
+        eprintln!("{command} 之后：{s:?}");
+    }
+    // 权限模式只能 Shift+Tab 轮换：每按一下核对一次，到了就停
+    let mut seen = vec![first.mode.clone().unwrap()];
+    while seen.last().map(String::as_str) != Some("plan") {
+        assert!(seen.len() < 6, "转了一圈也没到计划模式：{seen:?}");
+        input.write(b"\x1b[Z").await.unwrap();
+        let before = seen.last().cloned();
+        let s = wait_for("权限模式变化", &settings, |s| s.mode.is_some() && s.mode != before).await;
+        seen.push(s.mode.unwrap());
+    }
+    assert_eq!(seen, ["default", "acceptEdits", "plan"]);
+    // 切的结果确实落在临时配置里，没碰到自己的
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(config.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(saved["model"], "sonnet");
+
+    remote.end_terminal(id).await.unwrap();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
 /// 在线探测：配对过的能拿会话列表；没配对的只知道在线和延迟；旧版本认得出来，不当成离线；对方关了 ping 就不通
 #[tokio::test(flavor = "multi_thread")]
 async fn presence_probe_paired_unpaired_and_old_version() {

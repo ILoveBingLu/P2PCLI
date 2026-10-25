@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use portable_pty::CommandBuilder;
 use tokio::process::Command;
 
-use crate::agents::{self, AgentInfo, Processes, Quotas};
+use crate::agents::{self, AgentInfo, Processes, Quotas, Settings};
 use crate::proto::{TerminalDetails, TerminalSession};
 
 // 标题放最后：里面可能有制表符，分割时多出来的都归它
@@ -33,6 +33,8 @@ pub struct SessionManager {
     processes: std::sync::Mutex<Processes>,
     /// 各种 AI 账号的额度
     quotas: std::sync::Mutex<Quotas>,
+    /// 会话里 AI 现在的模型、强度、权限模式
+    settings: std::sync::Mutex<Settings>,
 }
 
 impl SessionManager {
@@ -46,6 +48,7 @@ impl SessionManager {
             health: Default::default(),
             processes: Default::default(),
             quotas: Default::default(),
+            settings: Default::default(),
         }
     }
 
@@ -141,7 +144,7 @@ impl SessionManager {
 
     /// 会话里跑的是不是命令行 AI，是的话再读一次屏幕判断它在干什么。屏幕内容只在这里用，不往外发
     async fn agent(&self, name: &str, pane_pid: Option<u32>, title: &str) -> Option<AgentInfo> {
-        let (kind, display) = self.processes.lock().unwrap().agent_under(pane_pid?)?;
+        let (pid, kind, display) = self.processes.lock().unwrap().agent_under(pane_pid?)?;
         let screen = match self.command(&["capture-pane", "-p", "-t", name]).await {
             Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
             _ => String::new(),
@@ -149,7 +152,8 @@ impl SessionManager {
         // 屏幕已经明确显示完成或空闲时立即生效；不能用固定延迟把完成状态重新盖成“干活中”。
         let state = agents::state(title, &screen);
         let quota = self.quotas.lock().unwrap().get(kind);
-        Some(AgentInfo { kind: kind.to_string(), name: display.to_string(), state, quota })
+        let settings = self.settings.lock().unwrap().get(kind, pid, &screen);
+        Some(AgentInfo { kind: kind.to_string(), name: display.to_string(), state, quota, settings })
     }
 
     pub async fn attach(&self, owner: &str, requested: Option<&str>, cols: u16, rows: u16) -> Result<(CommandBuilder, String)> {

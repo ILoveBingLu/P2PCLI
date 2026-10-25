@@ -29,6 +29,7 @@ import {
   type Overview,
   type PathInfo,
   type RemoteInfo,
+  type AgentSettings,
   type TerminalSession,
   type TerminalSessionSnapshot,
   type TermStatus,
@@ -47,6 +48,7 @@ import { UpdateIsland } from "./components/UpdateIsland";
 import { useAgentAlerts } from "./components/useAgentAlerts";
 import { AgentTabTitle } from "./components/Agent";
 import { AgentComposer, isMac } from "./components/AgentComposer";
+import { AgentSettingsBar, CLAUDE_EFFORTS, CLAUDE_MODELS, CLAUDE_MODES, choiceLabel, type AgentSetting } from "./components/AgentSettingsBar";
 import {
   ApproveDialog,
   DiagDialog,
@@ -196,6 +198,61 @@ export default function App() {
     if (!handle) return;
     handle.paste(text);
     window.setTimeout(() => handle.enter(), 80);
+  };
+  /** 正在切 AI 设置的标签和哪一项；切的时候按钮转圈，不让再点 */
+  const [switching, setSwitching] = useState<{ tabKey: number; what: AgentSetting } | null>(null);
+  /** 切模型、强度、权限模式，照用户自己在终端里的做法：/model、/effort 命令，权限模式只能 Shift+Tab 轮换。
+   *  切完马上重新拉一次会话列表核对，不等下一轮刷新；到点没变就说一声，让用户看终端里的提示 */
+  const switchAgent = async (tab: Tab, what: AgentSetting, id: string) => {
+    const handle = termHandles.current.get(tab.key);
+    if (!handle || !tab.sessionId || switching) return;
+    const read = async () => {
+      const sessions = await api.listTerminals(tab.connId);
+      updateLiveSessions(tab.connId, sessions);
+      return sessions.find((s) => s.id === tab.sessionId)?.agent?.settings ?? null;
+    };
+    /** 隔一会儿读一次，直到 ok 或者超时 */
+    const until = async (ok: (s: AgentSettings | null) => boolean, ms: number) => {
+      for (const started = Date.now(); Date.now() - started < ms;) {
+        await new Promise((r) => window.setTimeout(r, 250));
+        const s = await read().catch(() => null);
+        if (ok(s)) return s;
+      }
+      return null;
+    };
+    setSwitching({ tabKey: tab.key, what });
+    try {
+      if (what === "mode") {
+        const label = choiceLabel(CLAUDE_MODES, id);
+        let mode = tabAgent(tab)?.settings?.mode ?? null;
+        const start = mode;
+        // 轮一圈最多五档；每按一下等它真变了再按下一下，回到起点说明这一档这次启动没开
+        for (let i = 0; mode && mode !== id && i < 6; i++) {
+          handle.keys("\x1b[Z");
+          const before = mode;
+          mode = (await until((s) => !!s?.mode && s.mode !== before, 2000))?.mode ?? null;
+          if (mode === start) break;
+        }
+        if (mode !== id)
+          toast.notice(`切不到${label}`, {
+            warning: true,
+            description: id === "bypassPermissions" ? "启动 Claude Code 时没加 --dangerously-skip-permissions，这一档不在轮换里" : "终端里看看现在是什么情况",
+          });
+      } else {
+        handle.paste(`/${what} ${id}`);
+        window.setTimeout(() => handle.enter(), 80);
+        const done = (s: AgentSettings | null) => what === "model" ? !!s?.model?.toLowerCase().startsWith(id) : s?.effort === id;
+        if (!(await until(done, 4000))) {
+          toast.notice(what === "model" ? `没切到 ${choiceLabel(CLAUDE_MODELS, id)}` : `思考强度没切到${choiceLabel(CLAUDE_EFFORTS, id)}`, {
+            warning: true,
+            description: "终端里看看 Claude Code 的提示，可能这个账号或模型不支持",
+          });
+          handle.focus();
+        }
+      }
+    } finally {
+      setSwitching(null);
+    }
   };
   // ⌘L（Windows 是 Ctrl+Shift+L）在终端和输入框之间切换；收起来时按它重新打开。
   // 在捕获阶段处理，终端拿不到这个按键
@@ -733,6 +790,17 @@ export default function App() {
                 onTerminal={() => termHandles.current.get(activeTab.key)?.focus()}
                 onHide={() => { hideComposer(true); termHandles.current.get(activeTab.key)?.focus(); }}
                 inputRef={composerRef}
+                tools={
+                  <AgentSettingsBar
+                    agent={activeAgent}
+                    switching={switching?.tabKey === activeTab.key ? switching.what : null}
+                    onSwitch={(what, id) => void switchAgent(activeTab, what, id)}
+                    onPicker={(command) => {
+                      sendToAgent(activeTab.key, command);
+                      termHandles.current.get(activeTab.key)?.focus();
+                    }}
+                  />
+                }
               />
             )}
             {activeTab && <TerminalStatusbar

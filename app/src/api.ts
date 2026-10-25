@@ -45,6 +45,17 @@ export interface AgentInfo {
   state: AgentState;
   /** 那台电脑上这种 AI 账号的额度；读不到就没有 */
   quota?: AgentQuota | null;
+  /** 这个会话里的 AI 现在的模型、思考强度、权限模式；目前只有 Claude Code 有 */
+  settings?: AgentSettings | null;
+}
+/** 读不到的项没有 */
+export interface AgentSettings {
+  /** 显示用的名字，比如 Opus 5.5 */
+  model?: string | null;
+  /** low、medium、high、xhigh、max、auto */
+  effort?: string | null;
+  /** Claude Code 的权限模式：default、acceptEdits、plan、auto、bypassPermissions、dontAsk */
+  mode?: string | null;
 }
 export interface AgentQuota {
   windows: QuotaWindow[];

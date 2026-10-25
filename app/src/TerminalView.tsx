@@ -63,6 +63,8 @@ export interface TerminalHandle {
   paste: (text: string) => void;
   /** 按一下回车 */
   enter: () => void;
+  /** 原样发几个按键，比如 Shift+Tab 是 \x1b[Z */
+  keys: (data: string) => void;
   focus: () => void;
 }
 
@@ -180,6 +182,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
         else send(text.replace(/\r?\n/g, "\x1b\r"));
       },
       enter: () => send("\r"),
+      keys: (data) => send(data),
       focus: () => term.focus(),
     });
 

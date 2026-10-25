@@ -63,6 +63,7 @@ p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失
 - 各家改了界面文字时状态可能判断不准，规则也在 `agents.rs`，测试里放着真实截下来的屏幕
 - 额度：终端底部栏显示那台电脑上 AI 账号的额度，比如“5 小时 35% · 7 天 75%”，用到 90%、用满各提醒一次。Claude Code 读被连电脑上状态栏脚本存下的 `~/.claude/.statusline-ratelimits.json`（Claude Code 只把额度交给状态栏脚本，没配这样的状态栏脚本就读不到）；Codex 读 `~/.codex/sessions` 里最新会话日志最后一次记下的额度。只读本机文件，不联网、不碰登录凭据
 - 输入框：看着跑 AI 的会话时，终端下面多一个输入框，在本机打完一整句再发过去，中文输入法选字不卡，长段落好改。回车发送，Shift+回车换行，输入框空着时上下箭头翻发过的话；文件拖到输入框上，传完把对方电脑上的路径填进来。⌘L（Windows 是 Ctrl+Shift+L）在终端和输入框之间切换，Esc 回终端，收起后按同一个键或底部栏的“输入框”再打开。发送时按整段粘贴发过去，AI 不会把中间的换行当成回车；AI 在等你确认时不让发，免得一句话被当成选项
+- 切模型、思考强度、权限模式：Claude Code 的会话在输入框右边有三个按钮。模型和强度照你在终端里打 `/model`、`/effort` 那样切，Claude Code 会顺带把它存成那台电脑上新会话的默认值（它自己的规矩，正在跑的其他会话不受影响）；权限模式只能 Shift+Tab 轮换，每按一下核对一次，到了就停，只改这个会话，“全部放行”要启动时加了 `--dangerously-skip-permissions` 才在轮换里。等你确认时都不能切，模型和强度要等它这一轮干完。当前值的来源：模型和强度读被连电脑上这个会话的对话记录（按 `~/.claude/sessions/进程号.json` 找到 `~/.claude/projects` 下的记录，设了 `CLAUDE_CONFIG_DIR` 就在那里找），刚开还没记录时读开头的横幅；权限模式读屏幕最底下那行。Codex 的模型列表随账号变，两个按钮打开它自己的 `/model` 和 `/permissions` 选择框
 - 两边都要是 0.1.4 以上的版本；连着的设备每 4 秒更新一次状态
 - AI 品牌图标是 [Lobe Icons](https://github.com/lobehub/lobe-icons)（MIT）的静态 SVG，放在 `app/src/assets/agents`，按图片显示，见那里的 LICENSE。不引 `@lobehub/icons`：它会带进整套 Lobe UI，新版本又常常刚发布、过不了 pnpm 默认的发布时间检查（24 小时内发布的包不装）。新增 CLI 时按 `agents.rs` 里的 kind 放一个同名 SVG；没收录的显示通用机器人图标
 

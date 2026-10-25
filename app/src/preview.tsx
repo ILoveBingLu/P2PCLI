@@ -79,7 +79,8 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
 ] : s === "agents" ? [
   // s=agents：会话里跑着几种命令行 AI，最后一个是普通终端
   { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false, agent: { kind: "claude", name: "Claude Code", state: "working",
-    quota: { at: now - 120, windows: [{ minutes: 300, used_percent: 35, resets_at: now + 2 * 3600 }, { minutes: 10080, used_percent: 78, resets_at: now + 2 * 86400 }] } } },
+    quota: { at: now - 120, windows: [{ minutes: 300, used_percent: 35, resets_at: now + 2 * 3600 }, { minutes: 10080, used_percent: 78, resets_at: now + 2 * 86400 }] },
+    settings: { model: "Opus 5.5", effort: "xhigh", mode: "auto" } } },
   // Codex 的 5 小时额度快用完，打开就会提醒一次
   { id: "b".repeat(32), created_at: now - 40 * 60, attached: true, agent: { kind: "codex", name: "Codex", state: "waiting",
     quota: { at: now - 30, windows: [{ minutes: 300, used_percent: 92, resets_at: now + 3600 }, { minutes: 10080, used_percent: 41, resets_at: now + 5 * 86400 }] } } },
@@ -100,6 +101,23 @@ if (s === "agents") {
   step("idle", 9000);
 }
 const attachments = new Map<number, { sessionId: string; status: any }>();
+
+// s=agents：Claude Code 收到 /model、/effort 和 Shift+Tab 时像真的一样改设置；Shift+Tab 的顺序照本机 Claude Code 2.1.310
+const fakeModels: Record<string, string> = { opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5", fable: "Fable 5.1" };
+const fakeModeCycle = ["default", "acceptEdits", "plan", "auto"];
+function fakeAgentInput(termId: number, data: string) {
+  const session = terminalSessions.find((x) => x.id === attachments.get(termId)?.sessionId);
+  const agent = session?.agent;
+  if (agent?.kind !== "claude" || !agent.settings) return;
+  const settings = { ...agent.settings };
+  const model = /\/model (\w+)/.exec(data)?.[1];
+  const effort = /\/effort (\w+)/.exec(data)?.[1];
+  if (model && fakeModels[model]) settings.model = fakeModels[model];
+  if (effort) settings.effort = effort;
+  for (const _ of data.match(/\x1b\[Z/g) ?? []) settings.mode = fakeModeCycle[(fakeModeCycle.indexOf(settings.mode ?? "") + 1) % fakeModeCycle.length];
+  session!.agent = { ...agent, settings };
+  ov.devices[0].sessions = terminalSessions.map((x) => ({ ...x }));
+}
 
 // 传文件：s=transfers 一开始就有几条在传、传完、失败的；发文件时模拟进度
 const transfers: Transfer[] = [];
@@ -311,6 +329,7 @@ mockIPC(
         return { path: "/Users/me/.local/bin/p2pcli", installed: true, on_path: true, bundled: true };
       case "term_input":
         ((window as any).__inputs ??= []).push(args.data);
+        fakeAgentInput(args.termId, args.data);
         return null;
       case "selftest_config":
         return null;

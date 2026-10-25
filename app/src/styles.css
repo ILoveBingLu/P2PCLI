@@ -1584,6 +1584,49 @@ img.agent-icon {
 .agent-composer[data-blocked] textarea::placeholder {
   color: var(--warning);
 }
+.agent-settings {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.agent-chip-wrap {
+  display: inline-flex;
+}
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 132px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.agent-chip:hover,
+.agent-chip[data-pressed],
+.agent-chip[aria-expanded="true"] {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--foreground);
+}
+.agent-chip[data-disabled] {
+  opacity: 0.45;
+}
+.agent-chip-menu {
+  min-width: 13rem;
+}
+.agent-chip-note {
+  margin: 0;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
 .agent-composer-hint {
   flex: none;
   margin-bottom: 7px;

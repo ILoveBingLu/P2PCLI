@@ -9,7 +9,7 @@
 //!
 //! 看额度：只读 AI 自己留在本机的文件，不联网、不碰登录凭据，见 quota()。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -40,6 +40,23 @@ pub struct AgentInfo {
     /// 这台电脑上这种 AI 账号的额度；读不到就没有
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<AgentQuota>,
+    /// 这个会话里的 AI 现在用的模型、思考强度、权限模式；目前只认 Claude Code
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<AgentSettings>,
+}
+
+/// AI 现在的设置，读不到的项留空
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSettings {
+    /// 显示用的模型名，比如 Opus 5.5
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// 思考强度，用 AI 自己的叫法：low、medium、high、xhigh、max、auto
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// 权限模式，用 Claude Code 自己的叫法：default、acceptEdits、plan、auto、bypassPermissions、dontAsk
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 /// AI 账号的额度：几个滚动窗口各用了多少
@@ -71,7 +88,7 @@ struct Known {
 
 /// 认识的命令行 AI。新出一个往这里加一行
 const KNOWN: &[Known] = &[
-    Known { kind: "claude", name: "Claude Code", names: &["claude"], markers: &["@anthropic-ai/claude-code"] },
+    Known { kind: "claude", name: "Claude Code", names: &["claude"], markers: &["@anthropic-ai/claude-code", "/claude/versions/"] },
     Known { kind: "codex", name: "Codex", names: &["codex"], markers: &["@openai/codex"] },
     Known { kind: "gemini", name: "Gemini CLI", names: &["gemini"], markers: &["@google/gemini-cli"] },
     Known { kind: "opencode", name: "OpenCode", names: &["opencode"], markers: &["opencode-ai"] },
@@ -101,12 +118,14 @@ const MAX_VISIT: usize = 256;
 pub struct Processes {
     sys: System,
     children: HashMap<Pid, Vec<Pid>>,
+    /// 这一轮重读过命令行的进程
+    fresh: HashSet<Pid>,
     at: Option<Instant>,
 }
 
 impl Default for Processes {
     fn default() -> Self {
-        Self { sys: System::new(), children: HashMap::new(), at: None }
+        Self { sys: System::new(), children: HashMap::new(), fresh: HashSet::new(), at: None }
     }
 }
 
@@ -122,6 +141,7 @@ impl Processes {
             .with_exe(UpdateKind::OnlyIfNotSet);
         self.sys.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
         self.children.clear();
+        self.fresh.clear();
         for (pid, process) in self.sys.processes() {
             if let Some(parent) = process.parent() {
                 self.children.entry(parent).or_default().push(*pid);
@@ -130,8 +150,8 @@ impl Processes {
         self.at = Some(Instant::now());
     }
 
-    /// 从会话的 shell（tmux 的 pane_pid）往下找，离 shell 近的优先，返回第一个认识的 AI 的标识和名字
-    pub fn agent_under(&mut self, root: u32) -> Option<(&'static str, &'static str)> {
+    /// 从会话的 shell（tmux 的 pane_pid）往下找，离 shell 近的优先，返回第一个认识的 AI 的进程号、标识和名字
+    pub fn agent_under(&mut self, root: u32) -> Option<(u32, &'static str, &'static str)> {
         self.refresh();
         let mut queue = VecDeque::from([Pid::from_u32(root)]);
         let mut visited = 0;
@@ -140,10 +160,15 @@ impl Processes {
             if visited > MAX_VISIT {
                 break;
             }
+            // shell 用 exec 换成 AI 时进程号不变，缓存里还是原来 shell 的命令行；顺路经过的这几个每轮重读一次
+            if self.fresh.insert(pid) {
+                let kind = ProcessRefreshKind::nothing().without_tasks().with_cmd(UpdateKind::Always).with_exe(UpdateKind::Always);
+                self.sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), false, kind);
+            }
             if let Some(process) = self.sys.process(pid) {
                 let cmd: Vec<String> = process.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
                 if let Some(known) = identify(&process.name().to_string_lossy(), &cmd) {
-                    return Some((known.kind, known.name));
+                    return Some((pid.as_u32(), known.kind, known.name));
                 }
             }
             if let Some(kids) = self.children.get(&pid) {
@@ -361,11 +386,7 @@ fn claude_quota(path: &Path) -> Option<AgentQuota> {
 /// 在 sessions/年/月/日/ 里找最新的会话日志，从后往前找最后一次记下的 rate_limits
 fn codex_quota(sessions: &Path) -> Option<AgentQuota> {
     let file = newest_rollout(sessions)?;
-    let mut f = std::fs::File::open(&file).ok()?;
-    let len = f.metadata().ok()?.len();
-    f.seek(SeekFrom::Start(len.saturating_sub(CODEX_TAIL_BYTES))).ok()?;
-    let mut text = String::new();
-    f.take(CODEX_TAIL_BYTES).read_to_string(&mut text).ok()?;
+    let text = tail(&file, CODEX_TAIL_BYTES)?;
     text.lines().rev().find_map(|line| {
         if !line.contains("rate_limits") {
             return None;
@@ -431,6 +452,216 @@ fn newest_rollout(sessions: &Path) -> Option<PathBuf> {
     None
 }
 
+/// 文件最后这么多字节；切在半个字符上的地方换成替换符，切断的第一行解析不了会被跳过
+fn tail(path: &Path, bytes: u64) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(bytes))).ok()?;
+    let mut buf = Vec::new();
+    f.take(bytes).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Claude Code 的对话记录只看最后这么多字节：切模型、切强度和每轮回复都会记一笔
+const TRANSCRIPT_TAIL_BYTES: u64 = 256 * 1024;
+
+/// 各会话里 AI 设置的缓存：对话记录没变长就不重新读
+#[derive(Default)]
+pub struct Settings {
+    transcripts: HashMap<PathBuf, (u64, Option<String>, Option<String>)>,
+}
+
+impl Settings {
+    /// 读进程号是 pid 的 AI 现在的设置。屏幕内容只在这里看，不往外发
+    pub fn get(&mut self, kind: &str, pid: u32, screen: &str) -> Option<AgentSettings> {
+        if kind != "claude" {
+            return None;
+        }
+        // 模型和强度以对话记录为准，记录里没有（刚开的会话、记录关了）再看屏幕
+        let config = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| Some(std::env::home_dir()?.join(".claude")));
+        let (model, effort) = config
+            .and_then(|config| claude_transcript(&config, pid))
+            .map(|path| self.transcript(path))
+            .unwrap_or_default();
+        let settings = AgentSettings {
+            model: model.or_else(|| claude_screen_model(screen)),
+            effort: effort.or_else(|| claude_screen_effort(screen)),
+            mode: claude_mode(screen).map(str::to_string),
+        };
+        (settings != AgentSettings::default()).then_some(settings)
+    }
+
+    fn transcript(&mut self, path: PathBuf) -> (Option<String>, Option<String>) {
+        let len = std::fs::metadata(&path).map_or(0, |m| m.len());
+        if let Some((seen, model, effort)) = self.transcripts.get(&path)
+            && *seen == len
+        {
+            return (model.clone(), effort.clone());
+        }
+        let (model, effort) = tail(&path, TRANSCRIPT_TAIL_BYTES).map(|t| claude_transcript_settings(&t)).unwrap_or_default();
+        self.transcripts.insert(path, (len, model.clone(), effort.clone()));
+        (model, effort)
+    }
+}
+
+/// Claude Code 每个进程在 sessions/进程号.json 里记着会话号和目录，对话记录在 projects/目录改写/会话号.jsonl
+fn claude_transcript(config: &Path, pid: u32) -> Option<PathBuf> {
+    let info: serde_json::Value = serde_json::from_slice(&std::fs::read(config.join(format!("sessions/{pid}.json"))).ok()?).ok()?;
+    let id = info.get("sessionId")?.as_str()?;
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    let file = format!("{id}.jsonl");
+    let projects = config.join("projects");
+    // 目录名是把路径里字母数字以外的字符都换成 -；很长的路径会被截短，对不上就挨个目录找
+    if let Some(cwd) = info.get("cwd").and_then(|v| v.as_str()) {
+        let slug: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        let path = projects.join(slug).join(&file);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    std::fs::read_dir(&projects).ok()?.flatten().map(|e| e.path().join(&file)).find(|p| p.is_file())
+}
+
+/// 从对话记录末尾往前找最近一次的模型和强度：/model、/effort 命令的输出，或者回复上记的模型和强度
+fn claude_transcript_settings(text: &str) -> (Option<String>, Option<String>) {
+    let (mut model, mut effort) = (None, None);
+    for line in text.lines().rev() {
+        if model.is_some() && effort.is_some() {
+            break;
+        }
+        // 先粗筛再解析，大部分行是工具调用和结果；子代理用的模型不算
+        if line.contains("\"isSidechain\":true") || !(line.contains("<local-command-stdout>") || line.contains("\"type\":\"assistant\"")) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match value.get("type").and_then(|v| v.as_str()) {
+            // 命令的输出是一条用户记录，内容整个包在 <local-command-stdout> 里；工具结果里提到这几个字不算
+            Some("user") => {
+                let Some(text) = value.pointer("/message/content").and_then(|v| v.as_str()) else { continue };
+                let Some(text) = text.strip_prefix("<local-command-stdout>") else { continue };
+                if model.is_none() {
+                    model = after(text, &["Set model to ", "Kept model as "]).map(|m| m.trim_matches('`').to_string());
+                }
+                if effort.is_none() {
+                    effort = after(text, &["Set effort level to ", "Effort level set to "]).map(str::to_string);
+                }
+            }
+            Some("assistant") => {
+                if model.is_none() {
+                    model = value
+                        .pointer("/message/model")
+                        .and_then(|v| v.as_str())
+                        .filter(|m| !m.starts_with('<'))
+                        .map(model_name);
+                }
+                if effort.is_none() {
+                    effort = value.get("effort").and_then(|v| v.as_str()).map(str::to_string);
+                }
+            }
+            _ => {}
+        }
+    }
+    (model, effort.filter(|e| is_effort(e)))
+}
+
+/// 命令输出里某个前缀后面的值：模型名到“ and saved”或行尾，强度是一个词
+fn after<'a>(text: &'a str, prefixes: &[&str]) -> Option<&'a str> {
+    let rest = prefixes.iter().find_map(|p| text.split_once(p).map(|(_, r)| r))?;
+    let end = [" and saved", " (", ":", "<", "\""].iter().filter_map(|s| rest.find(s)).min().unwrap_or(rest.len());
+    let value = rest[..end].trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn is_effort(word: &str) -> bool {
+    matches!(word, "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "auto")
+}
+
+/// 模型 ID 换成显示的名字：claude-opus-5-5 → Opus 5.5，claude-sonnet-4-5-20250929 → Sonnet 4.5；
+/// 不是 Claude 的名字（中转服务自己起的）原样显示
+fn model_name(id: &str) -> String {
+    let (base, long) = match id.strip_suffix("[1m]") {
+        Some(base) => (base, " 1M"),
+        None => (id, ""),
+    };
+    let Some(rest) = base.strip_prefix("claude-") else { return id.to_string() };
+    let mut family = Vec::new();
+    let mut version = Vec::new();
+    for part in rest.split('-') {
+        if part.len() == 8 && part.chars().all(|c| c.is_ascii_digit()) {
+            continue; // 发布日期
+        }
+        if part.chars().all(|c| c.is_ascii_digit()) {
+            version.push(part);
+        } else {
+            let mut chars = part.chars();
+            family.extend(chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()));
+        }
+    }
+    if family.is_empty() {
+        return id.to_string();
+    }
+    let version = if version.is_empty() { String::new() } else { format!(" {}", version.join(".")) };
+    format!("{}{version}{long}", family.join(" "))
+}
+
+/// 屏幕上最近一次切模型的结果，或者开头横幅 logo 右边那行：订阅是“Opus 5.5 with xhigh effort · Claude Max”，
+/// 用 API key 是“Opus 5.5 · API Usage Billing”
+fn claude_screen_model(screen: &str) -> Option<String> {
+    screen.lines().rev().find_map(|line| {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix('⎿') {
+            return after(rest, &["Set model to ", "Kept model as "]).map(str::to_string);
+        }
+        if !(line.starts_with('▝') && line.contains('█')) {
+            return None;
+        }
+        let text = line.trim_start_matches(|c: char| !c.is_alphanumeric());
+        let end = [" with ", " · "].iter().filter_map(|s| text.find(s)).min().unwrap_or(text.len());
+        let model = text[..end].trim();
+        (!model.is_empty()).then(|| model.to_string())
+    })
+}
+
+/// 屏幕上的强度：切强度的结果、输入框上方的“● high · /effort”、干活时的“thinking with xhigh effort”、开头横幅
+fn claude_screen_effort(screen: &str) -> Option<String> {
+    screen.lines().rev().find_map(|line| {
+        let line = line.trim();
+        let word = if let Some(rest) = line.strip_prefix('⎿') {
+            after(rest, &["Set effort level to ", "Effort level set to "])?
+        } else if let Some(rest) = line.strip_suffix("· /effort") {
+            rest.split_whitespace().last()?
+        } else {
+            line.split_once(" with ")?.1.split_once(" effort")?.0
+        };
+        is_effort(word).then(|| word.to_string())
+    })
+}
+
+/// 屏幕最底下的权限模式提示：“⏸ manual mode on”“⏵⏵ auto mode on (shift+tab to cycle)”；
+/// 老版本默认模式什么都不写，只有“? for shortcuts”。等你确认时底下换成了确认框，读不到
+fn claude_mode(screen: &str) -> Option<&'static str> {
+    const MODES: &[(&str, &str)] = &[
+        ("manual mode on", "default"),
+        ("accept edits on", "acceptEdits"),
+        ("plan mode on", "plan"),
+        ("auto mode on", "auto"),
+        ("bypass permissions on", "bypassPermissions"),
+        ("don't ask on", "dontAsk"),
+    ];
+    let bottom: Vec<&str> = screen.lines().rev().map(str::trim).filter(|l| !l.is_empty()).take(3).collect();
+    for line in &bottom {
+        if line.starts_with(['⏵', '⏸']) {
+            let lower = line.to_lowercase();
+            if let Some((_, mode)) = MODES.iter().find(|(text, _)| lower.contains(text)) {
+                return Some(mode);
+            }
+        }
+    }
+    bottom.iter().any(|l| l.starts_with("? for shortcuts")).then_some("default")
+}
+
 fn modified_secs(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
@@ -456,6 +687,9 @@ mod tests {
         let kind = |program: &str, args: &[&str]| identify(program, &cmd(args)).map(|k| k.kind);
         // Claude Code 的可执行文件名是版本号，靠命令行第一个参数认
         assert_eq!(kind("2.1.310", &["claude", "--effort", "xhigh"]), Some("claude"));
+        // 直接按安装目录里的版本文件起的，命令行第一个参数也是版本号，看路径
+        assert_eq!(kind("2.1.310", &["/Users/me/.local/share/claude/versions/2.1.310", "--bare"]), Some("claude"));
+        assert_eq!(kind("2.1.310.exe", &[r"C:\Users\a\.local\share\claude\versions\2.1.310.exe"]), Some("claude"));
         // Node 写的：程序名是 node，看脚本路径
         assert_eq!(kind("node", &["node", "/opt/homebrew/bin/gemini"]), Some("gemini"));
         assert_eq!(kind("node", &["node", "/usr/lib/node_modules/@openai/codex/bin/codex.js"]), Some("codex"));
@@ -663,5 +897,112 @@ mod tests {
         assert_eq!(state("", "✻ Worked for 2s\n❯ 1. Yes\n2. No\nEnter to confirm · Esc to cancel"), Waiting);
         // 正文中引用完成短语不能覆盖有效的标题忙碌信号。
         assert_eq!(state("⠙ claude", "• The message says worked for 3s"), Working);
+    }
+
+    // Claude Code 2.1.310 里打 /effort high、/model sonnet 之后真实截下来的屏幕（目录换掉了）
+    const CLAUDE_SWITCHED: &str = "
+ ▐▛███▛█   Claude Code v2.1.310
+▝▜██████▀  Opus 5.5 with high effort · Claude Max
+ ▝▝   ▝▝   ~/work
+❯ /effort high
+  ⎿  Set effort level to high (saved as your default for new sessions): Comprehensive implementation with extensive
+     testing and documentation
+❯ /model sonnet
+  ⎿  Set model to Sonnet 5.5 and saved as your default for new sessions
+                                                                                                      ● high · /effort
+──────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+";
+
+    // 用 API key 刚开的 Claude Code 2.1.310，真实截屏（目录换掉了）
+    const CLAUDE_API_KEY: &str = "
+ ▐▛███▛█   Claude Code v2.1.310
+▝▜██████▀  Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝   ~/work
+──────────────────────────────────────────────────────
+❯ Try \"fix lint errors\"
+──────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents                                                 ◐ medium · /effort
+";
+
+    #[test]
+    fn reads_claude_settings_from_real_screens() {
+        let read = |screen: &str| (claude_screen_model(screen), claude_screen_effort(screen), claude_mode(screen));
+        let s = |v: &str| Some(v.to_string());
+        // 最近一次切换的结果比开头横幅新
+        assert_eq!(read(CLAUDE_SWITCHED), (s("Sonnet 5.5"), s("high"), Some("auto")));
+        assert_eq!(read(CLAUDE_IDLE), (s("Opus 5.5"), s("xhigh"), Some("auto")));
+        // 用 API key 登录时横幅不写强度，强度在底下那行右边
+        assert_eq!(read(CLAUDE_API_KEY), (s("Opus 5.5"), s("medium"), Some("default")));
+        // 干活时转圈那行写着强度；底下是他自己配的状态栏，不认
+        assert_eq!(read(CLAUDE_WORKING), (None, s("xhigh"), Some("default")));
+        // 等你确认时底下是确认框，读不到权限模式
+        assert_eq!(read(CLAUDE_PERMISSION).2, None);
+        // Shift+Tab 依次切出来的几种（真实截屏的最后一行）
+        let mode = |footer: &str| claude_mode(&format!("❯\n──────\n  {footer}"));
+        assert_eq!(mode("⏸ manual mode on · ? for shortcuts"), Some("default"));
+        assert_eq!(mode("⏵⏵ accept edits on (shift+tab to cycle)"), Some("acceptEdits"));
+        assert_eq!(mode("⏸ plan mode on (shift+tab to cycle)"), Some("plan"));
+        assert_eq!(mode("⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"), Some("auto"));
+        assert_eq!(mode("⏵⏵ bypass permissions on (shift+tab to cycle)"), Some("bypassPermissions"));
+        // 老版本默认模式不写，只有快捷键提示
+        assert_eq!(mode("? for shortcuts"), Some("default"));
+        // 正文里聊到这几个字不算
+        assert_eq!(claude_mode("我们先开 plan mode on 试试\n❯\n──────\n  work · Opus 5.5"), None);
+    }
+
+    #[test]
+    fn reads_claude_settings_from_transcript() {
+        // 每行的结构照 Claude Code 2.1.310 真实记下的，会话号、目录这些换掉了
+        let reply = |model: &str, effort: &str, side: bool| format!(
+            r#"{{"parentUuid":"a","isSidechain":{side},"message":{{"model":"{model}","type":"message","role":"assistant","content":[{{"type":"text","text":"好"}}]}},"type":"assistant","effort":"{effort}","perTurnEffort":"{effort}","uuid":"b"}}"#);
+        let command = |out: &str| format!(
+            r#"{{"parentUuid":"a","isSidechain":false,"type":"user","message":{{"role":"user","content":"<local-command-stdout>{out}</local-command-stdout>"}},"uuid":"c"}}"#);
+        let s = |v: &str| Some(v.to_string());
+
+        assert_eq!(claude_transcript_settings(&reply("claude-opus-5-5", "xhigh", false)), (s("Opus 5.5"), s("xhigh")));
+        // 回复之后又切了强度和模型：以最后一次为准；最前面切断的半行跳过
+        let text = [
+            "ted\":\"x\"}".to_string(),
+            reply("claude-opus-5-5", "xhigh", false),
+            command("Set effort level to high (saved as your default for new sessions): Comprehensive implementation with extensive testing and documentation"),
+            command("Set model to `Sonnet 5.5` and saved as your default for new sessions"),
+        ].join("\n");
+        assert_eq!(claude_transcript_settings(&text), (s("Sonnet 5.5"), s("high")));
+        // 子代理的回复、工具结果里出现的同样字样都不算
+        let tool = r#"{"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"<local-command-stdout>Set model to `Haiku 5.5`</local-command-stdout>"}]},"note":"\"type\":\"assistant\""}"#;
+        let text = [reply("claude-opus-5-5", "xhigh", false), reply("claude-haiku-5-5", "low", true), tool.to_string()].join("\n");
+        assert_eq!(claude_transcript_settings(&text), (s("Opus 5.5"), s("xhigh")));
+        assert_eq!(claude_transcript_settings(&command("Effort level set to auto")), (None, s("auto")));
+        assert_eq!(claude_transcript_settings(""), (None, None));
+
+        assert_eq!(model_name("claude-opus-5-5"), "Opus 5.5");
+        assert_eq!(model_name("claude-sonnet-4-5-20250929"), "Sonnet 4.5");
+        assert_eq!(model_name("claude-3-5-haiku-20241022"), "Haiku 3.5");
+        assert_eq!(model_name("claude-fable-5-1[1m]"), "Fable 5.1 1M");
+        assert_eq!(model_name("glm-4.6"), "glm-4.6");
+    }
+
+    #[test]
+    fn finds_claude_transcript_by_process() {
+        let dir = std::env::temp_dir().join(format!("p2pcli-claude-{:x}", rand::random::<u64>()));
+        let id = "0b6f3c1e-5a7d-4e2b-9c41-8d2f6a1b3e57";
+        std::fs::create_dir_all(dir.join("sessions")).unwrap();
+        std::fs::create_dir_all(dir.join("projects/-Users-me-My-Work")).unwrap();
+        std::fs::write(dir.join("sessions/4242.json"), format!(r#"{{"pid":4242,"sessionId":"{id}","cwd":"/Users/me/My Work","status":"idle"}}"#)).unwrap();
+        // 还没有对话记录（刚开的会话）
+        assert_eq!(claude_transcript(&dir, 4242), None);
+        let path = dir.join(format!("projects/-Users-me-My-Work/{id}.jsonl"));
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(claude_transcript(&dir, 4242), Some(path.clone()));
+        // 目录名对不上（很长的路径会被截短）就挨个目录找
+        std::fs::create_dir_all(dir.join("projects/-Users-me-My-W-1a2b")).unwrap();
+        let moved = dir.join(format!("projects/-Users-me-My-W-1a2b/{id}.jsonl"));
+        std::fs::rename(&path, &moved).unwrap();
+        assert_eq!(claude_transcript(&dir, 4242), Some(moved));
+        assert_eq!(claude_transcript(&dir, 999), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
