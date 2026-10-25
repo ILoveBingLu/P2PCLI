@@ -588,7 +588,9 @@ export default function App() {
           <RemoteSessions
             key={sessionTarget.connId}
             target={sessionTarget}
-            sessionsRev={sessionsRev}
+            snapshot={liveSessions[sessionTarget.connId]}
+            onRefresh={() => setSessionsRev((rev) => rev + 1)}
+            onChangeSessions={(sessions) => updateLiveSessions(sessionTarget.connId, sessions)}
             openSessions={new Set(tabs
               .filter((t) => t.info.endpoint_id === sessionTarget.info.endpoint_id && (t.state === "open" || t.state === "opening") && t.sessionId)
               .map((t) => t.sessionId!))}

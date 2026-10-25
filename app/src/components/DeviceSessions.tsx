@@ -7,7 +7,7 @@ import { toast } from "@/components/ui/toast";
 import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 import { AGENT_STATE_TEXT, AgentIcon, AgentStateLabel } from "./Agent";
-import { sessionLabels, sessionTitles } from "./sessionText";
+import { sessionTitles } from "./sessionText";
 
 export interface SidebarTab {
   key: number;
@@ -44,14 +44,12 @@ export function DeviceSessions({ target, status, tabs, snapshot, activeKey, busy
   const live = snapshot?.sessions != null && !error;
 
   const listed = new Set(sessions.map((session) => session.id));
-  const labels = sessionLabels(sessions);
   const titles = sessionTitles(sessions);
   const rows = [...sessions].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id)).map((session) => ({
     id: session.id,
     sessionId: session.id,
     tab: tabs.find((tab) => tab.sessionId === session.id && (tab.state === "open" || tab.state === "opening")),
     label: titles.get(session.id) ?? "会话",
-    number: labels.get(session.id) ?? "会话",
     status: session.attached ? "已连接" : "后台运行",
     agent: live ? session.agent ?? null : null,
   }));
@@ -59,7 +57,7 @@ export function DeviceSessions({ target, status, tabs, snapshot, activeKey, busy
     if (tab.sessionId && listed.has(tab.sessionId)) continue;
     const label = tab.sessionId ? `会话 ${tab.sessionId.slice(0, 8)}` : `终端 ${tab.key}`;
     rows.push({
-      id: `tab-${tab.key}`, sessionId: tab.sessionId ?? "", tab, label, number: label,
+      id: `tab-${tab.key}`, sessionId: tab.sessionId ?? "", tab, label,
       status: { opening: "打开中", open: "已连接", exited: "已脱离", closed: "已断开" }[tab.state],
       agent: null,
     });
@@ -108,7 +106,7 @@ export function DeviceSessions({ target, status, tabs, snapshot, activeKey, busy
           data-session-row={row.id}
           className="h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
           aria-current={row.tab?.key === activeKey ? "true" : undefined}
-          title={row.agent ? `${row.number} · ${row.agent.name} ${AGENT_STATE_TEXT[row.agent.state]} · ${row.status}` : undefined}
+          title={row.agent ? `${row.label} · ${AGENT_STATE_TEXT[row.agent.state]} · ${row.status}` : undefined}
           onClick={() => openRow(row)}>
           {row.agent ? <AgentIcon kind={row.agent.kind} className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
           <span className="min-w-0 flex-1 truncate text-left">{row.label}</span>

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { api, type AgentState, type Overview } from "../api";
 import { toast } from "@/components/ui/toast";
 import { QUOTA_ALERT, quotaWindowLabel, resetText } from "./Agent";
-import { sessionLabels } from "./sessionText";
+import { sessionTitles } from "./sessionText";
 
 const focused = () => document.visibilityState === "visible" && document.hasFocus();
 
@@ -37,7 +37,7 @@ export function useAgentAlerts(
     const seen = new Set<string>();
     for (const device of ov.devices) {
       if (device.state !== "online" || !device.sessions_live) continue;
-      const labels = sessionLabels(device.sessions);
+      const titles = sessionTitles(device.sessions);
       const deviceName = ov.recent.find((r) => r.endpoint_id === device.endpoint_id)?.name ?? "远程设备";
       for (const session of device.sessions) {
         if (!session.agent) continue;
@@ -66,7 +66,8 @@ export function useAgentAlerts(
         if (focused() && latest.current.viewing(device.endpoint_id, session.id)) continue;
         notify(
           now === "waiting" ? `${agent.name} 在等你确认` : `${agent.name} 干完了`,
-          `${deviceName} · ${labels.get(session.id) ?? "会话"}`,
+          // 侧边栏里叫“Claude Code · 会话 2”的，提醒里也带上“会话 2”，对得上是哪一个
+          [deviceName, titles.get(session.id)?.slice(agent.name.length + " · ".length)].filter(Boolean).join(" · "),
           now === "waiting",
           latest.current.showSession(device.endpoint_id, session.id),
         );

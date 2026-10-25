@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronRight, LoaderCircle, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2, Unplug } from "lucide-react";
-import { api, pathLabel, platformLabel, type PathInfo, type RemoteInfo, type TerminalSession } from "../api";
+import { api, pathLabel, platformLabel, type PathInfo, type RemoteInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -9,50 +9,39 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
 import { useContextMenu } from "./ContextMenu";
-import { relativeTime, sessionLabels } from "./sessionText";
+import { AgentIcon, AgentStateLabel } from "./Agent";
+import { relativeTime, sessionTitles } from "./sessionText";
 
 export interface SessionTarget { connId: number; info: RemoteInfo; code: string | null }
 
-export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBack, onEnded }: {
+export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onChangeSessions, onOpen, onBack, onEnded }: {
   target: SessionTarget;
-  /** 别处（比如侧边栏）结束了会话时变，变了就在后台重读 */
-  sessionsRev: number;
+  /** 和侧边栏、底部栏同一份会话快照，名字和 AI 状态才对得上 */
+  snapshot: TerminalSessionSnapshot | undefined;
   /** 本机标签里正开着的会话 */
   openSessions: Set<string>;
+  /** 马上重读一次会话 */
+  onRefresh: () => void;
+  /** 先在本地改掉（比如结束的会话先拿掉），不等下一轮刷新 */
+  onChangeSessions: (sessions: TerminalSession[]) => void;
   onOpen: (id?: string) => void;
   onBack: () => void;
   onEnded: (id: string) => void;
 }) {
-  // null 表示第一次还没读到；之后的刷新都在后台进行，列表不闪
-  const [sessions, setSessions] = useState<TerminalSession[] | null>(null);
+  const error = snapshot?.error ?? null;
+  // null 表示第一次还没读到；第一次就读失败时显示空列表和原因
+  const sessions = snapshot?.sessions ?? (error ? [] : null);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [ending, setEnding] = useState<TerminalSession | null>(null);
   const [path, setPath] = useState<PathInfo | null>(null);
-  const pending = useRef(false);
   const menu = useContextMenu();
 
-  const load = useCallback(async (manual = false) => {
-    if (pending.current) return;
-    pending.current = true;
-    if (manual) setRefreshing(true);
-    try {
-      setSessions(await api.listTerminals(target.connId));
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-      setSessions((list) => list ?? []);
-    } finally {
-      pending.current = false;
-      setRefreshing(false);
-    }
-  }, [target.connId]);
-
-  useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 5000);
-    return () => window.clearInterval(timer);
-  }, [load, sessionsRev]);
+  // 新的一份快照到了，手动刷新就算完成
+  useEffect(() => setRefreshing(false), [snapshot]);
+  const refresh = () => {
+    setRefreshing(true);
+    onRefresh();
+  };
 
   useEffect(() => {
     const tick = () => api.pathInfo(target.connId).then(setPath).catch(() => {});
@@ -63,21 +52,22 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
 
   const end = async () => {
     const session = ending;
-    if (!session) return;
+    if (!session || !sessions) return;
     setEnding(null);
-    // 先从列表里拿掉，不等对方回话；失败了后台刷新会把它放回来
-    setSessions((list) => list?.filter((s) => s.id !== session.id) ?? list);
+    // 先从列表里拿掉，不等对方回话；失败了刷新会把它放回来
+    onChangeSessions(sessions.filter((s) => s.id !== session.id));
     try {
       await api.endTerminal(target.connId, session.id);
       onEnded(session.id);
     } catch (e) {
       toast.error(`结束会话失败：${String(e)}`);
     }
-    void load();
+    onRefresh();
   };
 
-  const labels = sessionLabels(sessions ?? []);
-  const ordered = [...(sessions ?? [])].sort((a, b) => (labels.get(a.id) ?? "").localeCompare(labels.get(b.id) ?? "", "zh-CN", { numeric: true }));
+  // 名字、排序和侧边栏同一套：跑着 AI 的叫 AI 的名字，别的按创建先后叫会话 1、会话 2…
+  const titles = sessionTitles(sessions ?? []);
+  const ordered = [...(sessions ?? [])].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id));
   const { info } = target;
   const hasSessions = ordered.length > 0;
 
@@ -88,7 +78,7 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
       // 空白处右键：新建、刷新；会话行自己的菜单先接到，不会冒泡到这里
       onContextMenu={(e) => menu.open(e, [
         { id: "new", label: "新建会话", icon: <Plus className="size-4" />, disabled: sessions === null, onAction: () => onOpen() },
-        { id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: () => void load(true) },
+        { id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: refresh },
       ])}
     >
       {menu.element}
@@ -105,7 +95,7 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
               <span className="remote-device-user">{platformLabel(info.platform)} · {info.user}</span>
             </p>
           </div>
-          <Button variant="ghost" size="icon-sm" title="刷新会话" aria-label="刷新会话" disabled={refreshing || sessions === null} onClick={() => void load(true)}>
+          <Button variant="ghost" size="icon-sm" title="刷新会话" aria-label="刷新会话" disabled={refreshing || sessions === null} onClick={refresh}>
             <RefreshCw className={refreshing ? "animate-spin" : undefined} />
           </Button>
         </header>
@@ -129,7 +119,7 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
                 </EmptyHeader>
                 {error ? <>
                   <p className="session-empty-error" role="alert">{error}</p>
-                  <Button onClick={() => void load(true)} disabled={refreshing}><RefreshCw className={refreshing ? "animate-spin" : undefined} data-icon="inline-start" />重新加载</Button>
+                  <Button onClick={refresh} disabled={refreshing}><RefreshCw className={refreshing ? "animate-spin" : undefined} data-icon="inline-start" />重新加载</Button>
                 </> : <>
                   <Button onClick={() => onOpen()}><Plus data-icon="inline-start" />新建会话</Button>
                   <p className="session-empty-note">关闭标签或断线后，会话仍在后台运行</p>
@@ -139,7 +129,9 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
             <ul className="session-list">
               {ordered.map((s) => {
                 const open = openSessions.has(s.id);
-                const label = labels.get(s.id) ?? "会话";
+                const label = titles.get(s.id) ?? "会话";
+                // 刷新失败时列表留着，但旧的 AI 状态不能当成现在的
+                const agent = error ? null : s.agent ?? null;
                 return (
                   <li key={s.id}>
                     <button
@@ -152,10 +144,11 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
                         { id: "end", label: "结束会话", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => setEnding(s) },
                       ])}
                     >
-                      <span className="session-row-icon"><SquareTerminal /></span>
+                      <span className="session-row-icon">{s.agent ? <AgentIcon kind={s.agent.kind} className="size-4" /> : <SquareTerminal />}</span>
                       <span className="block min-w-0 flex-1">
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="truncate text-sm font-medium">{label}</span>
+                          {agent && <AgentStateLabel agent={agent} className="shrink-0 text-xs" />}
                           {open
                             ? <Badge variant="success">已在标签中打开</Badge>
                             : s.attached
@@ -179,7 +172,7 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
         <AlertDialog open>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>结束{labels.get(ending.id) ?? "这个会话"}？</AlertDialogTitle>
+              <AlertDialogTitle>结束{titles.get(ending.id) ?? "这个会话"}？</AlertDialogTitle>
               <AlertDialogDescription>会话里正在跑的程序会被结束，没保存的内容可能丢失。只是想暂时离开的话，关掉终端标签就行。</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
