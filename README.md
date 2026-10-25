@@ -161,7 +161,7 @@ pnpm run build --bundles nsis       # Windows 正式包
 
 基础控件使用 HeroUI 默认深色主题、圆角、尺寸和交互样式；封装只适配业务属性和布局，不重新绘制控件。设置页内的输入框使用库自带的 `secondary` 变体，与弹窗底色区分。
 
-Windows 和 macOS 都使用单行自定义标题栏，网络诊断和设置保留在标题栏内。Windows 接入 [tauri-plugin-window-controls](https://github.com/insd47/tauri-plugin-window-controls) 0.2.1（通过仓库内 `vendor/tauri-plugin-window-controls` 补丁修正图标灰度并取消失焦淡化，保留原 MIT 许可）：控件由 Win32 子窗口承载，使用系统图标字体绘制并发送系统窗口命令，支持 Windows 11 贴靠布局；它并非直接复用 DWM 默认标题栏按钮。macOS 使用覆盖式标题栏及系统红黄绿按钮，纵向位置设为 22，与 44 逻辑像素标题栏中线对齐。关闭窗口仍隐藏到托盘。
+Windows 和 macOS 都使用单行自定义标题栏，网络诊断和设置保留在标题栏内。Windows 接入 [tauri-plugin-window-controls](https://github.com/insd47/tauri-plugin-window-controls) 0.2.1（通过仓库内 `vendor/tauri-plugin-window-controls` 补丁修正图标灰度并取消失焦淡化，保留原 MIT 许可）：控件由 Win32 子窗口承载，使用系统图标字体绘制并发送系统窗口命令，支持 Windows 11 贴靠布局；它并非直接复用 DWM 默认标题栏按钮。macOS 使用覆盖式标题栏及系统红黄绿按钮，`trafficLightPosition` 设为 `{ x: 14, y: 24 }`，针对 44 逻辑像素标题栏修正按钮偏高的问题。Tao/Wry 的 `y` 用于调整原生标题栏容器高度，并非按钮中心坐标，不能直接取网页标题栏高度的一半；不同 macOS 版本的最终对齐需实机核对。关闭窗口仍隐藏到托盘。
 
 点击标题栏齿轮进入主区域的设置页，返回工作区时已有终端会话保持运行。“代理设置”分类中可启用 HTTP 代理，例如 `http://127.0.0.1:7890`（使用代理软件的 HTTP 或混合端口）。代理用于 WebSocket 牵线和 HTTP(S) 中继；UDP 牵线、点对点直连不经过该代理。暂不支持 SOCKS5、HTTPS 代理或账号密码认证，也不会自动读取系统代理。保存后即时应用，不必重启应用。设备名、牵线地址变更保留当前终端连接；代理或中继变更会重建网络端点，需重新连接远端，但后台终端会话继续运行。环境变量指定的服务器/中继仍优先于设置页。
 

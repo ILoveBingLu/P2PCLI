@@ -733,6 +733,12 @@
   display: flex;
   flex-direction: column;
 }
+.settings-main-title,
+.settings-content {
+  width: 100%;
+  max-width: 640px;
+  margin-inline: auto;
+}
 .settings-main-title {
   flex: none;
   padding: 20px 32px 12px;
@@ -746,7 +752,6 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 640px;
   padding: 8px 32px 28px;
 }
 .settings-content .tabs__panel {
