@@ -34,7 +34,7 @@ import {
   type TermStatus,
   type Transfer,
 } from "./api";
-import { TerminalView } from "./TerminalView";
+import { TerminalView, type TerminalHandle } from "./TerminalView";
 import { pollConnections } from "./lib/pollConnections";
 import { TerminalStatusbar } from "./components/TerminalStatusbar";
 import { selftestSawOverview } from "./selftest";
@@ -46,6 +46,7 @@ import { useUpdater } from "./components/useUpdater";
 import { UpdateIsland } from "./components/UpdateIsland";
 import { useAgentAlerts } from "./components/useAgentAlerts";
 import { AgentTabTitle } from "./components/Agent";
+import { AgentComposer, isMac } from "./components/AgentComposer";
 import {
   ApproveDialog,
   DiagDialog,
@@ -92,6 +93,13 @@ export default function App() {
   const [fileRequests, setFileRequests] = useState<FileRequest[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
+  // 认出命令行 AI 时终端下面的输入框：收没收起来记在本机，每个标签的草稿分开存
+  const [composerHidden, setComposerHidden] = useState(() => {
+    try { return localStorage.getItem("p2pcli.composer.hidden") === "1"; } catch { return false; }
+  });
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const termHandles = useRef(new Map<number, TerminalHandle>());
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiag, setShowDiag] = useState(false);
@@ -176,6 +184,41 @@ export default function App() {
     if (!t.sessionId || t.state === "closed" || !snapshot?.sessions || snapshot.error) return null;
     return snapshot.sessions.find((s) => s.id === t.sessionId)?.agent ?? null;
   };
+  const activeAgent = activeTab?.state === "open" && !showSettings && !sessionTarget ? tabAgent(activeTab) : null;
+  const showComposer = !!activeAgent && !composerHidden;
+  const hideComposer = (hidden: boolean) => {
+    setComposerHidden(hidden);
+    try { localStorage.setItem("p2pcli.composer.hidden", hidden ? "1" : "0"); } catch { /* 记不住也能用 */ }
+  };
+  /** 输入框发消息：当成粘贴整段发给终端里的 AI，等它收完再补回车 */
+  const sendToAgent = (tabKey: number, text: string) => {
+    const handle = termHandles.current.get(tabKey);
+    if (!handle) return;
+    handle.paste(text);
+    window.setTimeout(() => handle.enter(), 80);
+  };
+  // ⌘L（Windows 是 Ctrl+Shift+L）在终端和输入框之间切换；收起来时按它重新打开。
+  // 在捕获阶段处理，终端拿不到这个按键
+  const composerKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  composerKeyRef.current = (e: KeyboardEvent) => {
+    const hit = e.key.toLowerCase() === "l" && !e.altKey && (isMac ? e.metaKey && !e.ctrlKey && !e.shiftKey : e.ctrlKey && e.shiftKey && !e.metaKey);
+    if (!hit || !activeAgent || !activeTab) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (composerHidden) {
+      hideComposer(false);
+      window.requestAnimationFrame(() => composerRef.current?.focus());
+    } else if (document.activeElement === composerRef.current) {
+      termHandles.current.get(activeTab.key)?.focus();
+    } else {
+      composerRef.current?.focus();
+    }
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => composerKeyRef.current(e);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   // One path snapshot per live connection, shared by the sidebar and status bar.
   const liveConnectionKey = [...new Set([
     ...tabs.filter((tab) => tab.state !== "closed").map((tab) => tab.connId),
@@ -312,17 +355,24 @@ export default function App() {
     );
   };
 
-  /** 拖进来的文件发给哪台设备：正在看的终端，或者正在看的会话页；终端里的还要在发完后把路径填进去 */
-  const dropTarget = (): { info: RemoteInfo; termId?: number } | { blocked: string } => {
+  /** 拖进来的文件发给哪台设备：正在看的终端，或者正在看的会话页；终端里的还要在发完后把路径填进去，
+   *  拖到 AI 输入框上的填进输入框 */
+  const dropTarget = (at?: { x: number; y: number }): { info: RemoteInfo; termId?: number; draftKey?: number } | { blocked: string } => {
     if (showSettings) return { blocked: "先回到终端，再把文件拖进来" };
     if (sessionTarget) return { info: sessionTarget.info };
-    if (activeTab && (activeTab.state === "open" || activeTab.state === "opening")) return { info: activeTab.info, termId: activeTab.termId };
+    if (activeTab && (activeTab.state === "open" || activeTab.state === "opening")) {
+      const box = composerRef.current?.closest(".agent-composer")?.getBoundingClientRect();
+      // 拖放事件给的是物理像素，换成网页的坐标再比
+      const x = (at?.x ?? -1) / window.devicePixelRatio, y = (at?.y ?? -1) / window.devicePixelRatio;
+      if (box && x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return { info: activeTab.info, draftKey: activeTab.key };
+      return { info: activeTab.info, termId: activeTab.termId };
+    }
     return { blocked: "先打开一台设备的终端，再把文件拖进来" };
   };
   const dropTargetRef = useRef(dropTarget);
   dropTargetRef.current = dropTarget;
-  /** 拖进终端的文件：传输编号 → 发完要填路径的终端 */
-  const pendingInsert = useRef(new Map<string, { termId: number; platform: string }>());
+  /** 拖进终端或输入框的文件：传输编号 → 发完要填路径的终端或输入框 */
+  const pendingInsert = useRef(new Map<string, { termId?: number; draftKey?: number; platform: string }>());
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -330,7 +380,7 @@ export default function App() {
     void getCurrentWebview().onDragDropEvent(async (event) => {
       const e = event.payload;
       if (e.type === "leave") return setDropHint(null);
-      const target = dropTargetRef.current();
+      const target = dropTargetRef.current("position" in e ? e.position : undefined);
       if (e.type === "enter" || e.type === "over") {
         return setDropHint("blocked" in target ? { blocked: target.blocked } : { name: target.info.name });
       }
@@ -339,7 +389,8 @@ export default function App() {
       if (!e.paths.length) return;
       try {
         const id = await api.sendFiles(target.info.endpoint_id, e.paths);
-        if (target.termId != null) pendingInsert.current.set(id, { termId: target.termId, platform: target.info.platform });
+        if (target.termId != null || target.draftKey != null)
+          pendingInsert.current.set(id, { termId: target.termId, draftKey: target.draftKey, platform: target.info.platform });
       } catch (error) {
         toast.error(`发不了：${String(error)}`);
       }
@@ -353,8 +404,16 @@ export default function App() {
       const t = transfers.find((x) => x.id === id);
       if (!t || t.finished_at == null) continue;
       pendingInsert.current.delete(id);
-      if (t.state === "done" && t.paths.length)
-        void api.termInput(target.termId, t.paths.map((p) => shellQuote(p, target.platform)).join(" ") + " ").catch(() => {});
+      if (t.state !== "done" || !t.paths.length) continue;
+      const quoted = t.paths.map((p) => shellQuote(p, target.platform)).join(" ") + " ";
+      if (target.draftKey != null) {
+        const key = target.draftKey;
+        setDrafts((d) => ({ ...d, [key]: (d[key] ? d[key].replace(/\s*$/, " ") : "") + quoted }));
+        // 传的时候切去别的标签了就不抢焦点，路径照样留在原来那个标签的草稿里
+        if (activeTab?.key === key) composerRef.current?.focus();
+      } else if (target.termId != null) {
+        void api.termInput(target.termId, quoted).catch(() => {});
+      }
     }
   }, [transfers]);
 
@@ -610,6 +669,10 @@ export default function App() {
                       )
                     }
                     onStatus={(s) => setTabState(t.key, s)}
+                    onHandle={(handle) => {
+                      if (handle) termHandles.current.set(t.key, handle);
+                      else termHandles.current.delete(t.key);
+                    }}
                   />
                   {t.state === "opening" && (
                     <div className="terminal-loading" role="status">
@@ -660,8 +723,21 @@ export default function App() {
                 </Tabs.Panel>
               ))}
             </div>
+            {showComposer && activeTab && activeAgent && (
+              <AgentComposer
+                key={`composer-${activeTab.key}`}
+                agent={activeAgent}
+                draft={drafts[activeTab.key] ?? ""}
+                onDraft={(text) => setDrafts((d) => ({ ...d, [activeTab.key]: text }))}
+                onSend={(text) => sendToAgent(activeTab.key, text)}
+                onTerminal={() => termHandles.current.get(activeTab.key)?.focus()}
+                onHide={() => { hideComposer(true); termHandles.current.get(activeTab.key)?.focus(); }}
+                inputRef={composerRef}
+              />
+            )}
             {activeTab && <TerminalStatusbar
               key={activeTab.key}
+              onShowComposer={activeAgent && composerHidden ? () => { hideComposer(false); window.requestAnimationFrame(() => composerRef.current?.focus()); } : undefined}
               sessionId={activeTab.sessionId}
               info={activeTab.info}
               state={activeTab.state}

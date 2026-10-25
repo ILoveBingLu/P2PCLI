@@ -54,19 +54,29 @@ const theme = {
   brightWhite: "#f9fafb",
 };
 
+/** 终端对外的操作：底部输入框靠它把整段文字发给终端里的 AI */
+export interface TerminalHandle {
+  /** 当成粘贴发过去：对面程序开了整段粘贴就整段发，多行不会被当成几次回车 */
+  paste: (text: string) => void;
+  /** 按一下回车 */
+  enter: () => void;
+  focus: () => void;
+}
+
 interface Props {
   connId: number;
   sessionId?: string;
   active: boolean;
   onStatus: (s: TermStatus) => void;
   onReady: (termId: number, sessionId: string) => void;
+  onHandle?: (handle: TerminalHandle | null) => void;
 }
 
-export function TerminalView({ connId, sessionId, active, onStatus, onReady }: Props) {
+export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const cb = useRef({ onStatus, onReady });
-  cb.current = { onStatus, onReady };
+  const cb = useRef({ onStatus, onReady, onHandle });
+  cb.current = { onStatus, onReady, onHandle };
 
   useEffect(() => {
     const el = box.current!;
@@ -121,6 +131,16 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
       return true;
     });
 
+    cb.current.onHandle?.({
+      paste: (text) => {
+        // xterm 按对面程序有没有开整段粘贴（bracketed paste）来包；没开的话换行用 ESC+回车，Claude Code 和 Codex 都当换行
+        if (term.modes.bracketedPasteMode) term.paste(text);
+        else send(text.replace(/\r?\n/g, "\x1b\r"));
+      },
+      enter: () => send("\r"),
+      focus: () => term.focus(),
+    });
+
     const output = new Channel<ArrayBuffer>();
     output.onmessage = (buf) => { if (!disposed) term.write(new Uint8Array(buf)); };
     const status = new Channel<TermStatus>();
@@ -165,6 +185,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
 
     return () => {
       disposed = true;
+      cb.current.onHandle?.(null);
       window.clearTimeout(openTimer);
       window.clearTimeout(resizeTimer);
       ro.disconnect();
