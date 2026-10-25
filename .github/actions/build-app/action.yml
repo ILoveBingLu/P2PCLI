@@ -69,6 +69,8 @@ runs:
         b="target/${{ inputs.target }}/release/bundle"
         mkdir -p dist
         if [ -d "$b/macos" ]; then
+          # 整个 app 要有完整的 ad-hoc 签名，只有编译器自带的签名时，下载后会提示“已损坏，无法打开”
+          codesign --verify --deep --strict --verbose=2 "$b/macos/P2PCLI.app"
           cp "$b/dmg/P2PCLI_${ver}_${{ inputs.arch }}.dmg" dist/
           cp "$b/macos/P2PCLI.app.tar.gz" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz"
           cp "$b/macos/P2PCLI.app.tar.gz.sig" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz.sig"

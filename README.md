@@ -19,7 +19,7 @@
 
 安装包没有付费签名，第一次打开会被系统拦一下：
 
-- macOS：打开时提示无法验证开发者，到 系统设置 → 隐私与安全性，点 仍要打开
+- macOS：打开时提示 Apple 无法验证 P2PCLI，点 完成，再到 系统设置 → 隐私与安全性，在下面点 仍要打开
 - Windows：提示 Windows 已保护你的电脑，点 更多信息 → 仍要运行
 
 软件默认用 `wss://p2pcli.aiqji.cn` 牵线，装好就能用。想用自己部署的牵线服务器（自建或 Cloudflare，见下文），在软件标题栏的设置里换掉。
@@ -250,7 +250,7 @@ Windows 的 psmux 3.4.0 和 macOS 的 tmux 3.7c 已作为真实二进制文件�
 - `pnpm run dev` 启动前、`pnpm run build` 的前置步骤仅检查本地文件的大小、SHA-256、CPU 架构、Mac 最低系统版本和动态库路径。缺失或损坏时中止并提示恢复仓库文件。
 - `app/src-tauri/binaries` 保存可执行文件；`app/src-tauri/resources/session-tools` 保存对应平台许可和来源记录；`scripts/session-tools.json` 锁定官方来源、归档及文件 SHA-256。
 - Tauri 的平台配置只引用该平台的 `externalBin` 和许可目录，再按目标架构选择单份二进制。仓库包含所有版本，安装包不会携带另一平台或无关架构的组件。Mac 通用包只在显式指定 `universal-apple-darwin` 时使用。
-- Tauri 在开发时将组件复制到可执行文件旁，Mac 发行包中的组件参与正常的签名、公证流程。Git 已保留 Mac 文件的可执行权限。
+- Tauri 在开发时将组件复制到可执行文件旁，Mac 发行包里的组件和 app 一起做 ad-hoc 签名（`tauri.macos.conf.json` 里 `signingIdentity` 是 `-`），没有公证。Git 已保留 Mac 文件的可执行权限。
 
 可单独校验或查看目标，不构建应用：
 

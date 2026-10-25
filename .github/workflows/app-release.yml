@@ -91,7 +91,7 @@ jobs:
           - Windows：\`P2PCLI_${ver}_x64-setup.exe\`
 
           不知道 Mac 是哪种芯片：左上角苹果菜单 → 关于本机，芯片一栏写 Apple 的选第一个，写 Intel 的选第二个。
-          安装包没有付费签名，第一次打开会被系统拦一下：Mac 到 系统设置 → 隐私与安全性 点 仍要打开；Windows 点 更多信息 → 仍要运行。
+          安装包没有付费签名，第一次打开会被系统拦一下：Mac 提示 Apple 无法验证时点 完成，再到 系统设置 → 隐私与安全性 点 仍要打开；Windows 点 更多信息 → 仍要运行。
           装好以后软件会自动检查更新，有新版本在主界面点一下就能更新。"
           gh release create "$GITHUB_REF_NAME" \
             "dist/P2PCLI_${ver}_aarch64.dmg" "dist/P2PCLI_${ver}_x64.dmg" \

@@ -20,6 +20,9 @@
     ]
   },
   "bundle": {
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "externalBin": [
       "binaries/tmux",
       "binaries/p2pcli"
