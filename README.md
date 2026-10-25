@@ -140,7 +140,7 @@ pnpm run build --bundles app,dmg    # macOS 正式包
 pnpm run build --bundles nsis       # Windows 正式包
 ```
 
-发布软件：改好 `app/src-tauri/tauri.conf.json` 的版本号，推一个同版本的 `vX.Y.Z` 标签（标签附带的说明会成为更新说明），GitHub Actions 会同时编译 Mac（Apple 芯片、Intel）和 Windows（x64、ARM64、32 位）五个安装包，连同在线更新用的 `latest.json` 发到发布页并标成最新版本（`.github/workflows/app-release.yml`）。改了打包配置可以先推一个 `ci/` 开头的分支试编，只编不发，编出来的包在那次运行的 Artifacts 里。dmg 窗口背景和 Windows 安装界面的图在 `app/src-tauri/installer`，改了 SVG 在 Mac 上跑 `CHROME=<Chrome 可执行文件> node scripts/render-installer-art.mjs` 重新出图。在线更新包要签名：仓库 Secrets 里放 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容，没有密码），公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥丢了，已经装上的软件就收不到更新了。本地打正式包不需要私钥，只有加上 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 才会生成更新包并要求签名。
+发布软件：改好 `app/src-tauri/tauri.conf.json` 的版本号，推一个同版本的 `vX.Y.Z` 标签（标签附带的说明会成为更新说明），GitHub Actions 会同时编译 Mac（Apple 芯片、Intel）和 Windows（x64、ARM64、32 位）五个安装包，连同在线更新用的 `latest.json` 发到发布页并标成最新版本（`.github/workflows/app-release.yml`）。改了打包配置可以先推一个 `ci/` 开头的分支试编，只编不发，编出来的包在那次运行的 Artifacts 里。dmg 窗口背景和 Windows 安装界面的图在 `app/src-tauri/installer`，Mac 菜单栏图标是 `app/src-tauri/icons/tray.svg`，改了 SVG 在 Mac 上跑 `CHROME=<Chrome 可执行文件> node scripts/render-art.mjs` 重新出图。在线更新包要签名：仓库 Secrets 里放 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容，没有密码），公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥丢了，已经装上的软件就收不到更新了。本地打正式包不需要私钥，只有加上 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 才会生成更新包并要求签名。
 
 发布牵线服务器：改好根目录 `Cargo.toml` 的版本号，推一个同版本的 `server-vX.Y.Z` 标签，GitHub Actions 会编译 Linux x86_64、aarch64 两个版本连同校验和放到发布页（`.github/workflows/server-release.yml`），一键安装脚本就从那里下载。
 

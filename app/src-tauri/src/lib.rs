@@ -1009,6 +1009,12 @@ pub fn run() {
                     }
                     _ => {}
                 });
+            // Mac 菜单栏按苹果的规矩用单色模板图，系统按菜单栏深浅自动染色；Windows 托盘用彩色图标
+            #[cfg(target_os = "macos")]
+            {
+                tray = tray.icon(tauri::include_image!("icons/tray-template.png")).icon_as_template(true);
+            }
+            #[cfg(not(target_os = "macos"))]
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
