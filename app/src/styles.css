@@ -686,6 +686,15 @@
   flex: 1;
   min-height: 0;
 }
+/* 滚动条浮在内容上，细一点；xterm 用内联样式定宽，只能用 !important 盖掉 */
+.term .xterm-scrollable-element > .scrollbar.vertical {
+  width: 8px !important;
+}
+.term .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  left: 1px !important;
+  width: 6px !important;
+  border-radius: 3px;
+}
 .term-overlay {
   position: absolute;
   inset: 0;

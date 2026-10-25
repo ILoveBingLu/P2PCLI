@@ -2,7 +2,6 @@
 import { useEffect, useRef } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
@@ -10,9 +9,31 @@ import type { TermStatus, OpenedTerminal } from "./api";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
+/**
+ * 按容器实际宽高算行列，铺满不留边。xterm 6 的滚动条是浮在内容上的，
+ * 官方 FitAddon 还按老办法给它扣掉 14px，右边会空出一条，所以自己算。
+ * 读字符尺寸用的是 xterm 内部接口，FitAddon 也是这么读的；xterm 版本锁死，升级时要重看。
+ */
+function fitTerminal(term: Terminal, el: HTMLElement) {
+  const core = (term as unknown as {
+    _core: { _renderService: { clear(): void; dimensions: { css: { cell: { width: number; height: number } } } } };
+  })._core;
+  const cell = core._renderService.dimensions.css.cell;
+  if (!cell.width || !cell.height || el.clientWidth === 0 || el.clientHeight === 0) return;
+  const cols = Math.max(2, Math.floor(el.clientWidth / cell.width));
+  const rows = Math.max(1, Math.floor(el.clientHeight / cell.height));
+  if (cols === term.cols && rows === term.rows) return;
+  core._renderService.clear();
+  term.resize(cols, rows);
+}
+
 const theme = {
   background: "#111114",
   foreground: "#e6e8ee",
+  // 悬浮滚动条：半透明，不滚的时候自己淡出
+  scrollbarSliderBackground: "#ffffff1f",
+  scrollbarSliderHoverBackground: "#ffffff38",
+  scrollbarSliderActiveBackground: "#ffffff52",
   cursor: "#e6e8ee",
   selectionBackground: "#8b7cf84d",
   black: "#1b1f2a",
@@ -44,7 +65,6 @@ interface Props {
 export function TerminalView({ connId, sessionId, active, onStatus, onReady }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
   const cb = useRef({ onStatus, onReady });
   cb.current = { onStatus, onReady };
 
@@ -60,8 +80,6 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
       macOptionIsMeta: true,
       theme,
     });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     term.open(el);
@@ -73,9 +91,8 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
       // 没有 WebGL 就用默认渲染
     }
     termRef.current = term;
-    fitRef.current = fit;
     window.__ptTest?.terms.push(term);
-    if (el.offsetWidth > 0) fit.fit();
+    fitTerminal(term, el);
 
     let termId: number | null = null;
     let disposed = false;
@@ -142,7 +159,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
       }),
     ];
     const ro = new ResizeObserver(() => {
-      if (el.offsetWidth > 0 && el.offsetHeight > 0) fit.fit();
+      fitTerminal(term, el);
     });
     ro.observe(el);
 
@@ -161,7 +178,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady }: P
   useEffect(() => {
     if (!active) return;
     const id = requestAnimationFrame(() => {
-      if (box.current && box.current.offsetWidth > 0) fitRef.current?.fit();
+      if (box.current && termRef.current) fitTerminal(termRef.current, box.current);
       termRef.current?.focus();
     });
     return () => cancelAnimationFrame(id);
