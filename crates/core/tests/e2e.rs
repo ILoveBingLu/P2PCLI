@@ -626,6 +626,47 @@ async fn zcode_settings_are_read_and_switched() {
     host.shutdown().await;
 }
 
+/// 连接信息：连上以后能拿到对方的软件版本、系统、会话管理器，以及线路、两头地址、收发字节这些统计。
+/// 会话管理器要真的有 tmux 才报得出来，没设 P2PCLI_TEST_SESSION_PROGRAM 时只看系统 PATH 里有没有
+#[tokio::test(flavor = "multi_thread")]
+async fn connection_info_and_stats() {
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let program = std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from);
+    let host = Node::start(NodeConfig {
+        data_dir: temp_dir("info-host"), offline: true, app_version: Some("9.9.9".into()),
+        session_program: program.clone(),
+        ..Default::default()
+    }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("info-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+
+    assert_eq!(remote.info.version.as_deref(), Some("9.9.9"));
+    assert!(remote.info.os.as_deref().is_some_and(|os| os.contains(" · ")), "系统和架构：{:?}", remote.info.os);
+    if program.is_some() {
+        assert!(remote.info.multiplexer.as_deref().is_some_and(|m| m.starts_with("tmux ") || m.contains("psmux")), "{:?}", remote.info.multiplexer);
+    }
+
+    // 握手已经走过数据；有 tmux 时再开个终端走点数据，计数要接着涨
+    let after = remote.stats(&guest.endpoint);
+    assert!(after.sent_bytes > 0 && after.recv_bytes > 0 && after.sent_packets >= after.lost_packets, "{after:?}");
+    assert!(matches!(after.path.kind, p2pcli_core::path::PathKind::Ipv4 | p2pcli_core::path::PathKind::Ipv6), "本机回环是直连：{:?}", after.path);
+    assert!(after.local.is_some() && after.path.remote.is_some(), "两头地址：{after:?}");
+    if program.is_some() {
+        let (mut input, mut output) = remote.open_terminal(80, 20).await.unwrap();
+        let before = remote.stats(&guest.endpoint);
+        input.write(b"echo stats-ok\r").await.unwrap();
+        read_until(&mut input, &mut output, "stats-ok").await;
+        let later = remote.stats(&guest.endpoint);
+        assert!(later.sent_bytes > before.sent_bytes && later.recv_bytes > before.recv_bytes, "{before:?} → {later:?}");
+        remote.end_terminal(output.session_id.clone()).await.ok();
+    }
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
 /// 在线探测：配对过的能拿会话列表；没配对的只知道在线和延迟；旧版本认得出来，不当成离线；对方关了 ping 就不通
 #[tokio::test(flavor = "multi_thread")]
 async fn presence_probe_paired_unpaired_and_old_version() {

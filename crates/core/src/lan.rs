@@ -265,7 +265,7 @@ mod tests {
     use super::*;
 
     fn me(name: &str) -> DeviceInfo {
-        DeviceInfo { name: name.into(), platform: "macos".into(), user: "u".into() }
+        DeviceInfo { name: name.into(), platform: "macos".into(), user: "u".into(), version: None, os: None }
     }
 
     #[test]

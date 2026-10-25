@@ -55,6 +55,8 @@ pub struct NodeConfig {
     pub lan_visible: bool,
     /// 收到的文件放哪；空着是下载文件夹里的 P2PCLI
     pub inbox_dir: Option<PathBuf>,
+    /// 软件版本，连接时告诉对方，对方的连接信息里显示
+    pub app_version: Option<String>,
 }
 
 /// 本机知道的一台设备：连接历史、配对过的、局域网里看到的合在一起，命令行列设备、按名字找设备用
@@ -161,7 +163,8 @@ impl Node {
             Some(endpoint) => endpoint,
             None => builder.bind().await.context("启动网络失败")?,
         };
-        let me = DeviceInfo::local(cfg.device_name.clone());
+        let mut me = DeviceInfo::local(cfg.device_name.clone());
+        me.version = cfg.app_version.clone();
         let lan = match existing_lan {
             Some(lan) => {
                 lan.set_info(&me);

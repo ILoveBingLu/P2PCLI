@@ -13,6 +13,23 @@ export interface RemoteInfo {
   name: string;
   platform: string;
   user: string;
+  /** 对方的软件版本、系统、会话管理器；旧版本不告诉 */
+  version?: string | null;
+  os?: string | null;
+  multiplexer?: string | null;
+}
+
+/** 连接信息卡片用的统计；字节数、包数从连上开始累计，界面自己算速率 */
+export interface ConnStats {
+  path: PathInfo;
+  /** 本机这头的地址：IPv6 直连一般是公网地址，IPv4 多半是内网地址 */
+  local: string | null;
+  /** 本机对外的 IPv4 公网地址 */
+  public_v4: string | null;
+  sent_bytes: number;
+  recv_bytes: number;
+  sent_packets: number;
+  lost_packets: number;
 }
 
 export interface TerminalSession {
@@ -311,6 +328,7 @@ export const api = {
   disconnect: (connId: number) => invoke("disconnect", { connId }),
   pathInfo: (connId: number) => invoke<PathInfo>("path_info", { connId }),
   listTerminals: (connId: number) => invoke<TerminalSession[]>("list_terminals", { connId }),
+  connectionStats: (connId: number) => invoke<ConnStats>("connection_stats", { connId }),
   installedAgents: (connId: number, refresh = false) => invoke<InstalledAgent[]>("installed_agents", { connId, refresh }),
   launchAgent: (connId: number, sessionId: string, kind: string, allowBypass = false) =>
     invoke<void>("launch_agent", { connId, sessionId, kind, allowBypass }),

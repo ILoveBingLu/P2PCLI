@@ -1830,3 +1830,79 @@ img.agent-icon {
   font-size: 12px;
   color: var(--muted-foreground);
 }
+
+/* 底部栏右边的线路和延时，点开是连接详情 */
+.terminal-status-path-button {
+  flex: none;
+  height: 20px;
+  gap: 5px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+.terminal-status-path-button:hover,
+.terminal-status-path-button[aria-expanded="true"] {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--foreground);
+}
+.connection-signal {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+[data-level="good"] > .connection-signal { color: var(--success); }
+[data-level="fair"] > .connection-signal { color: var(--warning); }
+[data-level="poor"] > .connection-signal { color: var(--danger); }
+.connection-card {
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  padding: 4px 0;
+}
+.connection-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.connection-card-head .connection-signal {
+  width: 16px;
+  height: 16px;
+}
+.connection-card-head h2,
+.connection-card-head [slot="title"] {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.connection-card-head strong {
+  margin-left: auto;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.connection-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 10px 16px;
+}
+.connection-card-section + .connection-card-section {
+  border-top: 1px solid var(--border);
+}
+.connection-card-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  font-size: 12px;
+}
+.connection-card-row dt {
+  color: var(--muted-foreground);
+}
+.connection-card-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}

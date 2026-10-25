@@ -383,6 +383,7 @@ impl Host {
             name,
             platform,
             password,
+            ..
         } = timeout(Duration::from_secs(10), read_msg(&mut recv)).await??
         else {
             bail!("开场消息不对");
@@ -442,6 +443,9 @@ impl Host {
                 name: me.name,
                 platform: me.platform,
                 user: me.user,
+                version: me.version,
+                os: me.os,
+                multiplexer: self.terminals.describe().await,
             },
         )
         .await?;

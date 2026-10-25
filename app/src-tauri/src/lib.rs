@@ -37,6 +37,9 @@ const NEARBY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_s
 
 /// Tauri externalBin is next to the app executable in both development and
 /// installed builds (Contents/MacOS on macOS). It is selected at package time.
+/// 软件版本（tauri.conf.json 里的），启动时记下，连接时告诉对方
+static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 fn bundled_session_program() -> std::io::Result<Option<PathBuf>> {
     #[cfg(any(windows, target_os = "macos"))]
     {
@@ -591,6 +594,13 @@ fn path_info(state: State<'_, AppState>, conn_id: u64) -> Result<PathInfo, Strin
     Ok(state.remote(conn_id)?.path())
 }
 
+/// 连接信息卡片：线路、两头地址、收发字节和丢包计数
+#[tauri::command]
+fn connection_stats(state: State<'_, AppState>, conn_id: u64) -> Result<p2pcli_core::path::ConnStats, String> {
+    let remote = state.remote(conn_id)?;
+    Ok(remote.stats(&state.node().endpoint))
+}
+
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum TermStatus {
@@ -819,6 +829,7 @@ async fn save_settings(
         relays: effective_relay(&s).map(|r| r.split(',').map(|u| u.trim().to_string()).collect()).unwrap_or_default(),
         lan: true,
         lan_visible: !s.lan_hidden,
+        app_version: APP_VERSION.get().cloned(),
         ..Default::default()
     };
     let old = state.node();
@@ -907,6 +918,7 @@ pub fn run() {
             };
             std::fs::create_dir_all(&data_dir)?;
             init_logging(&data_dir);
+            let _ = APP_VERSION.set(app.package_info().version.to_string());
             info!(pid = std::process::id(), version = env!("CARGO_PKG_VERSION"),
                 development = cfg!(debug_assertions), executable = ?std::env::current_exe(), "应用进程启动（新一次运行）");
             let settings = load_settings(&data_dir);
@@ -926,6 +938,7 @@ pub fn run() {
                     .unwrap_or_default(),
                 lan: true,
                 lan_visible: !settings.lan_hidden,
+                app_version: APP_VERSION.get().cloned(),
                 ..Default::default()
             };
             let node = tauri::async_runtime::block_on(Node::start(cfg, delegate.clone()))?;
@@ -1078,6 +1091,7 @@ pub fn run() {
             connect,
             disconnect,
             path_info,
+            connection_stats,
             open_terminal,
             list_terminals,
             installed_agents,

@@ -829,6 +829,9 @@ export default function App() {
             )}
             {activeTab && <TerminalStatusbar
               key={activeTab.key}
+              connId={activeTab.connId}
+              info={activeTab.info}
+              echoLatency={() => termHandles.current.get(activeTab.key)?.echoLatency() ?? null}
               sessionId={activeTab.sessionId}
               state={activeTab.state}
               path={paths[activeTab.connId]}

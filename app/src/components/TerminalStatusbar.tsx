@@ -1,18 +1,23 @@
 import type { ReactNode } from "react";
 import { CircleAlert, Folder } from "lucide-react";
-import { pathLabel, type PathInfo, type TerminalSessionSnapshot } from "../api";
+import type { PathInfo, RemoteInfo, TerminalSessionSnapshot } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { AGENT_STATE_TEXT, AgentIcon, AgentQuotaLabel, AgentStateLabel } from "./Agent";
+import { ConnectionCard } from "./ConnectionCard";
 
 function Detail({ tip, children, className = "" }: { tip: string; children: ReactNode; className?: string }) {
   return <Tooltip content={tip}><TooltipTrigger className={`terminal-status-detail ${className}`}>{children}</TooltipTrigger></Tooltip>;
 }
 
-export function TerminalStatusbar({ sessionId, state, path, snapshot }: {
+export function TerminalStatusbar({ connId, info, sessionId, state, path, snapshot, echoLatency }: {
+  connId: number;
+  info: RemoteInfo;
   sessionId?: string;
   state: "opening" | "open" | "exited" | "closed";
   path?: PathInfo;
   snapshot?: TerminalSessionSnapshot;
+  /** 这个终端最近的按键回显时间，连接详情里显示 */
+  echoLatency: () => number | null;
 }) {
   const sessions = snapshot?.sessions ?? [];
   const session = sessionId ? sessions.find((entry) => entry.id === sessionId) : undefined;
@@ -38,9 +43,7 @@ export function TerminalStatusbar({ sessionId, state, path, snapshot }: {
         </Detail>}
       </div>
       {error && state !== "closed" && <Detail tip={error}><CircleAlert aria-label="状态更新失败" /></Detail>}
-      {state === "open" && path && <Detail tip={`连接方式：${pathLabel(path)}`}>
-        <span>{pathLabel(path)}</span>
-      </Detail>}
+      {state === "open" && path && <ConnectionCard connId={connId} info={info} path={path} echoLatency={echoLatency} />}
     </footer>
   );
 }

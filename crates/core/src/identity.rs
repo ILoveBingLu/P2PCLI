@@ -28,6 +28,12 @@ pub struct DeviceInfo {
     pub name: String,
     pub platform: String,
     pub user: String,
+    /// 软件版本，比如 0.1.4；桌面软件启动时给，命令行和测试里没有
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// 系统和架构，比如 macOS 26.1 Tahoe · arm64
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
 }
 
 impl DeviceInfo {
@@ -40,6 +46,8 @@ impl DeviceInfo {
             name,
             platform: std::env::consts::OS.to_string(),
             user: whoami::username().unwrap_or_default(),
+            version: None,
+            os: sysinfo::System::long_os_version().map(|os| format!("{os} · {}", sysinfo::System::cpu_arch())),
         }
     }
 }

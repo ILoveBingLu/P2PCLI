@@ -48,12 +48,24 @@ pub enum Msg {
         name: String,
         platform: String,
         password: Option<String>,
+        /// 软件版本和系统，连接信息里显示；旧版本不带
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os: Option<String>,
     },
     /// 被连方同意
     Welcome {
         name: String,
         platform: String,
         user: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os: Option<String>,
+        /// 会话放在什么里面，比如 tmux 3.7c、psmux
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        multiplexer: Option<String>,
     },
     Reject {
         code: RejectCode,
@@ -228,6 +240,8 @@ mod tests {
             name: "测试机".into(),
             platform: "macos".into(),
             password: Some("abc123".into()),
+            version: Some("0.1.4".into()),
+            os: None,
         };
         write_msg(&mut a, &hello).await.unwrap();
         write_data(&mut a, "你好\r\n".as_bytes()).await.unwrap();

@@ -56,6 +56,8 @@ pub struct SessionManager {
     installed: tokio::sync::Mutex<Option<(std::time::Instant, Vec<crate::launchers::InstalledAgent>)>>,
     approvals: std::sync::Mutex<crate::approval::Tracker>,
     approval_gate: tokio::sync::Mutex<()>,
+    /// 会话管理器自己报的版本，问一次记住
+    described: tokio::sync::OnceCell<Option<String>>,
 }
 
 impl SessionManager {
@@ -73,7 +75,18 @@ impl SessionManager {
             installed: Default::default(),
             approvals: Default::default(),
             approval_gate: Default::default(),
+            described: Default::default(),
         }
+    }
+
+    /// 会话放在什么里面：tmux 自己报的“tmux 3.7c”，psmux 报的版本；跑不起来就不知道
+    pub async fn describe(&self) -> Option<String> {
+        self.described.get_or_init(|| async {
+            let out = self.command(&["-V"]).await.ok().filter(|o| o.status.success())?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            let line = text.lines().next()?.trim();
+            (!line.is_empty() && line.len() <= 64).then(|| line.to_string())
+        }).await.clone()
     }
 
     fn name(owner: &str, id: &str) -> Result<String> {

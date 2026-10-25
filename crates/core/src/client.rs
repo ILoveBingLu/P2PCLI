@@ -45,6 +45,10 @@ pub struct RemoteInfo {
     pub name: String,
     pub platform: String,
     pub user: String,
+    /// 对方的软件版本、系统、会话管理器；旧版本不告诉
+    pub version: Option<String>,
+    pub os: Option<String>,
+    pub multiplexer: Option<String>,
 }
 
 /// 一台已经同意连接的对方设备
@@ -88,6 +92,8 @@ pub async fn handshake(
             name: me.name.clone(),
             platform: me.platform.clone(),
             password,
+            version: me.version.clone(),
+            os: me.os.clone(),
         },
     )
     .await?;
@@ -100,6 +106,9 @@ pub async fn handshake(
             name,
             platform,
             user,
+            version,
+            os,
+            multiplexer,
         } => Ok(RemoteHost {
             conn,
             info: RemoteInfo {
@@ -107,6 +116,9 @@ pub async fn handshake(
                 name,
                 platform,
                 user,
+                version,
+                os,
+                multiplexer,
             },
             _control: send,
         }),
@@ -187,6 +199,10 @@ impl RemoteHost {
 
     pub fn path(&self) -> PathInfo {
         path::current(&self.conn)
+    }
+
+    pub fn stats(&self, endpoint: &iroh::Endpoint) -> path::ConnStats {
+        path::stats(&self.conn, endpoint)
     }
 
     pub fn connection(&self) -> &Connection {

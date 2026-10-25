@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use iroh::TransportAddr;
-use iroh::endpoint::Connection;
+use iroh::{Endpoint, TransportAddr, Watcher};
+use iroh::endpoint::{Connection, LocalTransportAddr};
 use iroh::endpoint::transports::{
     AddrKind, PathSelection, PathSelectionContext, PathSelectionData, PathSelector,
 };
@@ -134,5 +134,37 @@ pub fn current(conn: &Connection) -> PathInfo {
         kind,
         rtt_ms: Some(p.rtt().as_millis() as u64),
         remote,
+    }
+}
+
+/// 连接信息卡片用的统计。字节数、包数都是从连上开始累计的，界面隔一秒取一次，自己算速率和丢包率
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnStats {
+    pub path: PathInfo,
+    /// 本机这头的地址：IPv6 直连一般就是公网地址，IPv4 多半是内网地址；走中继时没有
+    pub local: Option<String>,
+    /// 本机对外的 IPv4 公网地址，打洞时探测到的；IPv4 走 NAT 时看这个
+    pub public_v4: Option<String>,
+    pub sent_bytes: u64,
+    pub recv_bytes: u64,
+    pub sent_packets: u64,
+    pub lost_packets: u64,
+}
+
+pub fn stats(conn: &Connection, endpoint: &Endpoint) -> ConnStats {
+    let local = conn.paths().iter().find(|p| p.is_selected()).and_then(|p| match p.local_addr() {
+        LocalTransportAddr::Ip(ip) => ip.map(|ip| ip.to_string()),
+        _ => None,
+    });
+    let public_v4 = endpoint.net_report().get().and_then(|r| r.global_v4).map(|a| a.ip().to_string());
+    let s = conn.stats();
+    ConnStats {
+        path: current(conn),
+        local,
+        public_v4,
+        sent_bytes: s.udp_tx.bytes,
+        recv_bytes: s.udp_rx.bytes,
+        sent_packets: s.sent_packets,
+        lost_packets: s.lost_packets,
     }
 }

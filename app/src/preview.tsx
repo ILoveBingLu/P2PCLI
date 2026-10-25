@@ -75,6 +75,7 @@ let pathSamples = 0;
 // s=latency: probe and terminal deliberately disagree; connected views must share updates.
 if (s === "latency") ov.devices[0].path!.rtt_ms = 99;
 let statusStartedAt = 0;
+const fakeTraffic = { sent: 120_000, recv: 2_400_000, packets: 4000, lost: 3 };
 const now = Math.floor(Date.now() / 1000);
 // Approval fixtures exercise display/submission without sending keys to a real AI.
 const approvalKind = ["codex", "gemini", "opencode"].find((kind) => s === `approval-${kind}`) ?? "claude";
@@ -257,7 +258,9 @@ mockIPC(
               r({
                 conn_id: 1,
                 code: lan ? null : "123456789",
-                info: { endpoint_id: lan?.endpoint_id ?? "x", name: lan?.name ?? "工作室 Mac mini", platform: lan?.platform ?? "macos", user: "me" },
+                info: { endpoint_id: lan?.endpoint_id ?? "x", name: lan?.name ?? "工作室 Mac mini", platform: lan?.platform ?? "macos", user: "me",
+                  // s=old-peer：对方是不交换版本的旧版本
+                  ...(s === "old-peer" ? {} : { version: "0.1.4", os: "macOS 26.1 Tahoe · arm64", multiplexer: "tmux 3.7c" }) },
                 path: { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" },
               }),
             600,
@@ -400,6 +403,23 @@ mockIPC(
       case "kick":
         ov.sessions = ov.sessions.filter((session) => session.session !== args.session);
         return true;
+      case "connection_stats": {
+        // 计数从“连上”开始累计，每次多一点；s=relay 走中继、偶尔丢包
+        fakeTraffic.sent += 900 + Math.random() * 3000;
+        fakeTraffic.recv += 4000 + Math.random() * 40000;
+        fakeTraffic.packets += 30;
+        if (s === "relay" && Math.random() < 0.3) fakeTraffic.lost += 1;
+        const relay = s === "relay";
+        return {
+          path: { kind: relay ? "relay" : "ipv6", rtt_ms: relay ? 180 : 12, remote: relay ? "https://relay.example.com./" : "[240e::1]:7788" },
+          local: relay ? null : "240e:abc::5",
+          public_v4: "203.0.113.25",
+          sent_bytes: Math.round(fakeTraffic.sent),
+          recv_bytes: Math.round(fakeTraffic.recv),
+          sent_packets: fakeTraffic.packets,
+          lost_packets: fakeTraffic.lost,
+        };
+      }
       case "path_info":
         if (s === "latency") return { kind: "ipv6", rtt_ms: ++pathSamples === 1 ? 20 : 35, remote: "[240e::1]:7788" };
         return { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" };

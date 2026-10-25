@@ -187,6 +187,7 @@ async fn main() -> Result<()> {
             lan_visible: !cli.no_lan && !cli.lan_hidden,
             session_program: None,
             inbox_dir: cli.inbox.clone(),
+            app_version: None,
         },
         Arc::new(CliDelegate { approve }),
     )

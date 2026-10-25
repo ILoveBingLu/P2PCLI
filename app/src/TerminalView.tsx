@@ -68,6 +68,8 @@ export interface TerminalHandle {
   enter: () => void;
   /** 原样发几个按键，比如 Shift+Tab 是 \x1b[Z */
   keys: (data: string) => void;
+  /** 最近几次按键到屏幕回显的时间（毫秒，取中位数）；还没测到是 null */
+  echoLatency: () => number | null;
   focus: () => void;
   canLaunch: () => boolean;
 }
@@ -190,6 +192,25 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     // 往上滚过以后对面可能停在复制模式，那里按键是复制模式的命令；所以打字前先发一下中键退出来，字照常进 shell
     let maybeCopyMode = false;
     let wheelRest = 0;
+    // 按键回显：终端安静时敲一个键开始计时，下一次有输出就停表。AI 在刷屏时分不清哪段是回显，不测
+    let echoStart: number | null = null;
+    let lastOutput = 0;
+    const echoSamples: number[] = [];
+    const typed = (data: string) => {
+      const now = performance.now();
+      if (echoStart == null && data.length <= 4 && now - lastOutput > 300) echoStart = now;
+    };
+    const received = () => {
+      const now = performance.now();
+      lastOutput = now;
+      if (echoStart == null) return;
+      const ms = now - echoStart;
+      echoStart = null;
+      if (ms < 2000) {
+        echoSamples.push(ms);
+        if (echoSamples.length > 9) echoSamples.shift();
+      }
+    };
     const send = (data: string, binary = false) => {
       guard.input(prompt().signature);
       cb.current.onPromptReady?.(false);
@@ -256,12 +277,21 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       },
       enter: () => send("\r"),
       keys: (data) => send(data),
+      echoLatency: () => {
+        if (!echoSamples.length) return null;
+        const sorted = [...echoSamples].sort((a, b) => a - b);
+        return Math.round(sorted[Math.floor(sorted.length / 2)]);
+      },
       focus: () => term.focus(),
       canLaunch,
     });
 
     const output = new Channel<ArrayBuffer>();
-    output.onmessage = (buf) => { if (!disposed) resizeFrame.write(new Uint8Array(buf)); };
+    output.onmessage = (buf) => {
+      if (disposed) return;
+      received();
+      resizeFrame.write(new Uint8Array(buf));
+    };
     const status = new Channel<TermStatus>();
     status.onmessage = (s) => {
       if (!disposed) { inputReady.current = false; cb.current.onPromptReady?.(false); cb.current.onStatus(s); }
@@ -292,7 +322,10 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
 
     const subs = [
       term.onWriteParsed(reportPrompt),
-      term.onData((d) => send(d)),
+      term.onData((d) => {
+        typed(d);
+        send(d);
+      }),
       term.onBinary((d) => send(d, true)),
       term.onResize(({ cols, rows }) => {
         // 本地已等布局稳定才调整行列，立即同步远端，避免延迟后再重画一轮。
