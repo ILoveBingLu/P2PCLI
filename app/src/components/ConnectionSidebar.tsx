@@ -10,6 +10,8 @@ import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 
+const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
+
 export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onPendingOpen }: {
   ov: Overview | null;
   /** 会话被结束时变，设备下面的会话列表跟着刷新 */
@@ -38,7 +40,22 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   onPendingOpen: (endpointId: string, sessionId: string | null) => void;
 }) {
   const menu = useContextMenu();
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(EXPANDED_DEVICES_KEY) ?? "[]");
+      return new Set(Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string") : []);
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    try {
+      // Use stable device IDs, so renaming a device or changing its code keeps its state.
+      localStorage.setItem(EXPANDED_DEVICES_KEY, JSON.stringify([...expanded]));
+    } catch {
+      // If storage is unavailable, expansion still works for this session.
+    }
+  }, [expanded]);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["nearby", "history"]));
   useEffect(() => {
     if (nearbyReveal > 0) {
@@ -88,6 +105,7 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   const forget = async (endpointId: string) => {
     try {
       for (const entry of ov?.recent.filter((item) => item.endpoint_id === endpointId) ?? []) await api.forgetRecent(entry.code);
+      setExpanded((keys) => new Set([...keys].filter((id) => id !== endpointId)));
       onRefresh();
     } catch (error) { toast.error(String(error)); }
   };
