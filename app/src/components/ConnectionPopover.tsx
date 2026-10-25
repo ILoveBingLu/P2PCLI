@@ -1,4 +1,5 @@
 import { InputOTP, Popover, REGEXP_ONLY_DIGITS } from "@heroui/react";
+import { Fragment } from "react";
 import { ArrowUpRight, LoaderCircle, LockKeyhole, Plus } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -60,7 +61,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                   <FieldLabel htmlFor="remote-code">设备码</FieldLabel>
                   <InputOTP
                     id="remote-code"
-                    className="gap-3"
+                    className="gap-2"
                     variant="secondary"
                     ref={focusDeviceCodeAfterPaint}
                     pushPasswordManagerStrategy="none"
@@ -78,11 +79,16 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                     autoComplete="off"
                   >
                     {[0, 3, 6].map((start) => (
-                      <InputOTP.Group key={start} className="flex-1">
-                        {[0, 1, 2].map((offset) => (
-                          <InputOTP.Slot key={offset} index={start + offset} />
-                        ))}
-                      </InputOTP.Group>
+                      <Fragment key={start}>
+                        {start > 0 && (
+                          <InputOTP.Separator aria-hidden="true" className="bg-muted-foreground/60" />
+                        )}
+                        <InputOTP.Group className="flex-1">
+                          {[0, 1, 2].map((offset) => (
+                            <InputOTP.Slot key={offset} index={start + offset} />
+                          ))}
+                        </InputOTP.Group>
+                      </Fragment>
                     ))}
                   </InputOTP>
                 </Field>
