@@ -275,49 +275,16 @@ export function ConnectionSidebar({ ov, sessionsRev, busy, open, scanning, nearb
   );
 }
 
-/** 设备行右边的在线状态：左边文字（延迟、离线等），右边固定一个信号格。
- *  直连绿色、中继黄色、离线灰色；文字栏宽度固定、靠右，延迟变了信号格也不挪地方，只是亮的格数在变 */
+/** 设备行右边的在线状态：在线显示延迟（直连绿色、中继黄色），离线、旧版本各有提示 */
 function PresenceLabel({ status, connected, path }: { status?: DeviceStatus; connected: boolean; path?: PathInfo }) {
-  let text: string;
-  let tip: string;
-  let kind: string | undefined;
-  let bars = 0;
   if (connected || status?.state === "online") {
     const p = connected ? path : status?.path;
     const label = connected ? "已连接" : "在线";
-    tip = `${label} · ${connected ? "终端连接" : "后台探测"} · ${pathLabel(p)}${p?.remote ? ` · ${p.remote}` : ""}`;
-    kind = p?.kind ?? "unknown";
-    const rtt = p?.rtt_ms != null && p.kind !== "unknown" ? p.rtt_ms : null;
-    text = rtt != null ? `${rtt} ms` : label;
-    if (rtt != null) bars = rtt < 60 ? 4 : rtt < 150 ? 3 : rtt < 300 ? 2 : 1;
-  } else if (status?.state === "offline") {
-    text = tip = "离线";
-    kind = "off";
-  } else if (status?.state === "old_version") {
-    text = "需更新";
-    tip = "对方的 P2PCLI 版本旧，升级后能显示延迟和会话";
-  } else {
-    return null;
+    const tip = `${label} · ${connected ? "终端连接" : "后台探测"} · ${pathLabel(p)}${p?.remote ? ` · ${p.remote}` : ""}`;
+    return <span className="presence-label" data-kind={p?.kind ?? "unknown"} title={tip}>{p?.rtt_ms != null && p.kind !== "unknown" ? `${p.rtt_ms} ms` : label}</span>;
   }
-  return (
-    <span className="presence-label" data-kind={kind} title={tip}>
-      <span className="presence-text">{text}</span>
-      <SignalBars bars={bars} />
-    </span>
-  );
-}
-
-/** 信号格，形状照 lucide 的 Signal 系列（底下一个点，四根由低到高的格）。
- *  画成一个图标、每格单独控制：60 ms 内亮四格，150 ms 内三格，300 ms 内两格，再慢一格，离线不亮；
- *  没亮的格暗着打底，换档时原地淡入淡出 */
-function SignalBars({ bars }: { bars: number }) {
-  return (
-    // 画布裁到正好包住格子（含圆头），底边对齐文字基线
-    <svg className="signal-bars" viewBox="0.75 2.75 22.5 18.5" aria-hidden="true">
-      <path d="M2 20h.01" />
-      {["M7 20v-4", "M12 20v-8", "M17 20V8", "M22 4v16"].map((d, i) => (
-        <path key={d} d={d} data-on={i < bars || undefined} />
-      ))}
-    </svg>
-  );
+  if (!status) return null;
+  if (status.state === "offline") return <span className="presence-label" data-kind="off" title="离线">离线</span>;
+  if (status.state === "old_version") return <span className="presence-label" title="对方的 P2PCLI 版本旧，升级后能显示延迟和会话">需更新</span>;
+  return null;
 }

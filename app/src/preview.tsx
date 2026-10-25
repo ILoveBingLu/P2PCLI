@@ -70,22 +70,6 @@ let scanSeq = 0;
 let pathSamples = 0;
 // s=latency: probe and terminal deliberately disagree; connected views must share updates.
 if (s === "latency") ov.devices[0].path!.rtt_ms = 99;
-// s=signal: 连接历史里各档延迟都有一台，看信号格
-if (s === "signal") {
-  const at = Math.floor(Date.now() / 1000);
-  const extra = [
-    { id: "s1", name: "家里的 iMac", platform: "macos", kind: "ipv4", rtt: 99 },
-    { id: "s2", name: "公司服务器", platform: "linux", kind: "relay", rtt: 180 },
-    { id: "s3", name: "海外 VPS", platform: "linux", kind: "relay", rtt: 420 },
-  ] as const;
-  for (const [i, d] of extra.entries()) {
-    ov.recent.push({ code: String(i + 1).repeat(9), endpoint_id: d.id, name: d.name, platform: d.platform, last_used: 1 - i });
-    ov.devices.push({
-      endpoint_id: d.id, state: "online", paired: true, path: { kind: d.kind, rtt_ms: d.rtt, remote: null },
-      sessions: [], sessions_live: true, sessions_at: at,
-    });
-  }
-}
 let statusStartedAt = 0;
 const now = Math.floor(Date.now() / 1000);
 const terminalSessions: TerminalSession[] = s === "sessions" ? [
@@ -148,8 +132,7 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "overview":
-        // s=signal 会改设备状态，返回新对象界面才会重画
-        return s === "signal" ? { ...ov, devices: ov.devices.map((d) => ({ ...d })) } : ov;
+        return ov;
       case "scan_nearby":
         return new Promise((resolve, reject) => setTimeout(() => {
           if (s === "lan-scan-error") return reject("局域网扫描启动失败");
@@ -329,16 +312,4 @@ if (s === "file-request") {
 }
 if (s === "request") {
   setTimeout(() => emit("host-request", { id: 9, remote: "f9bb5fbc3f0a1b2c3d4e5f60718293a4", name: "小王的 ThinkPad", platform: "windows" }), 300);
-}
-// s=signal：第一台设备每 2.5 秒换一档延迟再到离线，看信号格在原地变
-if (s === "signal") {
-  const steps = [12, 99, 180, 420, null];
-  let step = 0;
-  window.setInterval(() => {
-    const rtt = steps[++step % steps.length];
-    const d = ov.devices[0];
-    d.state = rtt == null ? "offline" : "online";
-    d.path = rtt == null ? null : { kind: rtt < 150 ? "ipv6" : "relay", rtt_ms: rtt, remote: null };
-    void emit("server-status", {});
-  }, 2500);
 }
