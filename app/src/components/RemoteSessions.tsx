@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, LoaderCircle, Plus, RefreshCw, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, LoaderCircle, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2 } from "lucide-react";
 import { api, pathLabel, platformLabel, type PathInfo, type RemoteInfo, type TerminalSession } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFoo
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
+import { useContextMenu } from "./ContextMenu";
 import { relativeTime, sessionLabels } from "./sessionText";
 
 export interface SessionTarget { connId: number; info: RemoteInfo; code: string | null }
@@ -29,6 +30,7 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
   const [ending, setEnding] = useState<TerminalSession | null>(null);
   const [path, setPath] = useState<PathInfo | null>(null);
   const pending = useRef(false);
+  const menu = useContextMenu();
 
   const load = useCallback(async (manual = false) => {
     if (pending.current) return;
@@ -79,7 +81,16 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
   const { info } = target;
 
   return (
-    <section className="settings-page" aria-labelledby="remote-sessions-title">
+    <section
+      className="settings-page"
+      aria-labelledby="remote-sessions-title"
+      // 空白处右键：新建、刷新；会话行自己的菜单先接到，不会冒泡到这里
+      onContextMenu={(e) => menu.open(e, [
+        { id: "new", label: "新建会话", icon: <Plus className="size-4" />, disabled: sessions === null, onAction: () => onOpen() },
+        { id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: () => void load(true) },
+      ])}
+    >
+      {menu.element}
       <div className="settings-page-inner">
         <header className="remote-device">
           <Button variant="ghost" size="icon-sm" title="返回工作区" aria-label="返回工作区" onClick={onBack}><ArrowLeft /></Button>
@@ -108,7 +119,7 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
               <RefreshCw className={refreshing ? "animate-spin" : undefined} />
             </Button>
           </div>
-          <p className="-mt-1 text-xs text-muted-foreground">关闭标签或断线后，会话照样在这台设备上运行，随时回来接着用。</p>
+          <p className="-mt-1 text-xs text-muted-foreground">关闭标签或断线后，会话照样在这台设备上运行。点一下打开，右键可以结束。</p>
 
           {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
 
@@ -131,24 +142,34 @@ export function RemoteSessions({ target, openSessions, sessionsRev, onOpen, onBa
                 const open = openSessions.has(s.id);
                 const label = labels.get(s.id) ?? "会话";
                 return (
-                  <li key={s.id} className="session-row">
-                    <span className="session-row-icon"><SquareTerminal /></span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate text-sm font-medium">{label}</span>
-                        {open
-                          ? <Badge variant="success">已在标签中打开</Badge>
-                          : s.attached
-                            ? <Badge variant="warning">其他地方正在用</Badge>
-                            : <Badge variant="secondary">后台运行</Badge>}
-                      </div>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                        <span className="font-mono">{s.id.slice(0, 8)}</span>
-                        {s.created_at ? ` · ${relativeTime(s.created_at)}创建` : ""}
-                      </p>
-                    </div>
-                    <Button variant="secondary" size="sm" onClick={() => onOpen(s.id)}>{open ? "切换过去" : "打开"}</Button>
-                    <Button variant="ghost" size="icon-sm" aria-label={`结束${label}`} title="结束会话及其中的程序" onClick={() => setEnding(s)}><Trash2 /></Button>
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      className="session-row"
+                      title={open ? "切换到这个会话的标签" : "打开这个会话"}
+                      onClick={() => onOpen(s.id)}
+                      onContextMenu={(e) => menu.open(e, [
+                        { id: "open", label: open ? "切换过去" : "打开", icon: <SquareArrowOutUpRight className="size-4" />, onAction: () => onOpen(s.id) },
+                        { id: "end", label: "结束会话", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => setEnding(s) },
+                      ])}
+                    >
+                      <span className="session-row-icon"><SquareTerminal /></span>
+                      <span className="block min-w-0 flex-1">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm font-medium">{label}</span>
+                          {open
+                            ? <Badge variant="success">已在标签中打开</Badge>
+                            : s.attached
+                              ? <Badge variant="warning">其他地方正在用</Badge>
+                              : <Badge variant="secondary">后台运行</Badge>}
+                        </span>
+                        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                          <span className="font-mono">{s.id.slice(0, 8)}</span>
+                          {s.created_at ? ` · ${relativeTime(s.created_at)}创建` : ""}
+                        </span>
+                      </span>
+                      <ChevronRight className="session-row-chevron" aria-hidden="true" />
+                    </button>
                   </li>
                 );
               })}

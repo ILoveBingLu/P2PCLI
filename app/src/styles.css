@@ -428,10 +428,32 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 10px 10px 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
   border-radius: 14px;
   background: var(--muted-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   transition: background-color 120ms ease;
+}
+.session-row:focus-visible {
+  outline: 2px solid var(--focus, var(--primary));
+  outline-offset: 2px;
+}
+.session-row-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted-foreground);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.session-row:hover .session-row-chevron,
+.session-row:focus-visible .session-row-chevron {
+  opacity: 1;
 }
 .session-row:hover {
   background: color-mix(in oklab, var(--muted-surface), var(--foreground) 4%);
@@ -603,10 +625,12 @@
   position: relative;
   background: var(--terminal);
 }
+/* HeroUI 的标签面板默认有 8px 内边距，终端和底部条要贴边，这里清掉 */
 .terminal-panel {
   position: absolute;
   inset: 0;
   margin: 0;
+  padding: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -656,10 +680,12 @@
 .terminal-statusbar > .terminal-status-command {
   flex-shrink: 1;
 }
+/* 四周只留一点空。用 margin 不用 padding：xterm 按父元素算行列，padding 会被算进去，最下面一行会被挤掉。
+   全屏程序会把屏幕刷成自己的底色，留得太宽就像嵌了个框。 */
 .term {
   flex: 1;
   min-height: 0;
-  padding: 16px 8px 8px 16px;
+  margin: 6px 4px 4px 8px;
 }
 .term-overlay {
   position: absolute;
