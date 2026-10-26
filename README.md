@@ -122,6 +122,8 @@ IPv6 直连（`crates/core/src/v6.rs`）：公网 IPv6 没有 NAT，网卡地址
 
 局域网发现（`crates/core/src/lan.rs`）：用 iroh 官方的 [iroh-mdns-address-lookup](https://docs.rs/iroh-mdns-address-lookup) 在局域网里广播和发现，服务名用 `p2pcli`，只认 P2PCLI 设备。设备名和系统放在广播的附加数据里，只发到局域网：iroh 自带的附加数据接口会连带发到公共 DNS，所以包了一层，只在交给 mDNS 的那份里带上。局域网连接按公钥直连，不经过牵线服务器；广播内容核实不了，所以不拿它新建连接历史，只更新已有记录。
 
+拥塞控制（`crates/core/src/quic.rs`）：iroh 默认的 Cubic 靠丢包判断拥堵，跨境这类往返一百多毫秒、丢包 1% 上下的链路上，传文件只剩 1 Mbps 左右。软件按链路延迟自动选算法：最小往返延迟 20 毫秒以上用 BBR3，局域网和近距离保持 Cubic（BBR3 在低延迟链路上反而更慢）。用模拟链路实测（`cargo test -p p2pcli-core --test lossy_link -- --ignored --nocapture --test-threads=1`）：往返 106 毫秒、丢包 1.3% 时从 0.9 Mbps 提到约 40 Mbps，局域网速度不变。发送数据的一头用什么算法由它自己决定，所以两边都升级才能两个方向都提速。流量窗口不要调大：接收缓冲最多容纳 1024 个不连续的数据块，窗口放大后丢包交错时会被对方直接断开连接。
+
 选路（`crates/core/src/path.rs`）：IPv6 只要不比 IPv4 慢 50 毫秒以上就用 IPv6，其次 IPv4，中继只在都不通时用。iroh 自带的规则只给 IPv6 让 3 毫秒、又要求快 5 毫秒才换路，做不到 IPv6 优先，所以用了它的选路接口（这个接口标着不稳定，iroh 版本已锁死）。
 
 ## 牵线服务器

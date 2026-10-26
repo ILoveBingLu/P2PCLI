@@ -19,6 +19,7 @@ pub mod path;
 pub mod presence;
 pub mod proto;
 pub mod proxy;
+pub mod quic;
 pub mod pty;
 pub mod rdv_ws;
 pub mod rendezvous;

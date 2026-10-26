@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use bytes::Bytes;
-use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::endpoint::{Connection, PathId, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
@@ -300,6 +300,14 @@ impl RemoteHost {
     pub async fn exec(&self, command: &str, cwd: Option<String>, timeout_secs: Option<u64>) -> Result<ExecStream> {
         let (send, recv) = self.open_stream(&Msg::Exec { command: command.to_string(), cwd, timeout_secs }).await?;
         Ok(ExecStream { _send: send, recv, seen: false })
+    }
+
+    /// 这条连接现在用的拥塞控制算法（"cubic" 或 "bbr3"），测试和排查用；本机自己没有
+    pub fn congestion_algorithm(&self) -> Option<&'static str> {
+        match &self.link {
+            Link::Net { conn, .. } => conn.congestion_state(PathId::ZERO).and_then(crate::quic::algorithm),
+            Link::Local { .. } => None,
+        }
     }
 
     /// 连接已经断了；本机自己不会断

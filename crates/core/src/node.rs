@@ -141,7 +141,8 @@ impl Node {
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(key)
             .alpns(vec![ALPN_TERM.to_vec(), ALPN_PRESENCE.to_vec(), ALPN_FILE.to_vec()])
-            .path_selector(std::sync::Arc::new(crate::path::Ipv6First));
+            .path_selector(std::sync::Arc::new(crate::path::Ipv6First))
+            .transport_config(crate::quic::transport_config());
         if let Some(proxy) = &proxy {
             builder = builder.proxy_url(proxy.clone());
         }
