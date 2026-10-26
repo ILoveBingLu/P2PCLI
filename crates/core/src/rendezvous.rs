@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use iroh::endpoint::Connection;
-use iroh::{Endpoint, EndpointAddr, EndpointId, TransportAddr};
+use iroh::{Endpoint, EndpointAddr, EndpointId, TransportAddr, Watcher};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
@@ -381,7 +381,7 @@ impl RdvClient {
                 reason = link.closed() => bail!("和牵线服务器断开：{reason}"),
                 _ = tick.tick() => {
                     // iroh 自己会报公网 IPv6；测试时放开的局域网 IPv6 它不报，这里统一补上
-                    let mut addr = self.endpoint.addr();
+                    let mut addr = without_symmetric_v4(&self.endpoint, self.endpoint.addr());
                     for a in v6::local_candidates(&self.endpoint) {
                         addr = addr.with_ip_addr(a);
                     }
@@ -442,6 +442,29 @@ pub async fn request(conn: &Connection, req: &RdvRequest) -> Result<RdvResponse>
         .await
         .map_err(|_| anyhow!("牵线服务器没回应"))??;
     Ok(resp)
+}
+
+/// 本机 IPv4 出口是对称型 NAT（向不同服务器测出的公网端口不一样）时，不报测出来的公网 IPv4。
+/// 别人照这个地址连进来，包能到，可本机回包从另一个端口出去，对方的 NAT 不认，握手卡死；
+/// 对方同时还在走能通的路（比如经 VPN 隧道的内网地址）时，这个先到的包反而把连接绑在了死路上。
+/// 打洞由 iroh 在连上之后自己换地址协商，用不着这里报。
+fn without_symmetric_v4(endpoint: &Endpoint, addr: EndpointAddr) -> EndpointAddr {
+    let symmetric = endpoint.net_report().get().is_some_and(|r| r.mapping_varies_by_dest_ipv4 == Some(true));
+    if !symmetric {
+        return addr;
+    }
+    EndpointAddr::from_parts(
+        addr.id,
+        addr.addrs.into_iter().filter(|a| match a {
+            TransportAddr::Ip(SocketAddr::V4(v4)) => {
+                // 内网、本机、链路本地和运营商共享地址（100.64.0.0/10，Tailscale 这类也在这段）照报
+                let ip = v4.ip();
+                let shared = ip.octets()[0] == 100 && ip.octets()[1] & 0xc0 == 64;
+                ip.is_private() || ip.is_loopback() || ip.is_link_local() || shared
+            }
+            _ => true,
+        }),
+    )
 }
 
 #[cfg(test)]
