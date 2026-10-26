@@ -35,11 +35,13 @@ const ov: Overview = {
   devices: [
     {
       endpoint_id: "x", state: "online", paired: true,
+      probing: false,
       path: { kind: "ipv6", rtt_ms: 12, remote: "[240e::1]:7788" },
       sessions: [], sessions_live: true, sessions_at: Math.floor(Date.now() / 1000),
     },
     {
       endpoint_id: "y", state: "offline", paired: null, path: null,
+      probing: false,
       sessions: [{ id: "d".repeat(32), created_at: Math.floor(Date.now() / 1000) - 26 * 3600, attached: false }],
       sessions_live: false, sessions_at: Math.floor(Date.now() / 1000) - 2 * 3600,
     },

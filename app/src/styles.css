@@ -605,10 +605,17 @@
 
 /* 连接历史里设备右边的在线状态：直连绿色、中继黄色、离线灰色 */
 .presence-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex: none;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
+}
+.presence-spinner {
+  width: 11px;
+  height: 11px;
 }
 .presence-label[data-kind="ipv6"],
 .presence-label[data-kind="ipv4"] {

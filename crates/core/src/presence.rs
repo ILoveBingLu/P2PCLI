@@ -71,6 +71,8 @@ pub enum PresenceState {
 pub struct DeviceStatus {
     pub endpoint_id: String,
     pub state: PresenceState,
+    /// 正在建立探测连接或读取探测结果
+    pub probing: bool,
     pub path: Option<PathInfo>,
     /// 对方认不认我：配对过才给会话列表；还没探测到是 None
     pub paired: Option<bool>,
@@ -160,6 +162,8 @@ pub struct Prober {
     rdv: Option<Arc<RdvClient>>,
     recent: Arc<RecentStore>,
     conns: Mutex<HashMap<EndpointId, Connection>>,
+    /// 同一台设备可能同时被定时探测和手动刷新，记录进行中的任务数量
+    probing: Mutex<HashMap<EndpointId, u32>>,
     /// 每台设备 ping 连续失败了几次
     fails: Mutex<HashMap<EndpointId, u32>>,
     seen: Mutex<HashMap<String, Seen>>,
@@ -176,6 +180,7 @@ impl Prober {
             rdv,
             recent,
             conns: Default::default(),
+            probing: Default::default(),
             fails: Default::default(),
             seen: Default::default(),
             tasks: Mutex::new(Vec::new()),
@@ -303,31 +308,45 @@ impl Prober {
     }
 
     async fn probe_one(&self, id: EndpointId, code: String) {
-        let conn = match self.connection(id, &code).await {
-            Ok(conn) => conn,
-            Err(state) => return self.record(id, Seen { state, path: None, paired: None, sessions: None }),
-        };
-        match ask_sessions(&conn).await {
-            Ok(sessions) => {
-                if let Some(list) = &sessions
-                    && let Err(e) = self.recent.save_sessions(&id.to_string(), list)
-                {
-                    debug!("记会话列表失败：{e:#}");
+        {
+            let mut probing = self.probing.lock().unwrap();
+            *probing.entry(id).or_default() += 1;
+        }
+
+        let seen = match self.connection(id, &code).await {
+            Ok(conn) => match ask_sessions(&conn).await {
+                Ok(sessions) => {
+                    if let Some(list) = &sessions
+                        && let Err(e) = self.recent.save_sessions(&id.to_string(), list)
+                    {
+                        debug!("记会话列表失败：{e:#}");
+                    }
+                    Seen {
+                        state: PresenceState::Online,
+                        path: Some(path::current(&conn)),
+                        paired: Some(sessions.is_some()),
+                        sessions: sessions.map(|s| (s, now_secs())),
+                    }
                 }
-                self.record(id, Seen {
-                    state: PresenceState::Online,
-                    path: Some(path::current(&conn)),
-                    paired: Some(sessions.is_some()),
-                    sessions: sessions.map(|s| (s, now_secs())),
-                });
-            }
-            Err(e) => {
-                // 连接可能刚断，丢掉它，下一轮重新建
-                debug!(id = %id.fmt_short(), "探测请求失败：{e:#}");
-                self.conns.lock().unwrap().remove(&id);
-                self.record(id, Seen { state: PresenceState::Offline, path: None, paired: None, sessions: None });
+                Err(e) => {
+                    // 连接可能刚断，丢掉它，下一轮重新建
+                    debug!(id = %id.fmt_short(), "探测请求失败：{e:#}");
+                    self.conns.lock().unwrap().remove(&id);
+                    Seen { state: PresenceState::Offline, path: None, paired: None, sessions: None }
+                }
+            },
+            Err(state) => Seen { state, path: None, paired: None, sessions: None },
+        };
+
+        let mut probing = self.probing.lock().unwrap();
+        if let Some(count) = probing.get_mut(&id) {
+            *count -= 1;
+            if *count == 0 {
+                probing.remove(&id);
             }
         }
+        drop(probing);
+        self.record(id, seen);
     }
 
     /// 复用还活着的探测连接；没有就先问牵线服务器在不在线、拿地址，再连
@@ -388,6 +407,7 @@ impl Prober {
                     },
                 };
                 let state = s.map_or(PresenceState::Checking, |s| s.state);
+                let probing = self.probing.lock().unwrap().contains_key(&id);
                 // 在线就现读连接上的往返时间，是实时的
                 let live_path = (state == PresenceState::Online)
                     .then(|| conns.get(&id).filter(|c| c.close_reason().is_none()).map(path::current))
@@ -395,6 +415,7 @@ impl Prober {
                 DeviceStatus {
                     endpoint_id: key,
                     state,
+                    probing,
                     path: live_path.or_else(|| s.and_then(|s| s.path.clone())),
                     paired: s.and_then(|s| s.paired),
                     sessions,

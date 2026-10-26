@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, LoaderCircle, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -280,6 +280,17 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
 
 /** 设备行右边的在线状态：在线显示延迟（直连绿色、中继黄色），离线、旧版本各有提示 */
 function PresenceLabel({ status, connected, path }: { status?: DeviceStatus; connected: boolean; path?: PathInfo }) {
+  if (!connected && status && (status.probing || status.state === "checking")) {
+    return (
+      <Tooltip content="正在与设备握手并探测延迟">
+        <TooltipTrigger<"span"> render={(props) => <span {...props} />}
+          role="status" aria-label="正在探测" className="presence-label" data-kind="checking">
+          <LoaderCircle className="presence-spinner" aria-hidden="true" />
+          <span>探测中…</span>
+        </TooltipTrigger>
+      </Tooltip>
+    );
+  }
   if (connected || status?.state === "online") {
     const p = connected ? path : status?.path;
     const label = connected ? "已连接" : "在线";

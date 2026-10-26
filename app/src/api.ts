@@ -174,6 +174,8 @@ export type PresenceState = "checking" | "online" | "offline" | "old_version";
 export interface DeviceStatus {
   endpoint_id: string;
   state: PresenceState;
+  /** 正在建立探测连接或读取探测结果 */
+  probing: boolean;
   path: PathInfo | null;
   /** 对方认不认我；还没探测到是 null */
   paired: boolean | null;
