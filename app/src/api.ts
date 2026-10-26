@@ -284,6 +284,16 @@ export interface SettingsView {
   inbox_dir: string;
 }
 
+export type SystemPermissionStatus = "granted" | "denied" | "unknown";
+export interface SystemPermission {
+  id: string;
+  name: string;
+  description: string;
+  status: SystemPermissionStatus;
+  can_request: boolean;
+  settings_url: string | null;
+}
+
 /** 发布页上比本机新的版本 */
 export interface UpdateView {
   version: string;
@@ -371,6 +381,9 @@ export const api = {
     invoke<void>("choose_agent_option", { connId, sessionId, approvalId, optionId }),
   endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
+  systemPermissions: () => invoke<SystemPermission[]>("system_permissions"),
+  requestSystemPermission: (permission: string) => invoke<SystemPermission[]>("request_system_permission", { permission }),
+  openSystemSettings: (permission: string) => invoke<void>("open_system_settings", { permission }),
   saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null, lanVisible: boolean, agentCommands: Record<string, string>) =>
     invoke("save_settings", { server, deviceName, relay, proxy, lanVisible, agentCommands }),
   restart: () => invoke("restart"),

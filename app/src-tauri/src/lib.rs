@@ -3,6 +3,7 @@
 mod ai_hint;
 mod cli;
 mod links;
+mod permissions;
 mod update;
 mod logging;
 
@@ -333,6 +334,34 @@ async fn scan_nearby(state: State<'_, AppState>) -> Result<Vec<NearbyDevice>, St
     let node = state.node();
     let lan = node.lan.as_ref().ok_or_else(|| "局域网发现未启用".to_string())?;
     lan.scan(node.id()).await.map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn system_permissions() -> Vec<permissions::SystemPermission> {
+    permissions::list()
+}
+
+#[tauri::command]
+async fn request_system_permission(state: State<'_, AppState>, permission: String) -> Result<Vec<permissions::SystemPermission>, String> {
+    permissions::request(&permission, &state).await
+}
+
+#[tauri::command]
+fn open_system_settings(permission: String) -> Result<(), String> {
+    if permission != "local_network" {
+        return Err(format!("未知的系统权限：{permission}"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("打开系统设置失败：{e}"))?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err("当前系统没有可打开的系统权限设置".into())
 }
 
 #[tauri::command]
@@ -1188,6 +1217,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             overview,
+            system_permissions,
+            request_system_permission,
+            open_system_settings,
             notify,
             scan_nearby,
             diagnose,
