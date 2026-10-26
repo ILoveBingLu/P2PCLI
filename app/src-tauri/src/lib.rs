@@ -140,17 +140,23 @@ impl HostDelegate for UiDelegate {
     fn approve(&self, req: IncomingRequest) -> BoxFuture<Decision> {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(req.id, tx);
+        // 要在把窗口带到前面之前看：用户正看着软件就只弹窗；没在看（在别的软件里、窗口最小化或藏在托盘）才发系统通知
+        let in_use = window_in_use(&self.app);
         show_main(&self.app);
         if let Some(w) = self.app.get_webview_window("main") {
             let _ = w.request_user_attention(Some(tauri::UserAttentionType::Critical));
         }
-        let _ = self
-            .app
-            .notification()
-            .builder()
-            .title("有人请求使用你的终端")
-            .body(format!("{}（{}）", req.name, platform_label(&req.platform)))
-            .show();
+        if !in_use {
+            let (title, body) = if req.known {
+                (
+                    format!("{} 请求控制本机", req.name),
+                    format!("这是你连接过的设备（{}），它现在要反过来使用本机终端。回到 P2PCLI 选择允许或拒绝。", platform_label(&req.platform)),
+                )
+            } else {
+                ("有人请求使用你的终端".to_string(), format!("{}（{}）", req.name, platform_label(&req.platform)))
+            };
+            let _ = self.app.notification().builder().title(title).body(body).show();
+        }
         let _ = self.app.emit("host-request", &req);
         Box::pin(async move { rx.await.unwrap_or(Decision::Deny) })
     }
@@ -198,6 +204,13 @@ impl HostDelegate for UiDelegate {
         let _ = self.app.emit("file-request", &req);
         Box::pin(async move { rx.await.unwrap_or(false) })
     }
+}
+
+/// 用户正在看着 P2PCLI：窗口可见、没最小化、有键盘焦点
+fn window_in_use(app: &AppHandle) -> bool {
+    app.get_webview_window("main").is_some_and(|w| {
+        w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false) && w.is_focused().unwrap_or(false)
+    })
 }
 
 fn human_size(bytes: u64) -> String {
@@ -612,7 +625,7 @@ fn refresh_devices(state: State<'_, AppState>) {
 
 #[tauri::command]
 fn forget_recent(state: State<'_, AppState>, code: String) -> Result<(), String> {
-    state.node().recent.remove(&code).map_err(|e| format!("{e:#}"))
+    state.node().forget_recent(&code).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -644,6 +657,8 @@ struct Connected {
     code: Option<String>,
     info: RemoteInfo,
     path: PathInfo,
+    /// 连接时勾了互相信任，并且已经记下：对方以后可以直接连本机
+    mutual: bool,
 }
 
 #[derive(Serialize)]
@@ -658,6 +673,7 @@ async fn connect(
     state: State<'_, AppState>,
     target: String,
     password: Option<String>,
+    mutual: Option<bool>,
 ) -> Result<Connected, ConnectFail> {
     let password = password.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
     let code = normalize_code(&target);
@@ -694,6 +710,18 @@ async fn connect(
             });
         }
     };
+    // 互相信任：连上的这一刻主人明确勾了，才把对方记进本机的受信设备，它以后连本机不用密码也不用点同意
+    let mutual_done = mutual.unwrap_or(false)
+        && match remote.info.endpoint_id.parse::<iroh::EndpointId>() {
+            Ok(id) => match state.node().host.trust.add(&id, &remote.info.name, &remote.info.platform) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("记互相信任失败：{e:#}");
+                    false
+                }
+            },
+            Err(_) => false,
+        };
     let conn_id = state.next();
     state.remotes.lock().unwrap().insert(conn_id, remote.clone());
     // 命令行（p2pcli exec、pull）对这台设备办事时复用这条连接，不用再弹一次同意
@@ -713,6 +741,7 @@ async fn connect(
         code,
         path: remote.path(),
         info: remote.info.clone(),
+        mutual: mutual_done,
     })
 }
 

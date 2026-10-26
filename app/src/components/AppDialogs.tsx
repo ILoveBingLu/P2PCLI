@@ -104,9 +104,11 @@ export function ApproveDialog({
           <div className="dialog-symbol">
             <ShieldCheck />
           </div>
-          <AlertDialogTitle>新的连接请求</AlertDialogTitle>
+          <AlertDialogTitle>{req.known ? "你连接过的设备请求控制本机" : "新的连接请求"}</AlertDialogTitle>
           <AlertDialogDescription>
-            一台远程设备请求使用你的本机终端。
+            {req.known
+              ? "你之前连接过这台设备，它现在要反过来使用本机（比如它上面的 AI 要在本机跑命令、传文件）。它没有输入配对密码，是否允许由你决定。"
+              : "一台远程设备请求使用你的本机终端。"}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="request-device">
@@ -117,7 +119,7 @@ export function ApproveDialog({
             <strong className="block truncate">{req.name}</strong>
             <span>{platformLabel(req.platform)}</span>
           </div>
-          <Badge variant="outline">待授权</Badge>
+          <Badge variant="outline">{req.known ? "你连接过它" : "待授权"}</Badge>
         </div>
         <div className="fingerprint">
           <span>设备指纹</span>
@@ -147,10 +149,10 @@ export function ApproveDialog({
                     <Check className="size-3" />
                   </Checkbox.Indicator>
                 </Checkbox.Control>
-                信任这台设备
+                {req.known ? "互相信任这台设备" : "信任这台设备"}
               </Checkbox.Content>
               <Description className="pl-7 text-xs text-muted-foreground">
-                以后连接免密码、免确认。仅建议用于自己的设备。
+                {req.known ? "以后它再来控制本机不用再点允许。仅建议用于自己的设备。" : "以后连接免密码、免确认。仅建议用于自己的设备。"}
               </Description>
             </Checkbox>
           </div>

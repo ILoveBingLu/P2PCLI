@@ -1,6 +1,6 @@
-import { InputOTP, Popover, REGEXP_ONLY_DIGITS } from "@heroui/react";
+import { Checkbox, Description, InputOTP, Popover, REGEXP_ONLY_DIGITS } from "@heroui/react";
 import { Fragment } from "react";
-import { ArrowUpRight, Link, LoaderCircle, LockKeyhole } from "lucide-react";
+import { ArrowUpRight, Check, Link, LoaderCircle, LockKeyhole } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -30,7 +30,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
   onOpenChange: (open: boolean) => void;
   connection: ReturnType<typeof useConnection>;
 }) {
-  const { target, setTarget, password, setPassword, busy, error, setError, pwRef, doConnect, lanTarget, setLanTarget } = connection;
+  const { target, setTarget, password, setPassword, mutual, setMutual, busy, error, setError, pwRef, doConnect, lanTarget, setLanTarget } = connection;
   const isDeviceCodeComplete = /^\d{9}$/.test(target);
   const canSubmit = lanTarget !== null || isDeviceCodeComplete;
 
@@ -130,6 +130,15 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                     autoComplete="off"
                   />
                 </Field>
+                <Checkbox isSelected={mutual} onChange={setMutual} isDisabled={busy}>
+                  <Checkbox.Content className="gap-3 text-sm">
+                    <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
+                    互相信任
+                  </Checkbox.Content>
+                  <Description className="pl-7 text-xs text-muted-foreground">
+                    同时允许这台设备以后直接控制我，不再要密码和确认，它上面的 AI 就能直接操作我这台电脑。不勾的话，它再来连我时我这边会弹窗问我。仅建议用于自己的设备。
+                  </Description>
+                </Checkbox>
                 {error && (
                   <Alert variant="destructive">
                     <AlertDescription>{error}</AlertDescription>

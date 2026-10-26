@@ -35,6 +35,8 @@ const GLOBAL_MAX_FAILS: usize = 30;
 /// 配对密码字符：去掉 0 o 1 l i 这些容易看错的
 const PASSWORD_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 const PASSWORD_LEN: usize = 6;
+/// 本机连过的设备反过来连本机，被拒绝或没人点之后，这么久内不再弹窗，免得被反复打扰
+const REVERSE_COOLDOWN: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IncomingRequest {
@@ -42,6 +44,8 @@ pub struct IncomingRequest {
     pub remote: String,
     pub name: String,
     pub platform: String,
+    /// 本机连过的设备反过来要连本机：没要配对密码，只靠主人点同意，弹窗要说清楚
+    pub known: bool,
 }
 
 /// 没配对过的设备要发文件过来，问主人收不收
@@ -196,6 +200,10 @@ pub struct Host {
     pub trust: TrustStore,
     /// 同意过一次的设备：能在后台探测延迟、看自己的会话列表，开终端照常要密码和同意
     pub paired: TrustStore,
+    /// 本机成功连过的设备（不管走设备码、局域网还是别的路）。它们反过来要连本机时不要求配对密码，
+    /// 只要主人点同意：本机既然主动连过它，就认得这台设备
+    pub connected: TrustStore,
+    reverse_cooldown: Mutex<HashMap<EndpointId, Instant>>,
     limiter: Mutex<Limiter>,
     sessions: Mutex<HashMap<u64, SessionEntry>>,
     next_id: AtomicU64,
@@ -219,6 +227,8 @@ impl Host {
             password_file,
             trust: TrustStore::open(data_dir),
             paired: TrustStore::open_file(data_dir, "paired.json"),
+            connected: TrustStore::open_file(data_dir, "connected.json"),
+            reverse_cooldown: Mutex::new(HashMap::new()),
             limiter: Mutex::new(Limiter::default()),
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -328,6 +338,17 @@ impl Host {
         self.delegate.event(ev);
     }
 
+    /// 这台连过的设备刚被拒绝过，还在冷却里
+    fn cooling_down(&self, remote: &EndpointId) -> bool {
+        let mut map = self.reverse_cooldown.lock().unwrap();
+        map.retain(|_, until| *until > Instant::now());
+        map.contains_key(remote)
+    }
+
+    fn start_cooldown(&self, remote: &EndpointId) {
+        self.reverse_cooldown.lock().unwrap().insert(*remote, Instant::now() + REVERSE_COOLDOWN);
+    }
+
     fn check_password(&self, remote: &EndpointId, given: Option<&str>) -> Option<RejectCode> {
         let mut lim = self.limiter.lock().unwrap();
         if lim.locked(remote) {
@@ -408,8 +429,15 @@ impl Host {
         }
 
         let trusted = self.trust.contains(&remote);
+        // 本机连过的设备反过来连本机：不要求配对密码（密码是给陌生人用的），但一定要主人点同意
+        let known = !trusted && self.connected.contains(&remote);
         if !trusted {
-            if let Some(code) = self.check_password(&remote, password.as_deref()) {
+            if known {
+                if self.cooling_down(&remote) {
+                    info!(remote = %remote.fmt_short(), "刚被拒绝过，冷却中，不再弹窗");
+                    return reject(conn, &mut send, RejectCode::Denied).await;
+                }
+            } else if let Some(code) = self.check_password(&remote, password.as_deref()) {
                 info!(remote = %remote.fmt_short(), ?code, "拒绝连接");
                 return reject(conn, &mut send, code).await;
             }
@@ -419,6 +447,7 @@ impl Host {
                 remote: remote.to_string(),
                 name: name.clone(),
                 platform: platform.clone(),
+                known,
             };
             let decision = tokio::select! {
                 d = self.delegate.approve(req) => Some(d),
@@ -431,9 +460,17 @@ impl Host {
             match decision {
                 None => {
                     self.delegate.event(HostEvent::RequestCancelled { id });
+                    if known {
+                        self.start_cooldown(&remote);
+                    }
                     return reject(conn, &mut send, RejectCode::Timeout).await;
                 }
-                Some(Decision::Deny) => return reject(conn, &mut send, RejectCode::Denied).await,
+                Some(Decision::Deny) => {
+                    if known {
+                        self.start_cooldown(&remote);
+                    }
+                    return reject(conn, &mut send, RejectCode::Denied).await;
+                }
                 Some(Decision::Allow { trust }) => {
                     if trust && let Err(e) = self.trust.add(&remote, &name, &platform) {
                         warn!("记受信设备失败：{e:#}");
