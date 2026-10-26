@@ -190,11 +190,16 @@ impl RemoteHost {
     }
 
     async fn session_request(&self, msg: Msg) -> Result<Msg> {
-        let (mut send, mut recv) = self.conn.open_bi().await?;
-        write_msg(&mut send, &msg).await?;
-        let reply = timeout(Duration::from_secs(20), read_msg(&mut recv)).await??;
-        if let Msg::Error { message } = reply { bail!("{message}"); }
-        Ok(reply)
+        // 超时要覆盖整个请求，不能只包住 read：open_bi/write 挂住同样会让前端一直等待。
+        timeout(Duration::from_secs(20), async {
+            let (mut send, mut recv) = self.conn.open_bi().await?;
+            write_msg(&mut send, &msg).await?;
+            let reply = read_msg(&mut recv).await?;
+            if let Msg::Error { message } = reply { bail!("{message}"); }
+            Ok(reply)
+        })
+        .await
+        .map_err(|_| anyhow!("会话请求超时"))?
     }
 
     pub fn path(&self) -> PathInfo {

@@ -68,6 +68,8 @@ export interface AgentInfo {
   kind: string;
   name: string;
   state: AgentState;
+  /** 干活画面连续多少秒没有变化；达到疑似卡住阈值才提供，不代表进程已经退出 */
+  unchanged_for?: number | null;
   /** 那台电脑上这种 AI 账号的额度；读不到就没有 */
   quota?: AgentQuota | null;
   /** 这个会话里的 AI 现在的模型、思考强度、权限模式；目前只有 Claude Code 有 */

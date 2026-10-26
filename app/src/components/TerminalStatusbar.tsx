@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { CircleAlert, Folder } from "lucide-react";
 import type { PathInfo, RemoteInfo, TerminalSessionSnapshot } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
-import { AGENT_STATE_TEXT, AgentIcon, AgentQuotaLabel, AgentStateLabel } from "./Agent";
+import { AgentIcon, AgentQuotaLabel, AgentStateLabel, agentStateTip } from "./Agent";
 import { ConnectionCard } from "./ConnectionCard";
 
 function Detail({ tip, children, className = "" }: { tip: string; children: ReactNode; className?: string }) {
@@ -30,7 +30,7 @@ export function TerminalStatusbar({ connId, info, sessionId, state, path, snapsh
   return (
     <footer className="terminal-statusbar" aria-label="当前终端状态">
       {/* 认出是命令行 AI 就显示它和它的状态；Claude Code 的程序名是版本号，直接显示看不懂 */}
-      {agent ? <Detail tip={`${agent.name} · ${AGENT_STATE_TEXT[agent.state]}`} className="terminal-status-agent">
+      {agent ? <Detail tip={agentStateTip(agent)} className="terminal-status-agent">
         <AgentIcon kind={agent.kind} className="size-3.5 shrink-0" /><span>{agent.name}</span>
         <AgentStateLabel agent={agent} />
         {agent.quota && <AgentQuotaLabel quota={agent.quota} />}

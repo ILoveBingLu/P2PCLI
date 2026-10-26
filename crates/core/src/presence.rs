@@ -114,17 +114,20 @@ pub(crate) fn is_unknown_protocol(error: &str) -> bool {
 
 /// 在探测连接上问一次会话列表；None 表示对方没跟我配对过
 pub async fn ask_sessions(conn: &Connection) -> Result<Option<Vec<TerminalSession>>> {
-    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-    write_json(&mut send, &PresenceReq::Sessions).await?;
-    let resp: PresenceResp = timeout(REQUEST_TIMEOUT, read_json(&mut recv))
-        .await
-        .map_err(|_| anyhow!("对方没回应"))??;
-    let _ = send.finish();
-    Ok(match resp {
-        PresenceResp::Sessions { sessions } => Some(sessions),
-        PresenceResp::NotPaired => None,
-        PresenceResp::Pong => return Err(anyhow!("对方回了意外的消息")),
+    // 打开流、写入、读取任意一步卡住都不能让旧会话状态永久冒充实时状态。
+    timeout(REQUEST_TIMEOUT, async {
+        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
+        write_json(&mut send, &PresenceReq::Sessions).await?;
+        let resp: PresenceResp = read_json(&mut recv).await?;
+        let _ = send.finish();
+        Ok(match resp {
+            PresenceResp::Sessions { sessions } => Some(sessions),
+            PresenceResp::NotPaired => None,
+            PresenceResp::Pong => return Err(anyhow!("对方回了意外的消息")),
+        })
     })
+    .await
+    .map_err(|_| anyhow!("读取会话列表超时"))?
 }
 
 /// 在探测连接上 ping 一次；整个来回都算在超时里，网断了写也可能卡住

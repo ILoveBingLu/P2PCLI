@@ -1582,7 +1582,8 @@ img.agent-icon {
 .agent-tab-state[data-state="working"] {
   animation: agent-pulse 1.4s ease-in-out infinite;
 }
-.agent-state[data-state="waiting"] {
+.agent-state[data-state="waiting"],
+.agent-state[data-state="stalled"] {
   color: var(--warning);
 }
 @keyframes agent-pulse {
@@ -1603,7 +1604,8 @@ img.agent-icon {
   border-radius: 999px;
   background: var(--accent);
 }
-.agent-tab-state[data-state="waiting"] {
+.agent-tab-state[data-state="waiting"],
+.agent-tab-state[data-state="stalled"] {
   background: var(--warning);
 }
 

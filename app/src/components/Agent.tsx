@@ -16,6 +16,22 @@ export const AGENT_STATE_TEXT: Record<AgentState, string> = {
   idle: "空闲",
 };
 
+export function agentStalled(agent: AgentInfo) {
+  return agent.state === "working" && agent.unchanged_for != null;
+}
+
+export function agentStateText(agent: AgentInfo) {
+  return agentStalled(agent) ? "可能卡住" : AGENT_STATE_TEXT[agent.state];
+}
+
+export function agentStateTip(agent: AgentInfo) {
+  const text = `${agent.name} · ${agentStateText(agent)}`;
+  if (!agentStalled(agent)) return text;
+  const seconds = agent.unchanged_for ?? 0;
+  const duration = seconds >= 3600 ? `${Math.floor(seconds / 3600)} 小时` : `${Math.max(1, Math.floor(seconds / 60))} 分钟`;
+  return `${text}\n终端画面已 ${duration} 未变化。任务可能仍在执行，也可能卡在工具或 Hook，请到终端检查。`;
+}
+
 /** AI 的图标；没有收录图标的用通用的机器人图标 */
 export function AgentIcon({ kind, className }: { kind: string; className?: string }) {
   const url = Object.hasOwn(ICONS, kind) ? ICONS[kind] : undefined;
@@ -23,24 +39,26 @@ export function AgentIcon({ kind, className }: { kind: string; className?: strin
   return <img className={cn("agent-icon", className)} src={url} alt="" aria-hidden="true" draggable={false} />;
 }
 
-/** 状态点加文字：干活中蓝色带呼吸，等你确认黄色，空闲灰色 */
+/** 状态点加文字：干活中蓝色带呼吸，疑似卡住或等待确认黄色，空闲灰色 */
 export function AgentStateLabel({ agent, className }: { agent: AgentInfo; className?: string }) {
+  const state = agentStalled(agent) ? "stalled" : agent.state;
   return (
-    <span className={cn("agent-state", className)} data-state={agent.state}>
+    <span className={cn("agent-state", className)} data-state={state} title={agentStateTip(agent)}>
       <span className="agent-state-dot" aria-hidden="true" />
-      {AGENT_STATE_TEXT[agent.state]}
+      {agentStateText(agent)}
     </span>
   );
 }
 
 /** 终端标签上的设备名：前面是会话里 AI 的图标，AI 在干活或等你时名字后面带个小点 */
 export function AgentTabTitle({ name, agent }: { name: string; agent: AgentInfo | null }) {
+  const state = agent && agentStalled(agent) ? "stalled" : agent?.state;
   return (
     <>
       {agent && <AgentIcon kind={agent.kind} className="size-3.5 shrink-0" />}
-      <span className="truncate" title={agent ? `${agent.name} · ${AGENT_STATE_TEXT[agent.state]}` : undefined}>{name}</span>
+      <span className="truncate" title={agent ? agentStateTip(agent) : undefined}>{name}</span>
       {agent && agent.state !== "idle" && (
-        <span className="agent-tab-state" data-state={agent.state} aria-label={AGENT_STATE_TEXT[agent.state]} />
+        <span className="agent-tab-state" data-state={state} aria-label={agentStateText(agent)} />
       )}
     </>
   );

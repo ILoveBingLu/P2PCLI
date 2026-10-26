@@ -1,7 +1,7 @@
 //! Persistent terminals live in tmux (macOS/Linux) or psmux (native Windows).
 //! The authenticated remote key is part of every name; clients only supply a random suffix.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use portable_pty::CommandBuilder;
 use tokio::process::Command;
 
-use crate::agents::{self, AgentInfo, Processes, Quotas, Settings};
+use crate::agents::{self, AgentInfo, Processes, Quotas, ScreenActivity, Settings};
 use crate::proto::{TerminalDetails, TerminalSession};
 
 // 标题放最后：里面可能有制表符，分割时多出来的都归它
@@ -51,6 +51,8 @@ pub struct SessionManager {
     processes: std::sync::Mutex<Processes>,
     /// 各种 AI 账号的额度
     quotas: std::sync::Mutex<Quotas>,
+    /// 各会话最后一次终端画面变化，用来提示疑似卡住
+    activity: std::sync::Mutex<ScreenActivity>,
     /// 会话里 AI 现在的模型、强度、权限模式
     settings: std::sync::Mutex<Settings>,
     installed: tokio::sync::Mutex<Option<(std::time::Instant, Vec<crate::launchers::InstalledAgent>)>>,
@@ -71,6 +73,7 @@ impl SessionManager {
             health: Default::default(),
             processes: Default::default(),
             quotas: Default::default(),
+            activity: Default::default(),
             settings: Default::default(),
             installed: Default::default(),
             approvals: Default::default(),
@@ -153,6 +156,7 @@ impl SessionManager {
         }
         let prefix = format!("p2pcli-{owner}-");
         let mut sessions = Vec::new();
+        let mut active = HashSet::new();
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             let mut parts = line.splitn(11, '\t');
             let Some(id) = parts.next().and_then(|n| n.strip_prefix(&prefix)) else { continue };
@@ -182,16 +186,19 @@ impl SessionManager {
             }
             let pane_pid = parts.next().and_then(|v| v.trim().parse().ok());
             let title = parts.next().unwrap_or_default();
-            session.agent = self.agent(&Self::name(owner, id)?, pane_pid, title).await;
+            let name = Self::name(owner, id)?;
+            active.insert(name.clone());
+            session.agent = self.agent(&name, pane_pid, title).await;
             if session.agent.is_none() {
                 if let Some(details) = session.details.as_mut() {
                     if details.command.as_deref().is_some_and(crate::launchers::is_shell) {
-                        details.shell_ready = self.shell_ready(&Self::name(owner, id)?, false).await.unwrap_or(false);
+                        details.shell_ready = self.shell_ready(&name, false).await.unwrap_or(false);
                     }
                 }
             }
             sessions.push(session);
         }
+        self.activity.lock().unwrap().retain(&prefix, &active);
         sessions.sort_by_key(|s| s.created_at);
         Ok(sessions)
     }
@@ -203,6 +210,7 @@ impl SessionManager {
         let found = pane_pid.and_then(|pid| self.processes.lock().unwrap().agent_under(pid));
         let Some((pid, kind, display)) = found else {
             self.approvals.lock().unwrap().observe(name, None);
+            self.activity.lock().unwrap().observe(name, "", agents::AgentState::Idle, true);
             return None;
         };
         let (screen, captured) = match self.command(&["capture-pane", "-p", "-t", name]).await {
@@ -220,9 +228,10 @@ impl SessionManager {
             if captured && state != agents::AgentState::Waiting { self.approvals.lock().unwrap().observe(name, None); }
             None
         };
+        let unchanged_for = self.activity.lock().unwrap().observe(name, &screen, state, captured);
         let quota = self.quotas.lock().unwrap().get(kind);
         let settings = self.settings.lock().unwrap().get(kind, pid, &screen);
-        Some(AgentInfo { kind: kind.to_string(), name: display.to_string(), state, quota, settings, approval })
+        Some(AgentInfo { kind: kind.to_string(), name: display.to_string(), state, unchanged_for, quota, settings, approval })
     }
 
     async fn parse_approval(&self, name: &str, kind: &str, pid: u32, screen: &str) -> Option<crate::approval::Parsed> {

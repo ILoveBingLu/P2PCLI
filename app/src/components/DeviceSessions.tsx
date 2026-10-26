@@ -6,7 +6,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFoo
 import { toast } from "@/components/ui/toast";
 import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
-import { AGENT_STATE_TEXT, AgentIcon, AgentStateLabel } from "./Agent";
+import { AgentIcon, AgentStateLabel, agentStateText } from "./Agent";
 import { sessionTitles } from "./sessionText";
 
 export interface SidebarTab {
@@ -106,7 +106,7 @@ export function DeviceSessions({ target, status, tabs, snapshot, activeKey, busy
           data-session-row={row.id}
           className="h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
           aria-current={row.tab?.key === activeKey ? "true" : undefined}
-          title={row.agent ? `${row.label} · ${AGENT_STATE_TEXT[row.agent.state]} · ${row.status}` : undefined}
+          title={row.agent ? `${row.label} · ${agentStateText(row.agent)} · ${row.status}` : undefined}
           onClick={() => openRow(row)}>
           {row.agent ? <AgentIcon kind={row.agent.kind} className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
           <span className="min-w-0 flex-1 truncate text-left">{row.label}</span>

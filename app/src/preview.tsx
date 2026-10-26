@@ -95,9 +95,10 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
   { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false },
   { id: "b".repeat(32), created_at: now - 40 * 60, attached: true },
   { id: "c".repeat(32), created_at: now - 90, attached: false },
-] : s === "agents" ? [
-  // s=agents：会话里跑着几种命令行 AI，最后一个是普通终端
+] : s === "agents" || s === "stalled" ? [
+  // s=agents：会话里跑着几种命令行 AI，最后一个是普通终端；s=stalled：忙碌画面八小时没变化
   { id: "a".repeat(32), created_at: now - 3 * 3600, attached: false, agent: { kind: "claude", name: "Claude Code", state: "working",
+    unchanged_for: s === "stalled" ? 8 * 3600 : undefined,
     quota: { at: now - 120, windows: [{ minutes: 300, used_percent: 35, resets_at: now + 2 * 3600 }, { minutes: 10080, used_percent: 78, resets_at: now + 2 * 86400 }] },
     settings: { model: "Opus 5.5", effort: "xhigh", mode: "auto" } } },
   // Codex 的 5 小时额度快用完，打开就会提醒一次

@@ -62,7 +62,7 @@ p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失
 
 默认按 AI 自身的权限设置启动。右键 Claude Code 胶囊可以选择“启动并允许之后切换全部放行”，只增加该模式的可选入口，不自动进入全部放行。
 
-远程会话里跑着命令行 AI 时，侧边栏、终端标签和底部状态栏会显示它的图标和状态：干活中、等你确认、空闲。它停下来等你批准操作，或者干完活时，P2PCLI 会提醒你：窗口在后台发系统通知，在前台但没在看那个会话就弹提示，点“查看”切过去；正看着那个会话就不打扰。
+远程会话里跑着命令行 AI 时，侧边栏、终端标签和底部状态栏会显示它的图标和状态：干活中、等你确认、空闲。忙碌画面连续 10 分钟没有变化会标成“可能卡住”，但不会被误判成空闲；长工具调用也可能暂时没有输出，需要到终端里检查。它停下来等你批准操作，或者干完活时，P2PCLI 会提醒你：窗口在后台发系统通知，在前台但没在看那个会话就弹提示，点“查看”切过去；正看着那个会话就不打扰。
 
 - 认得：Claude Code、Codex、Gemini CLI、OpenCode、Cursor Agent、Copilot CLI、Qwen Code、Kimi CLI、CodeBuddy、Qoder CLI、iFlow CLI、Kiro CLI、Trae CLI、Amp、Aider、Crush、Droid、Goose、Auggie、ZCode（Z.ai 的 zcode-app-cli）。被连的电脑顺着会话的进程往下找，看程序名和完整命令行（Node、Python 写的 AI 程序名是 node、python，要看脚本路径），新出的在 `crates/core/src/agents.rs` 的表里加一行
 - 状态：读会话标题和屏幕最后几十行判断，比如屏幕底部有编号选项和“Enter to confirm”就是在等你，有“✻ Cogitating…”或“esc to interrupt”就是在干活。整屏内容只在被连的电脑上解析；对方收到 AI 类型、状态，以及能明确识别的确认菜单和请求摘要

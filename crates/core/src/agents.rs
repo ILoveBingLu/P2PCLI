@@ -37,6 +37,9 @@ pub struct AgentInfo {
     /// 显示的名字，比如 Claude Code
     pub name: String,
     pub state: AgentState,
+    /// 干活画面连续多少秒没有变化；达到疑似卡住阈值才提供，不代表进程已经退出。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unchanged_for: Option<u64>,
     /// 这台电脑上这种 AI 账号的额度；读不到就没有
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<AgentQuota>,
@@ -46,6 +49,40 @@ pub struct AgentInfo {
     /// 明确识别的当前单选确认框；旧设备不提供时使用终端操作。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<crate::approval::Approval>,
+}
+
+/// 同一个忙碌画面持续这么久就标成“可能卡住”。不自动改成空闲：长工具调用也可能合法地没有输出。
+const STALLED_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// 按会话记录最后一次画面变化；只存在被控端内存里，不发送终端内容。
+#[derive(Default)]
+pub struct ScreenActivity {
+    screens: HashMap<String, (String, Instant)>,
+}
+
+impl ScreenActivity {
+    pub fn observe(&mut self, name: &str, screen: &str, state: AgentState, captured: bool) -> Option<u64> {
+        self.observe_at(name, screen, state, captured, Instant::now())
+    }
+
+    fn observe_at(&mut self, name: &str, screen: &str, state: AgentState, captured: bool, now: Instant) -> Option<u64> {
+        if !captured || state != AgentState::Working {
+            self.screens.remove(name);
+            return None;
+        }
+        if let Some((previous, changed_at)) = self.screens.get_mut(name) {
+            if previous == screen {
+                let elapsed = now.saturating_duration_since(*changed_at);
+                return (elapsed >= STALLED_AFTER).then_some(elapsed.as_secs());
+            }
+        }
+        self.screens.insert(name.to_string(), (screen.to_string(), now));
+        None
+    }
+
+    pub fn retain(&mut self, owner_prefix: &str, active: &HashSet<String>) {
+        self.screens.retain(|name, _| !name.starts_with(owner_prefix) || active.contains(name));
+    }
 }
 
 /// AI 现在的设置，读不到的项留空
@@ -983,6 +1020,7 @@ mod tests {
         assert_eq!(state("", CLAUDE_TRUST), Waiting);
         assert_eq!(state("✳ Hello.txt file creation", CLAUDE_PERMISSION), Waiting);
         assert_eq!(state("✳ Hello.txt file creation", CLAUDE_WORKING), Working);
+        assert_eq!(state("", "* Thinking… (running PreToolUse hook · 3s · ↓ 19 tokens)\n❯"), Working);
         assert_eq!(state("✳ Hello.txt file creation", CLAUDE_DONE), Idle);
         assert_eq!(state("✳ Claude Code", CLAUDE_IDLE), Idle);
         assert_eq!(state("", CODEBUDDY_TRUST), Waiting);
@@ -1002,6 +1040,21 @@ mod tests {
         // AI 回复里普通的编号列表不算在等你确认
         assert_eq!(state("", CHAT_LIST), Idle);
         assert_eq!(state("", ""), Idle);
+    }
+
+    #[test]
+    fn unchanged_working_screen_is_reported_as_possibly_stalled() {
+        let start = Instant::now();
+        let mut activity = ScreenActivity::default();
+        let working = "* Thinking… (running PreToolUse hook · 3s · ↓ 19 tokens)";
+        assert_eq!(activity.observe_at("session", working, AgentState::Working, true, start), None);
+        assert_eq!(activity.observe_at("session", working, AgentState::Working, true, start + STALLED_AFTER), Some(600));
+        // 任何真实画面变化都会重新计时，不能把长任务直接判成空闲。
+        assert_eq!(activity.observe_at("session", "* Thinking… (4s)", AgentState::Working, true, start + STALLED_AFTER), None);
+        assert_eq!(activity.observe_at("session", "* Thinking… (4s)", AgentState::Working, true, start + STALLED_AFTER * 2), Some(600));
+        // 完成、等待确认或读取失败时都不展示陈旧的疑似卡住标记。
+        assert_eq!(activity.observe_at("session", "* Worked for 3s", AgentState::Idle, true, start + STALLED_AFTER * 2), None);
+        assert_eq!(activity.observe_at("session", "", AgentState::Working, false, start + STALLED_AFTER * 3), None);
     }
 
     #[test]
