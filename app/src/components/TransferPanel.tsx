@@ -88,7 +88,7 @@ function TransferRow({ t, onDismiss }: { t: Transfer; onDismiss: () => void }) {
             <span style={{ width: `${percent}%` }} />
           </div>
         )}
-        <div className="transfer-status" title={status}>{status}</div>
+        <div className="transfer-status" title={t.diag ? `${status}\n${t.diag}` : status}>{status}</div>
       </div>
       {t.state === "done" && !send && t.paths[0] && (
         <Button variant="ghost" size="icon-sm" title="在文件夹里显示" aria-label="在文件夹里显示"

@@ -15,9 +15,11 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use iroh::endpoint::PathId;
 use tokio::task::JoinSet;
 
 use super::*;
+use crate::proto::{KIND_MSG, MAX_FRAME};
 
 /// 每段多大：并发和续传的单位
 pub(super) const SEGMENT: u64 = 8 << 20;
@@ -27,6 +29,60 @@ const MAX_SEGMENT: u64 = 64 << 20;
 const STALL: Duration = Duration::from_secs(90);
 /// 等对方核对完、放到正式位置：大文件跨磁盘挪动可能要很久
 const FINAL_WAIT: Duration = Duration::from_secs(15 * 60);
+
+/// 在控制流上读消息。读到一半被别的事打断也不丢数据，所以可以放心在 select! 里反复调 next：
+/// 一条条消息陆续来（进度回报、最后的 Saved），不能像 read_json 那样被打断就把半条消息丢了
+struct Control<'a> {
+    recv: &'a mut RecvStream,
+    buf: Vec<u8>,
+}
+
+impl<'a> Control<'a> {
+    fn new(recv: &'a mut RecvStream) -> Self {
+        Control { recv, buf: Vec::new() }
+    }
+
+    async fn next(&mut self) -> Result<FileMsg> {
+        loop {
+            if self.buf.len() >= 5 {
+                let len = u32::from_be_bytes(self.buf[1..5].try_into().expect("够 4 字节")) as usize;
+                if self.buf[0] != KIND_MSG || len > MAX_FRAME {
+                    bail!("控制消息的格式不对");
+                }
+                if self.buf.len() >= 5 + len {
+                    let msg = serde_json::from_slice(&self.buf[5..5 + len])?;
+                    self.buf.drain(..5 + len);
+                    return Ok(msg);
+                }
+            }
+            let mut chunk = [0u8; 4096];
+            // QUIC 流的 read 被打断时不会丢数据，可以放心在 select! 里用
+            let Some(n) = self.recv.read(&mut chunk).await.map_err(|e| anyhow!("{e}"))? else {
+                bail!("连接已关闭");
+            };
+            self.buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+}
+
+/// 各条车道的用时分布（纳秒），查慢的时候看时间花在哪
+#[derive(Default)]
+struct Times {
+    read: AtomicU64,
+    hash: AtomicU64,
+    write: AtomicU64,
+}
+
+/// 这一段活干了多久，记进对应的计数
+fn spent(counter: &AtomicU64, since: Instant) {
+    counter.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+}
+
+/// 几项用时各占百分之几
+fn shares(parts: &[(&str, u64)]) -> String {
+    let total = parts.iter().map(|p| p.1).sum::<u64>().max(1);
+    parts.iter().map(|(name, ns)| format!("{name} {}%", ns * 100 / total)).collect::<Vec<_>>().join(" · ")
+}
 
 /// 一段要发的数据
 struct Segment {
@@ -139,6 +195,10 @@ pub(super) struct LaneSession {
     wake: tokio::sync::Notify,
     /// 写进度文件要一个一个来，免得写丢
     persist: tokio::sync::Mutex<()>,
+    /// 各条车道的用时（纳秒）：等对方的数据、写盘、落盘
+    wait_ns: AtomicU64,
+    write_ns: AtomicU64,
+    sync_ns: AtomicU64,
 }
 
 impl LaneSession {
@@ -196,13 +256,18 @@ impl LaneSession {
         let mut hasher = blake3::Hasher::new();
         let mut left = len;
         loop {
-            match read_frame_as::<_, FileMsg>(recv).await? {
+            let waited = Instant::now();
+            let frame = read_frame_as::<_, FileMsg>(recv).await?;
+            spent(&self.wait_ns, waited);
+            match frame {
                 Some(AnyFrame::Data(d)) => {
                     let n = d.len() as u64;
                     if n > left {
                         bail!("对方发来的比这一段的大小多");
                     }
+                    let wrote = Instant::now();
                     out.write_all(&d).await?;
+                    spent(&self.write_ns, wrote);
                     hasher.update(&d);
                     left -= n;
                     self.received.fetch_add(n, Ordering::Relaxed);
@@ -213,7 +278,9 @@ impl LaneSession {
                     }
                     out.flush().await?;
                     // 落盘了才记“收好了”，不然断电以后进度文件说收好、文件里其实是空的
+                    let synced = Instant::now();
                     out.sync_data().await?;
+                    spent(&self.sync_ns, synced);
                     drop(out);
                     if hasher.finalize().to_hex().as_str() != hash {
                         bail!("校验没通过，文件可能在传输中损坏，请重发");
@@ -255,28 +322,36 @@ impl Drop for Registered<'_> {
 }
 
 /// 发一条车道：从共享队列里一段段领，发完队列就结束这条流
-async fn send_lane(mut uni: SendStream, id: String, queue: Arc<Mutex<VecDeque<Segment>>>, sent: Arc<AtomicU64>) -> Result<()> {
+async fn send_lane(mut uni: SendStream, id: String, queue: Arc<Mutex<VecDeque<Segment>>>, sent: Arc<AtomicU64>, times: Arc<Times>) -> Result<()> {
     write_json(&mut uni, &FileMsg::Lane { id }).await?;
     let mut buf = vec![0u8; CHUNK];
     loop {
         let next = queue.lock().unwrap().pop_front();
         let Some(seg) = next else { break };
+        let opened = Instant::now();
         let mut file = tokio::fs::File::open(&seg.path).await.with_context(|| format!("打不开 {}", seg.path.display()))?;
         if file.metadata().await?.len() != seg.size {
             bail!("文件在发送过程中被改动了");
         }
         file.seek(SeekFrom::Start(seg.offset)).await?;
+        spent(&times.read, opened);
         write_json(&mut uni, &FileMsg::Seg { file: seg.file, offset: seg.offset, len: seg.len }).await?;
         let mut hasher = blake3::Hasher::new();
         let mut left = seg.len;
         while left > 0 {
             let want = left.min(CHUNK as u64) as usize;
+            let read_at = Instant::now();
             let n = file.read(&mut buf[..want]).await?;
+            spent(&times.read, read_at);
             if n == 0 {
                 bail!("文件在发送过程中被改动了");
             }
+            let hash_at = Instant::now();
             hasher.update(&buf[..n]);
+            spent(&times.hash, hash_at);
+            let write_at = Instant::now();
             write_data(&mut uni, &buf[..n]).await?;
+            spent(&times.write, write_at);
             left -= n as u64;
             sent.fetch_add(n as u64, Ordering::Relaxed);
         }
@@ -286,8 +361,56 @@ async fn send_lane(mut uni: SendStream, id: String, queue: Arc<Mutex<VecDeque<Se
     Ok(())
 }
 
+/// 每隔两秒把这条连接和各车道的情况整理成一行：往返延迟、丢包、窗口、时间花在读盘还是等网络上。
+/// 传得慢的时候看这一行，就知道慢在发送方的磁盘、网络，还是对方收得慢
+struct DiagClock {
+    at: Instant,
+    sent_packets: u64,
+    lost_packets: u64,
+    app_sent: u64,
+    times: [u64; 3],
+}
+
+impl DiagClock {
+    fn new(conn: &Connection) -> Self {
+        let stats = conn.stats();
+        DiagClock { at: Instant::now(), sent_packets: stats.sent_packets, lost_packets: stats.lost_packets, app_sent: 0, times: [0; 3] }
+    }
+
+    /// 到点了就返回一行诊断，没到点返回 None
+    fn sample(&mut self, conn: &Connection, app_sent: u64, delivered: Option<u64>, times: &Times) -> Option<String> {
+        let elapsed = self.at.elapsed();
+        if elapsed < Duration::from_secs(2) {
+            return None;
+        }
+        let stats = conn.stats();
+        let (sent, lost) = (stats.sent_packets.saturating_sub(self.sent_packets), stats.lost_packets.saturating_sub(self.lost_packets));
+        let now = [times.read.load(Ordering::Relaxed), times.hash.load(Ordering::Relaxed), times.write.load(Ordering::Relaxed)];
+        let spent: Vec<u64> = now.iter().zip(self.times).map(|(n, o)| n.saturating_sub(o)).collect();
+        let rate = app_sent.saturating_sub(self.app_sent) as f64 / elapsed.as_secs_f64();
+        let rtt = conn.paths().iter().find(|p| p.is_selected()).map(|p| p.rtt().as_millis());
+        let controller = conn.congestion_state(PathId::ZERO);
+        let window = controller.as_ref().map(|c| c.window() / 1024);
+        let algorithm = controller.and_then(crate::quic::algorithm);
+        let mut parts = vec![
+            format!("发出 {:.0} KB/s", rate / 1024.0),
+            format!("往返 {} ms", rtt.map_or("?".into(), |r| r.to_string())),
+            format!("近 {:.0} 秒丢包 {:.1}%（{lost}/{sent}）", elapsed.as_secs_f64(), if sent > 0 { lost as f64 * 100.0 / sent as f64 } else { 0.0 }),
+            format!("窗口 {} KB", window.map_or("?".into(), |w| w.to_string())),
+            algorithm.unwrap_or("?").to_string(),
+        ];
+        if let Some(d) = delivered {
+            parts.push(format!("在途 {:.1} MiB", app_sent.saturating_sub(d) as f64 / 1048576.0));
+        }
+        parts.push(format!("车道用时 {}", shares(&[("读盘", spent[0]), ("校验", spent[1]), ("发送", spent[2])])));
+        *self = DiagClock { at: Instant::now(), sent_packets: stats.sent_packets, lost_packets: stats.lost_packets, app_sent, times: now };
+        Some(parts.join(" · "))
+    }
+}
+
 impl Files {
-    /// 发的一方：按对方说的分段大小切段，开车道一起发，最后在控制流上说发完了，等对方放好
+    /// 发的一方：按对方说的分段大小切段，开车道一起发，最后在控制流上说发完了，等对方放好。
+    /// 进度显示对方回报的“真正收到了多少”；对方是 0.1.5（不回报）就退回显示写进发送缓冲区的字节
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn send_lanes(
         &self,
@@ -299,6 +422,7 @@ impl Files {
         lanes: u32,
         segment: u64,
         done: Vec<Vec<u32>>,
+        feedback: bool,
     ) -> Result<(String, Vec<String>)> {
         if segment == 0 || segment > MAX_SEGMENT {
             bail!("对方要的分段大小不对");
@@ -314,52 +438,58 @@ impl Files {
         self.update(id, |t| t.lanes = lanes);
         let queue = Arc::new(Mutex::new(queue));
         let sent = Arc::new(AtomicU64::new(0));
+        let times = Arc::new(Times::default());
         let mut set = JoinSet::new();
         if pending > 0 {
             for _ in 0..lanes {
                 let uni = conn.open_uni().await.map_err(|e| anyhow!("开车道失败：{e}"))?;
-                set.spawn(send_lane(uni, id.to_string(), queue.clone(), sent.clone()));
+                set.spawn(send_lane(uni, id.to_string(), queue.clone(), sent.clone(), times.clone()));
             }
         }
-        // 等车道发完；期间更新进度，对方中途报错就停下
-        let early = if set.is_empty() {
-            None
-        } else {
-            let mut control = std::pin::pin!(read_json::<_, FileMsg>(&mut *recv));
-            let mut tick = tokio::time::interval(Duration::from_millis(250));
-            loop {
-                tokio::select! {
-                    msg = &mut control => break Some(msg.map_err(|e| anyhow!("对方中途断开：{e:#}"))?),
-                    joined = set.join_next() => match joined {
-                        Some(Ok(Ok(()))) => {
-                            if set.is_empty() {
-                                break None;
-                            }
-                        }
-                        Some(Ok(Err(e))) => return Err(e),
-                        Some(Err(e)) => bail!("车道出了问题：{e}"),
-                        None => break None,
-                    },
-                    _ = tick.tick() => {
-                        let now = (resumed + sent.load(Ordering::Relaxed)).min(total);
-                        self.update(id, |t| t.done = now);
-                    }
-                }
-            }
+        let mut control = Control::new(&mut *recv);
+        // 对方回报的已收字节；没收到过回报就是 None，显示退回“已写进发送缓冲区”
+        let mut delivered: Option<u64> = None;
+        // 对方会回报：只显示它回报的（还没收到第一次回报时是已经收好的部分）；对方是 0.1.5 不回报：退回已写进发送缓冲区的字节
+        let shown = |delivered: Option<u64>| {
+            if feedback { delivered.unwrap_or(resumed) } else { (resumed + sent.load(Ordering::Relaxed)).min(total) }
         };
-        match early {
-            None => {}
-            Some(FileMsg::Error { message }) => bail!("对方出错：{message}"),
-            Some(FileMsg::Reject { message }) => bail!("{message}"),
-            Some(other) => bail!("对方回了意外的消息：{other:?}"),
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+        let mut diag = DiagClock::new(conn);
+        // 等车道发完；期间刷新进度和诊断，对方中途报错就停下
+        while !set.is_empty() {
+            tokio::select! {
+                msg = control.next() => match msg.map_err(|e| anyhow!("对方中途断开：{e:#}"))? {
+                    FileMsg::Progress { done } => delivered = Some(done.min(total)),
+                    FileMsg::Error { message } => bail!("对方出错：{message}"),
+                    FileMsg::Reject { message } => bail!("{message}"),
+                    other => bail!("对方回了意外的消息：{other:?}"),
+                },
+                joined = set.join_next() => match joined {
+                    Some(Ok(Ok(()))) | None => {}
+                    Some(Ok(Err(e))) => return Err(e),
+                    Some(Err(e)) => bail!("车道出了问题：{e}"),
+                },
+                _ = tick.tick() => {}
+            }
+            let now = shown(delivered);
+            self.update(id, |t| t.done = now);
+            if let Some(text) = diag.sample(conn, sent.load(Ordering::Relaxed), delivered.map(|d| d.saturating_sub(resumed)), &times) {
+                info!("传输诊断（发） {text}");
+                self.update(id, |t| t.diag = text);
+            }
         }
-        self.update(id, |t| t.done = total);
         write_json(send, &FileMsg::Finish).await?;
         let _ = send.finish();
-        match timeout(FINAL_WAIT, read_json::<_, FileMsg>(recv)).await.map_err(|_| anyhow!("对方收完以后没有回应"))?? {
-            FileMsg::Saved { dir, paths } => Ok((dir, paths)),
-            FileMsg::Error { message } => bail!("对方出错：{message}"),
-            other => bail!("对方回了意外的消息：{other:?}"),
+        // 对方核对、放到正式位置之前，数据可能还有一小段在路上，继续收它的进度回报，直到 Saved
+        loop {
+            match timeout(FINAL_WAIT, control.next()).await.map_err(|_| anyhow!("对方收完以后没有回应"))?? {
+                FileMsg::Progress { done } => {
+                    self.update(id, |t| t.done = done.min(total));
+                }
+                FileMsg::Saved { dir, paths } => return Ok((dir, paths)),
+                FileMsg::Error { message } => bail!("对方出错：{message}"),
+                other => bail!("对方回了意外的消息：{other:?}"),
+            }
         }
     }
 
@@ -391,6 +521,7 @@ impl Files {
         plan: Plan,
         entries: Vec<FileEntry>,
         offered: u32,
+        feedback: bool,
         send: &mut SendStream,
         recv: &mut RecvStream,
     ) -> Result<(String, Vec<String>)> {
@@ -444,6 +575,9 @@ impl Files {
             failed: Mutex::new(None),
             wake: tokio::sync::Notify::new(),
             persist: tokio::sync::Mutex::new(()),
+            wait_ns: AtomicU64::new(0),
+            write_ns: AtomicU64::new(0),
+            sync_ns: AtomicU64::new(0),
         });
         let key = format!("{remote}:{offer_id}");
         let duplicate = {
@@ -478,12 +612,13 @@ impl Files {
             started_at: now_secs(),
             finished_at: None,
             lanes,
+            diag: String::new(),
         });
         info!(remote = %remote.fmt_short(), %name, files = entries.len(), total, lanes, resumed, "开始并发分段收文件");
 
         let result: Result<(String, Vec<String>)> = async {
-            write_json(send, &FileMsg::LaneAccept { lanes, segment: SEGMENT, done: session.done_lists() }).await?;
-            self.await_lanes(&id, &session, recv, resumed, total).await?;
+            write_json(send, &FileMsg::LaneAccept { lanes, segment: SEGMENT, done: session.done_lists(), progress: feedback }).await?;
+            self.await_lanes(&id, &session, send, recv, resumed, total, feedback).await?;
             let missing = session.missing();
             if missing > 0 {
                 bail!("还有 {missing} 段没收到");
@@ -508,14 +643,30 @@ impl Files {
 
     /// 等车道把所有段收齐：对面在控制流上说发完了，并且每一段都校验通过才算。
     /// 控制流和车道是不同的流，“发完了”可能比最后几段数据先到，所以收到它以后还要接着等段收齐；
-    /// 期间更新进度，车道出错或者很久没数据就停
-    async fn await_lanes(&self, id: &str, session: &LaneSession, recv: &mut RecvStream, resumed: u64, total: u64) -> Result<()> {
+    /// 期间更新进度（对方看得懂就定期回报给它），车道出错或者很久没数据就停
+    #[allow(clippy::too_many_arguments)]
+    async fn await_lanes(
+        &self,
+        id: &str,
+        session: &LaneSession,
+        send: &mut SendStream,
+        recv: &mut RecvStream,
+        resumed: u64,
+        total: u64,
+        feedback: bool,
+    ) -> Result<()> {
         let mut control = std::pin::pin!(read_json::<_, FileMsg>(recv));
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let (mut seen, mut quiet_since) = (0u64, Instant::now());
+        let (mut reported, mut reported_at) = (u64::MAX, Instant::now());
+        let (mut diag_at, mut diag_times, mut diag_bytes) = (Instant::now(), [0u64; 3], 0u64);
         let mut finished = false;
         loop {
             if finished && session.missing() == 0 {
+                if feedback {
+                    // 最后再报一次，让对方的进度走到头
+                    let _ = write_json(send, &FileMsg::Progress { done: total }).await;
+                }
                 return Ok(());
             }
             tokio::select! {
@@ -532,12 +683,28 @@ impl Files {
                 }
                 _ = tick.tick() => {
                     let got = session.received.load(Ordering::Relaxed);
-                    self.update(id, |t| t.done = (resumed + got).min(total));
+                    let now = (resumed + got).min(total);
+                    self.update(id, |t| t.done = now);
                     if got != seen {
                         seen = got;
                         quiet_since = Instant::now();
                     } else if quiet_since.elapsed() > STALL {
                         bail!("对方 {} 秒没有发数据，当作掉线", STALL.as_secs());
+                    }
+                    // 回报真正收到了多少，半秒一次，没变化不发
+                    if feedback && now != reported && reported_at.elapsed() >= Duration::from_millis(500) {
+                        write_json(send, &FileMsg::Progress { done: now }).await?;
+                        (reported, reported_at) = (now, Instant::now());
+                    }
+                    // 每两秒一行诊断：时间花在等对方的数据、写盘还是落盘上
+                    if diag_at.elapsed() >= Duration::from_secs(2) {
+                        let times = [session.wait_ns.load(Ordering::Relaxed), session.write_ns.load(Ordering::Relaxed), session.sync_ns.load(Ordering::Relaxed)];
+                        let spent: Vec<u64> = times.iter().zip(diag_times).map(|(n, o)| n.saturating_sub(o)).collect();
+                        let rate = got.saturating_sub(diag_bytes) as f64 / diag_at.elapsed().as_secs_f64();
+                        let text = format!("收到 {:.0} KB/s · 车道用时 {}", rate / 1024.0, shares(&[("等对方的数据", spent[0]), ("写盘", spent[1]), ("落盘", spent[2])]));
+                        info!("传输诊断（收） {text}");
+                        self.update(id, |t| t.diag = text);
+                        (diag_at, diag_times, diag_bytes) = (Instant::now(), times, got);
                     }
                 }
             }
