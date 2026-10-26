@@ -63,6 +63,7 @@ const previewSettings: SettingsView = {
   effective_relay: null, effective_server: "wss://p2pcli.aiqji.cn",
   default_server: "wss://p2pcli.aiqji.cn",
   lan_visible: true,
+  agent_commands: {},
   inbox_dir: "/Users/me/Downloads/P2PCLI",
   server_presets: [
     { address: "wss://p2pcli.aiqji.cn", label: "国内服务器", note: "国内节点，在国内用连得最快" },
@@ -293,6 +294,12 @@ mockIPC(
           { kind: "codex", name: "Codex", command: "codex" },
           { kind: "opencode", name: "OpenCode", command: "opencode" },
         ];
+      case "local_installed_agents":
+        return [
+          { kind: "claude", name: "Claude Code", command: "claude" },
+          { kind: "codex", name: "Codex", command: "codex" },
+          { kind: "opencode", name: "OpenCode", command: "opencode" },
+        ];
       case "launch_agent": {
         const session = terminalSessions.find((x) => x.id === args.sessionId);
         if (!session?.details?.shell_ready) throw new Error("终端不在空闲提示符");
@@ -434,6 +441,7 @@ mockIPC(
         previewSettings.relay = args.relay?.trim() || null;
         previewSettings.proxy = args.proxy?.trim() || null;
         previewSettings.lan_visible = args.lanVisible ?? true;
+        previewSettings.agent_commands = args.agentCommands ?? {};
         ov.name = previewSettings.device_name ?? "我的 MacBook Pro";
         return null;
       case "restart":

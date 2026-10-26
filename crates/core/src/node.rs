@@ -1,6 +1,6 @@
 //! 一台设备上的总入口：既能被连，也能去连别人。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,6 +57,8 @@ pub struct NodeConfig {
     pub inbox_dir: Option<PathBuf>,
     /// 软件版本，连接时告诉对方，对方的连接信息里显示
     pub app_version: Option<String>,
+    /// 本机作为被控端时，各 AI 的自定义启动命令；不会发给连接方
+    pub agent_commands: BTreeMap<String, String>,
 }
 
 /// 本机知道的一台设备：连接历史、配对过的、局域网里看到的合在一起，命令行列设备、按名字找设备用
@@ -113,6 +115,8 @@ impl Node {
 
     pub fn activate(&self) {
         self.host.set_info(self.me.clone());
+        // 配置写盘成功后才 activate；复用 Host 时也能立即应用，无需重连或重启。
+        self.host.terminals.set_agent_commands(self.config.agent_commands.clone());
         if let Some(rdv) = &self.rdv { rdv.activate(); }
         if !self.config.offline { self.prober.start(); }
     }

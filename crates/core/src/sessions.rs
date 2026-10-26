@@ -56,6 +56,8 @@ pub struct SessionManager {
     /// 会话里 AI 现在的模型、强度、权限模式
     settings: std::sync::Mutex<Settings>,
     installed: tokio::sync::Mutex<Option<(std::time::Instant, Vec<crate::launchers::InstalledAgent>)>>,
+    /// 本机每个 AI 的启动命令覆盖；连接方只能传 kind，不能传命令
+    agent_commands: std::sync::RwLock<BTreeMap<String, String>>,
     approvals: std::sync::Mutex<crate::approval::Tracker>,
     approval_gate: tokio::sync::Mutex<()>,
     /// 会话管理器自己报的版本，问一次记住
@@ -76,6 +78,7 @@ impl SessionManager {
             activity: Default::default(),
             settings: Default::default(),
             installed: Default::default(),
+            agent_commands: Default::default(),
             approvals: Default::default(),
             approval_gate: Default::default(),
             described: Default::default(),
@@ -325,6 +328,10 @@ impl SessionManager {
         Ok(())
     }
 
+    pub fn set_agent_commands(&self, commands: BTreeMap<String, String>) {
+        *self.agent_commands.write().unwrap() = commands;
+    }
+
     pub async fn installed_agents(&self, refresh: bool) -> Result<Vec<crate::launchers::InstalledAgent>> {
         let mut cache = self.installed.lock().await;
         if !refresh {
@@ -357,13 +364,12 @@ impl SessionManager {
         let name = Self::name(owner, id)?;
         let agents = self.installed_agents(false).await?;
         let agent = agents.iter().find(|agent| agent.kind == kind).context("该 AI 未检测到安装，请刷新列表")?;
-        if allow_bypass && kind != "claude" { bail!("该启动选项仅适用于 Claude Code"); }
+        let command = crate::launchers::launch_command(agent, &self.agent_commands.read().unwrap(), allow_bypass)?;
         let _gate = self.gate.lock().await;
         // 客户端的轮询结果可能过期；必须在被控端临启动前再次检查。
         if !self.shell_ready(&name, true).await? {
             bail!("终端不在空闲提示符，请先完成当前输入或退出正在运行的程序");
         }
-        let command = format!("{}{}", agent.command, if allow_bypass { " --allow-dangerously-skip-permissions" } else { "" });
         self.checked(&["send-keys", "-t", &name, "-l", &command]).await?;
         self.checked(&["send-keys", "-t", &name, "Enter"]).await?;
         Ok(())

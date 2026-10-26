@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownUp, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowDownUp, Bot, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
 import { Tabs, Checkbox, Description, Radio, RadioGroup } from "@heroui/react";
-import { api, platformLabel, type CliStatus, type Overview, type SettingsView } from "../api";
+import { api, platformLabel, type CliStatus, type InstalledAgent, type Overview, type SettingsView } from "../api";
+import { AgentIcon } from "./Agent";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -21,6 +22,7 @@ const SECTIONS = [
   { id: "general", label: "连接设置", icon: Globe2 },
   { id: "proxy", label: "代理设置", icon: Network },
   { id: "files", label: "文件传输", icon: ArrowDownUp },
+  { id: "agents", label: "AI 启动", icon: Bot },
   { id: "trusted", label: "受信设备", icon: ShieldCheck },
   { id: "about", label: "关于", icon: Info },
 ];
@@ -49,6 +51,10 @@ export function SettingsPage({
   const [removing, setRemoving] = useState<string | null>(null);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [installingCli, setInstallingCli] = useState(false);
+  const [agents, setAgents] = useState<InstalledAgent[]>([]);
+  const [agentCommands, setAgentCommands] = useState<Record<string, string>>({});
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
   useEffect(() => {
     api.cliStatus().then(setCli).catch(() => {});
   }, []);
@@ -63,12 +69,24 @@ export function SettingsPage({
       setInstallingCli(false);
     }
   };
+  const loadAgents = useCallback(async (refresh = false) => {
+    setAgentsLoading(true);
+    setAgentsError(null);
+    try {
+      setAgents(await api.localInstalledAgents(refresh));
+    } catch (e) {
+      setAgentsError(String(e));
+    } finally {
+      setAgentsLoading(false);
+    }
+  }, []);
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const value = await api.getSettings();
       setSettings(value);
+      setAgentCommands(value.agent_commands);
       // 没设置过就是默认服务器；设置的地址正好是某个预设就选中它，否则当作自定义
       const preset = value.server_presets.find((p) => p.address === (value.server ?? value.default_server));
       setServerChoice(preset ? preset.address : CUSTOM_SERVER);
@@ -86,7 +104,8 @@ export function SettingsPage({
   }, []);
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadAgents();
+  }, [load, loadAgents]);
   const save = async () => {
     if (!settings || saving) return;
     setSaving(true);
@@ -96,7 +115,7 @@ export function SettingsPage({
       const server = serverChoice === CUSTOM_SERVER
         ? customServer
         : serverChoice === settings.default_server ? null : serverChoice;
-      await api.saveSettings(server, name, relay, proxyEnabled ? proxy : null, lanVisible);
+      await api.saveSettings(server, name, relay, proxyEnabled ? proxy : null, lanVisible, agentCommands);
       onChanged();
       toast.success("设置已保存并立即应用");
     } catch (e) {
@@ -318,6 +337,61 @@ export function SettingsPage({
                   </Field>
                 </FieldGroup>
               </Tabs.Panel>
+              <Tabs.Panel id="agents">
+                <FieldGroup className="gap-5">
+                  <Alert>
+                    <AlertDescription>
+                      为这台电脑上的每种 AI 设置默认启动命令。其他设备连接本机后点击启动胶囊时会使用它；命令只保存在本机，不会传给连接方。留空并保存即可恢复自动检测到的默认命令。
+                    </AlertDescription>
+                  </Alert>
+                  <div className="flex items-center gap-2">
+                    <p className="detail-note mr-auto">可填写完整路径、环境变量和启动参数。命令会交给本机终端 Shell 执行，请勿把令牌或密码写在这里。</p>
+                    <Button variant="ghost" size="sm" onClick={() => void loadAgents(true)} disabled={agentsLoading || saving}>
+                      <RefreshCw data-icon="inline-start" className={agentsLoading ? "animate-spin" : undefined} />重新检测
+                    </Button>
+                  </div>
+                  {agentsLoading ? (
+                    <div className="loading-state" role="status"><LoaderCircle className="animate-spin" />正在检测本机 AI…</div>
+                  ) : agentsError ? (
+                    <Alert variant="destructive"><AlertDescription>{agentsError}</AlertDescription></Alert>
+                  ) : agents.length === 0 ? (
+                    <Empty>
+                      <EmptyHeader><EmptyMedia variant="icon"><Bot /></EmptyMedia><EmptyTitle>未检测到 AI</EmptyTitle><EmptyDescription>安装到终端 PATH 后点击“重新检测”。</EmptyDescription></EmptyHeader>
+                    </Empty>
+                  ) : agents.map((agent) => (
+                    <Field key={agent.kind} data-disabled={saving}>
+                      <div className="flex items-center gap-2">
+                        <AgentIcon kind={agent.kind} className="size-4" />
+                        <FieldLabel htmlFor={`agent-command-${agent.kind}`} className="mr-auto">{agent.name}</FieldLabel>
+                        {(agentCommands[agent.kind] ?? "").trim() && (
+                          <Button variant="ghost" size="sm" onClick={() => setAgentCommands((current) => {
+                            const next = { ...current };
+                            delete next[agent.kind];
+                            return next;
+                          })} disabled={saving}>恢复默认</Button>
+                        )}
+                      </div>
+                      <Input
+                        id={`agent-command-${agent.kind}`}
+                        variant="secondary"
+                        value={agentCommands[agent.kind] ?? ""}
+                        placeholder={agent.command}
+                        onChange={(e) => setAgentCommands((current) => ({ ...current, [agent.kind]: e.target.value }))}
+                        disabled={saving}
+                        spellCheck={false}
+                        autoComplete="off"
+                        maxLength={2048}
+                      />
+                      <FieldDescription>默认命令：<code>{agent.command}</code></FieldDescription>
+                      {agent.kind === "claude" && (
+                        <FieldDescription>
+                          需要启动后跳过 AI 工具确认时，可填 <code>claude --dangerously-skip-permissions</code>。保存后普通点击胶囊也会全部放行，仅在可信项目中使用；这不等于 sudo，系统权限仍不变。
+                        </FieldDescription>
+                      )}
+                    </Field>
+                  ))}
+                </FieldGroup>
+              </Tabs.Panel>
               <Tabs.Panel id="trusted">
                 <p className="detail-note mb-4">
                   受信设备连接本机时无需密码和确认。移除后，再次连接需要重新授权。
@@ -448,10 +522,10 @@ export function SettingsPage({
               )}
             </div>
           </OverlayScroll>
-          {/* 只有连接设置和代理设置要保存；切到别的分类再回来，没保存的修改还在 */}
-          {(tab === "general" || tab === "proxy") && (
+          {/* 切到别的分类再回来，没保存的修改还在；AI 启动命令与连接配置共用同一份本机设置。 */}
+          {(tab === "general" || tab === "proxy" || tab === "agents") && (
             <footer className="settings-footer">
-              <span className="mr-auto text-xs text-muted-foreground">保存后即时生效。代理、中继或局域网显示变更会重连网络，后台终端会话保留。</span>
+              <span className="mr-auto text-xs text-muted-foreground">{tab === "agents" ? "保存后立即用于之后的 AI 启动，不会中断现有会话。" : "保存后即时生效。代理、中继或局域网显示变更会重连网络，后台终端会话保留。"}</span>
               <Button
                 onClick={save}
                 disabled={loading || !settings || saving || (proxyEnabled && !proxy.trim()) || (serverChoice === CUSTOM_SERVER && !customServer.trim())}

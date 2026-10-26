@@ -1,6 +1,7 @@
 //! AI 启动器：在被连接的电脑上查找命令，不启动 AI 来探测版本。
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -9,6 +10,37 @@ pub struct InstalledAgent {
     pub kind: String,
     pub name: String,
     pub command: String,
+}
+
+/// 校验本机设置里的启动命令。命令只保存在被控端，不接受连接方远程上传。
+pub fn normalize_commands(commands: BTreeMap<String, String>) -> Result<BTreeMap<String, String>> {
+    let mut clean = BTreeMap::new();
+    for (kind, command) in commands {
+        if !crate::agents::launcher_candidates().iter().any(|(candidate, _, _)| *candidate == kind.as_str()) {
+            bail!("不支持的 AI 类型：{kind}");
+        }
+        let command = command.trim();
+        if command.is_empty() { continue; }
+        if command.len() > 2048 { bail!("{kind} 的启动命令太长，最多 2048 字节"); }
+        if command.chars().any(char::is_control) { bail!("{kind} 的启动命令不能包含换行或控制字符"); }
+        clean.insert(kind, command.to_string());
+    }
+    Ok(clean)
+}
+
+/// 本机自定义命令优先；空着用自动检测到的命令。Claude 已经写了权限参数时不重复追加。
+pub fn launch_command(agent: &InstalledAgent, commands: &BTreeMap<String, String>, allow_bypass: bool) -> Result<String> {
+    if allow_bypass && agent.kind != "claude" { bail!("该启动选项仅适用于 Claude Code"); }
+    let base = commands.get(&agent.kind).map(String::as_str).filter(|s| !s.trim().is_empty()).unwrap_or(&agent.command).trim();
+    if base.is_empty() || base.len() > 2048 || base.chars().any(char::is_control) {
+        bail!("启动命令为空、过长或包含控制字符");
+    }
+    let has_permission_flag = base.split_whitespace().any(|arg| matches!(arg, "--dangerously-skip-permissions" | "--allow-dangerously-skip-permissions"));
+    Ok(if allow_bypass && !has_permission_flag {
+        format!("{base} --allow-dangerously-skip-permissions")
+    } else {
+        base.to_string()
+    })
 }
 
 pub fn is_shell(command: &str) -> bool {
@@ -73,6 +105,37 @@ pub async fn scan() -> Result<Vec<InstalledAgent>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn agent() -> InstalledAgent {
+        InstalledAgent { kind: "claude".into(), name: "Claude Code".into(), command: "claude".into() }
+    }
+
+    #[test]
+    fn custom_launch_commands_are_local_and_preserve_permission_flags() {
+        let defaults = BTreeMap::new();
+        assert_eq!(launch_command(&agent(), &defaults, false).unwrap(), "claude");
+        assert_eq!(launch_command(&agent(), &defaults, true).unwrap(), "claude --allow-dangerously-skip-permissions");
+        let custom = BTreeMap::from([("claude".into(), "claude --model opus".into())]);
+        assert_eq!(launch_command(&agent(), &custom, false).unwrap(), "claude --model opus");
+        assert_eq!(launch_command(&agent(), &custom, true).unwrap(), "claude --model opus --allow-dangerously-skip-permissions");
+        let full = BTreeMap::from([("claude".into(), "claude --dangerously-skip-permissions".into())]);
+        assert_eq!(launch_command(&agent(), &full, true).unwrap(), "claude --dangerously-skip-permissions");
+        let codex = InstalledAgent { kind: "codex".into(), name: "Codex".into(), command: "codex".into() };
+        assert!(launch_command(&codex, &defaults, true).is_err());
+    }
+
+    #[test]
+    fn launch_command_settings_reject_control_characters_and_unknown_agents() {
+        let clean = normalize_commands(BTreeMap::from([
+            ("claude".into(), "  claude --model opus  ".into()),
+            ("codex".into(), "   ".into()),
+        ])).unwrap();
+        assert_eq!(clean, BTreeMap::from([("claude".into(), "claude --model opus".into())]));
+        assert!(normalize_commands(BTreeMap::from([("claude".into(), "claude\nwhoami".into())])).is_err());
+        assert!(normalize_commands(BTreeMap::from([("unknown".into(), "anything".into())])).is_err());
+        assert!(normalize_commands(BTreeMap::from([("claude".into(), "x".repeat(2049))])).is_err());
+    }
+
     #[test]
     fn only_empty_prompts_are_launchable() {
         for line in ["PS C:\\work> ", "C:\\work>", "me@mac project % ", "[me@host dir]$ ", "❯ ", "$ "] {

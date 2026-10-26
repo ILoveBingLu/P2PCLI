@@ -259,6 +259,8 @@ export interface SettingsView {
   default_server: string;
   server_presets: ServerPreset[];
   lan_visible: boolean;
+  /** 本机作为被控端时，各 AI 的自定义启动命令 */
+  agent_commands: Record<string, string>;
   /** 收到的文件放在哪 */
   inbox_dir: string;
 }
@@ -334,14 +336,15 @@ export const api = {
   listTerminals: (connId: number) => invoke<TerminalSession[]>("list_terminals", { connId }),
   connectionStats: (connId: number) => invoke<ConnStats>("connection_stats", { connId }),
   installedAgents: (connId: number, refresh = false) => invoke<InstalledAgent[]>("installed_agents", { connId, refresh }),
+  localInstalledAgents: (refresh = false) => invoke<InstalledAgent[]>("local_installed_agents", { refresh }),
   launchAgent: (connId: number, sessionId: string, kind: string, allowBypass = false) =>
     invoke<void>("launch_agent", { connId, sessionId, kind, allowBypass }),
   chooseAgentOption: (connId: number, sessionId: string, approvalId: string, optionId: number) =>
     invoke<void>("choose_agent_option", { connId, sessionId, approvalId, optionId }),
   endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
-  saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null, lanVisible: boolean) =>
-    invoke("save_settings", { server, deviceName, relay, proxy, lanVisible }),
+  saveSettings: (server: string | null, deviceName: string | null, relay: string | null, proxy: string | null, lanVisible: boolean, agentCommands: Record<string, string>) =>
+    invoke("save_settings", { server, deviceName, relay, proxy, lanVisible, agentCommands }),
   restart: () => invoke("restart"),
 };
 

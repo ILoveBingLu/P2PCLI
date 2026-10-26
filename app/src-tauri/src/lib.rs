@@ -4,7 +4,7 @@ mod cli;
 mod update;
 mod logging;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -63,6 +63,9 @@ struct Settings {
     /// 不让局域网里的其他设备看到本机；默认看得到
     #[serde(default)]
     lan_hidden: bool,
+    /// 本机作为被控端时，各 AI 的自定义启动命令
+    #[serde(default)]
+    agent_commands: BTreeMap<String, String>,
 }
 
 fn settings_path(dir: &Path) -> PathBuf {
@@ -633,6 +636,11 @@ async fn installed_agents(state: State<'_, AppState>, conn_id: u64, refresh: boo
 }
 
 #[tauri::command]
+async fn local_installed_agents(state: State<'_, AppState>, refresh: bool) -> Result<Vec<p2pcli_core::launchers::InstalledAgent>, String> {
+    state.node().host.terminals.installed_agents(refresh).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 async fn launch_agent(state: State<'_, AppState>, conn_id: u64, session_id: String, kind: String, allow_bypass: bool) -> Result<(), String> {
     state.remote(conn_id)?.launch_agent(session_id, kind, allow_bypass).await.map_err(|e| format!("{e:#}"))
 }
@@ -767,6 +775,8 @@ struct SettingsView {
     default_server: &'static str,
     server_presets: Vec<ServerPreset>,
     lan_visible: bool,
+    /// 本机作为被控端时，各 AI 的自定义启动命令
+    agent_commands: BTreeMap<String, String>,
     /// 收到的文件放在哪
     inbox_dir: String,
 }
@@ -781,6 +791,7 @@ fn get_settings(state: State<'_, AppState>) -> SettingsView {
         default_server: default_server(),
         server_presets: server_presets(),
         lan_visible: !s.lan_hidden,
+        agent_commands: s.agent_commands.clone(),
         inbox_dir: state.node().files.inbox_root().display().to_string(),
         server: s.server,
         device_name: s.device_name,
@@ -797,15 +808,18 @@ async fn save_settings(
     relay: Option<String>,
     proxy: Option<String>,
     lan_visible: Option<bool>,
+    agent_commands: Option<BTreeMap<String, String>>,
 ) -> Result<(), String> {
     let _gate = state.config_gate.lock().await;
     let clean = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let agent_commands = p2pcli_core::launchers::normalize_commands(agent_commands.unwrap_or_default()).map_err(|e| format!("{e:#}"))?;
     let s = Settings {
         proxy: clean(proxy),
         server: clean(server),
         device_name: clean(device_name),
         relay: clean(relay),
         lan_hidden: !lan_visible.unwrap_or(true),
+        agent_commands,
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
@@ -829,6 +843,7 @@ async fn save_settings(
         relays: effective_relay(&s).map(|r| r.split(',').map(|u| u.trim().to_string()).collect()).unwrap_or_default(),
         lan: true,
         lan_visible: !s.lan_hidden,
+        agent_commands: s.agent_commands.clone(),
         app_version: APP_VERSION.get().cloned(),
         ..Default::default()
     };
@@ -938,6 +953,7 @@ pub fn run() {
                     .unwrap_or_default(),
                 lan: true,
                 lan_visible: !settings.lan_hidden,
+                agent_commands: settings.agent_commands.clone(),
                 app_version: APP_VERSION.get().cloned(),
                 ..Default::default()
             };
@@ -1095,6 +1111,7 @@ pub fn run() {
             open_terminal,
             list_terminals,
             installed_agents,
+            local_installed_agents,
             launch_agent,
             choose_agent_option,
             end_terminal,
