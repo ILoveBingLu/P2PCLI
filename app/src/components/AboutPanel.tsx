@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { ArrowUpRight, Bug, Download, LoaderCircle, Lock, Package, RefreshCw, Route, Scale } from "lucide-react";
-import logo from "@/assets/logo.svg";
 import { api } from "../api";
+import { GlassLogo } from "./GlassLogo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
@@ -56,7 +56,7 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
         <div aria-hidden="true" className="pointer-events-none absolute -bottom-28 -right-16 size-72 rounded-full bg-[#60a5fa]/15 blur-3xl" />
         <div className="relative flex flex-col gap-5">
           <div className="flex items-center gap-4">
-            <img src={logo} alt="" draggable={false} className="size-16 shrink-0 object-contain" />
+            <GlassLogo className="size-16" />
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-semibold tracking-tight">P2PCLI</h2>

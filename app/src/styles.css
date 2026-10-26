@@ -1940,3 +1940,48 @@ img.agent-icon {
   width: 12px;
   height: 12px;
 }
+
+/* 关于页的玻璃图标。--gx、--gy 是鼠标相对图标中心的位置（-1 到 1），--gl 是悬停浮起的程度（0 到 1），
+   都由 GlassLogo 里的弹簧逐帧写进来；--d 是每层的深度，越大错开越多 */
+.glass-logo {
+  --gx: 0;
+  --gy: 0;
+  --gl: 0;
+  flex-shrink: 0;
+  perspective: 480px;
+}
+/* 整个图标朝鼠标那边往里倾，浮起时略放大 */
+.glass-logo-stack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform: rotateX(calc(var(--gy) * -9deg)) rotateY(calc(var(--gx) * 9deg)) scale(calc(1 + var(--gl) * 0.04));
+  will-change: transform;
+}
+.glass-logo-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  translate: calc(var(--gx) * var(--d) * 1%) calc(var(--gy) * var(--d) * 1%);
+  scale: calc(1 + var(--gl) * var(--d) * 0.004);
+}
+/* 投影落在下面，不跟着图层走：图层往哪错开，投影就往反方向留一点；浮得越高投影越远越淡 */
+.glass-logo-shadow {
+  transform: translate(
+    calc(var(--gx) * var(--d) * -4px),
+    calc(10px + var(--gy) * var(--d) * -4px + var(--gl) * var(--d) * 2px)
+  );
+  opacity: calc(0.5 - var(--gl) * 0.1);
+}
+.glass-logo-body {
+  opacity: 0.94;
+}
+/* 高光亮的那侧跟着鼠标：鼠标在左上，左上的高光更亮；在右下，右下的反光更亮 */
+.glass-logo-hi {
+  opacity: calc(0.55 - (var(--gx) + var(--gy)) * 0.15);
+}
+.glass-logo-lo {
+  opacity: calc(0.16 + (var(--gx) + var(--gy)) * 0.1);
+}
