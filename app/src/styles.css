@@ -1915,3 +1915,12 @@ img.agent-icon {
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
+
+/* 勾选框没选中时不显示对号，并画出外框。这里的对号是自己放进去的图标，不像 HeroUI 默认的对号那样自带“没选中就藏起来”，
+   以前没选中时也露着一个对号，深色底上又看不到框，容易误以为已经勾上了；“互相信任”这类安全选项必须一眼看出默认是关的 */
+.checkbox:not([data-selected="true"]):not([data-indeterminate="true"]) .checkbox__indicator {
+  opacity: 0;
+}
+.checkbox:not([data-selected="true"]):not([data-indeterminate="true"]) .checkbox__control {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 28%, transparent);
+}
