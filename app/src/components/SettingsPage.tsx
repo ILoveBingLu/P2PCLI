@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowDownUp, BookOpen, Bot, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
 import { Tabs, Checkbox, Description, Radio, RadioGroup } from "@heroui/react";
 import { api, platformLabel, type CliStatus, type InstalledAgent, type Overview, type SettingsView } from "../api";
+import { AboutPanel } from "./AboutPanel";
 import { AiHintSettings } from "./AiHintSettings";
 import { AgentIcon } from "./Agent";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { OverlayScroll } from "./OverlayScroll";
 import { PlatformIcon } from "./PlatformIcon";
-import { progressText, type useUpdater } from "./useUpdater";
+import { type useUpdater } from "./useUpdater";
 
 /** 牵线服务器选“自定义”时的取值，预设项的取值就是它的地址 */
 const CUSTOM_SERVER = "custom";
@@ -486,43 +487,7 @@ export function SettingsPage({
                 )}
               </Tabs.Panel>
               <Tabs.Panel id="about">
-                <FieldGroup className="gap-4">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm font-medium">P2PCLI {updater.version ? `v${updater.version}` : ""}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {updater.installing
-                        ? progressText(updater.progress)
-                        : updater.checking
-                          ? "正在检查更新…"
-                          : updater.error
-                            ? updater.error
-                            : updater.update
-                              ? `发现新版本 v${updater.update.version}`
-                              : updater.checkedAt
-                                ? "已经是最新版本"
-                                : "启动后会自动检查更新，之后每 6 小时检查一次。"}
-                    </span>
-                  </div>
-                  {updater.update?.notes && !updater.installing && (
-                    <p className="whitespace-pre-line text-xs text-muted-foreground">{updater.update.notes}</p>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    {updater.update ? (
-                      <Button size="sm" onClick={updater.install} disabled={updater.installing}>
-                        {updater.installing
-                          ? <LoaderCircle data-icon="inline-start" className="animate-spin" />
-                          : <Download data-icon="inline-start" />}
-                        更新并重启
-                      </Button>
-                    ) : null}
-                    <Button variant="outline" size="sm" onClick={() => void updater.check()} disabled={updater.checking || updater.installing}>
-                      {updater.checking
-                        ? <LoaderCircle data-icon="inline-start" className="animate-spin" />
-                        : <RefreshCw data-icon="inline-start" />}
-                      检查更新
-                    </Button>
-                  </div>
-                </FieldGroup>
+                <AboutPanel updater={updater} />
               </Tabs.Panel>
               {error && (
                 <Alert variant="destructive">
