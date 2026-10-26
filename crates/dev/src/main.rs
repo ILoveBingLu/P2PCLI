@@ -188,6 +188,7 @@ async fn main() -> Result<()> {
             session_program: None,
             inbox_dir: cli.inbox.clone(),
             app_version: None,
+            agent_commands: Default::default(),
         },
         Arc::new(CliDelegate { approve }),
     )
