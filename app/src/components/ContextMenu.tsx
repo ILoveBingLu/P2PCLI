@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Dropdown, Label, dropdownVariants } from "@heroui/react";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +24,7 @@ export interface MenuAction {
 export function useContextMenu() {
   const [state, setState] = useState<{ x: number; y: number; actions: MenuAction[] } | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
+  const popover = useRef<HTMLDivElement>(null);
 
   const open = (e: MouseEvent | globalThis.MouseEvent, actions: MenuAction[]) => {
     e.preventDefault();
@@ -40,6 +41,32 @@ export function useContextMenu() {
   };
 
   const close = useCallback(() => setState(null), []);
+  const isOpen = state !== null;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onOutside = (e: Event) => {
+      if (popover.current && !e.composedPath().includes(popover.current)) close();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      }
+    };
+    // 非模态弹层不会自动响应外部点击；捕获阶段也能接住终端等区域拦截的事件。
+    document.addEventListener("pointerdown", onOutside, true);
+    document.addEventListener("contextmenu", onOutside, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("blur", close);
+    return () => {
+      document.removeEventListener("pointerdown", onOutside, true);
+      document.removeEventListener("contextmenu", onOutside, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("blur", close);
+    };
+  }, [isOpen, close]);
 
   const element = (
     <>
@@ -50,6 +77,7 @@ export function useContextMenu() {
       />
       {state && (
         <Dropdown.Popover
+          ref={popover}
           isOpen
           // 右键菜单不能遮住背后的操作区域，否则再次右键会落到透明遮罩上。
           isNonModal
