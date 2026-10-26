@@ -240,6 +240,24 @@ export interface CliStatus {
   bundled: boolean;
 }
 
+/** 一个 AI 的使用说明现在什么情况 */
+export type AiHintState = "missing" | "current" | "outdated" | "foreign";
+
+/** 给本机的 AI 装的 p2pcli 使用说明：检测到的每个位置 */
+export interface AiHintRow {
+  /** 读这个位置的 AI */
+  ais: string[];
+  /** SKILL.md 的完整路径，操作时用它指定是哪一行 */
+  path: string;
+  state: AiHintState;
+}
+
+export interface AiHintStatus {
+  /** 启动时自动安装和更新 */
+  auto: boolean;
+  rows: AiHintRow[];
+}
+
 export type HostEvent =
   | { type: "request_cancelled"; id: number }
   | { type: "files_received"; from: string; from_name: string; files: number; total: number; dir: string; paths: string[] }
@@ -327,6 +345,10 @@ export const api = {
   openFolder: (path: string) => invoke("open_folder", { path }),
   cliStatus: () => invoke<CliStatus>("cli_status"),
   installCli: () => invoke<CliStatus>("install_cli"),
+  aiHintStatus: () => invoke<AiHintStatus>("ai_hint_status"),
+  setAiHintAuto: (enabled: boolean) => invoke<AiHintStatus>("set_ai_hint_auto", { enabled }),
+  /** action 是 install 或 remove；path 不写就是全部 */
+  aiHintApply: (action: "install" | "remove", path?: string) => invoke<AiHintStatus>("ai_hint_apply", { action, path }),
   termInput: (termId: number, data: string) => invoke("term_input", { termId, data, binary: false }),
   kick: (session: number) => invoke<boolean>("kick", { session }),
   removeTrusted: (endpointId: string) => invoke("remove_trusted", { endpointId }),

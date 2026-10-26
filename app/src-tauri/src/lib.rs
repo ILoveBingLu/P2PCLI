@@ -1,5 +1,6 @@
 //! 桌面端：把核心库包成界面能调的命令，管弹窗、托盘和窗口。
 
+mod ai_hint;
 mod cli;
 mod update;
 mod logging;
@@ -66,6 +67,9 @@ struct Settings {
     /// 本机作为被控端时，各 AI 的自定义启动命令
     #[serde(default)]
     agent_commands: BTreeMap<String, String>,
+    /// 不给本机的 AI 自动安装 p2pcli 使用说明；默认装
+    #[serde(default)]
+    ai_hint_off: bool,
 }
 
 fn settings_path(dir: &Path) -> PathBuf {
@@ -479,6 +483,70 @@ async fn install_cli(state: State<'_, AppState>) -> Result<cli::CliStatus, Strin
         .map_err(|e| format!("{e:#}"))
 }
 
+#[derive(Serialize)]
+struct AiHintView {
+    /// 启动时自动安装和更新
+    auto: bool,
+    /// 本机检测到的每个 AI（按技能目录合并）和各自的情况
+    rows: Vec<ai_hint::Row>,
+}
+
+fn ai_hint_view(auto: bool) -> AiHintView {
+    AiHintView { auto, rows: ai_hint::rows(&ai_hint::local_targets()) }
+}
+
+/// 本机 AI 使用说明的状态：自动安装开没开、检测到哪些 AI、各装没装
+#[tauri::command]
+async fn ai_hint_status(state: State<'_, AppState>) -> Result<AiHintView, String> {
+    let auto = !state.settings.lock().unwrap().ai_hint_off;
+    tauri::async_runtime::spawn_blocking(move || ai_hint_view(auto)).await.map_err(|e| e.to_string())
+}
+
+/// 开或关“启动时自动安装”；只改这个开关，不动已经装好的文件
+#[tauri::command]
+async fn set_ai_hint_auto(state: State<'_, AppState>, enabled: bool) -> Result<AiHintView, String> {
+    let _gate = state.config_gate.lock().await;
+    let s = {
+        let mut s = state.settings.lock().unwrap().clone();
+        s.ai_hint_off = !enabled;
+        s
+    };
+    let bytes = serde_json::to_vec_pretty(&s).map_err(|e| e.to_string())?;
+    p2pcli_core::store::write_private(&settings_path(&state.data_dir), &bytes).map_err(|e| format!("保存设置失败：{e:#}"))?;
+    *state.settings.lock().unwrap() = s;
+    tauri::async_runtime::spawn_blocking(move || ai_hint_view(enabled)).await.map_err(|e| e.to_string())
+}
+
+/// 手动装、更新或删除使用说明。path 是列表里某一行的路径，不写就是全部
+#[tauri::command]
+async fn ai_hint_apply(state: State<'_, AppState>, action: String, path: Option<String>) -> Result<AiHintView, String> {
+    let auto = !state.settings.lock().unwrap().ai_hint_off;
+    tauri::async_runtime::spawn_blocking(move || {
+        let all = ai_hint::local_targets();
+        // 只认检测到的目标，界面传来的路径不当真，免得被拿去写别的地方
+        let chosen: Vec<ai_hint::Target> = match &path {
+            Some(p) => {
+                let found: Vec<_> = all.iter().filter(|t| ai_hint::file_of(t).display().to_string() == *p).cloned().collect();
+                if found.is_empty() {
+                    return Err("没找到这个位置，可能那个 AI 已经卸载了，点重新检测".to_string());
+                }
+                found
+            }
+            None => all,
+        };
+        let errors = match (action.as_str(), path.is_some()) {
+            ("install", true) => chosen.iter().filter_map(|t| ai_hint::install_target(t).err()).collect(),
+            ("remove", true) => chosen.iter().filter_map(|t| ai_hint::remove_target(t).err()).collect(),
+            ("install", false) => ai_hint::install(&chosen),
+            ("remove", false) => ai_hint::remove(&chosen),
+            _ => return Err(format!("不认识的操作：{action}")),
+        };
+        if errors.is_empty() { Ok(ai_hint_view(auto)) } else { Err(errors.join("；")) }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn kick(state: State<'_, AppState>, session: u64) -> bool {
     state.node().host.kick(session)
@@ -847,6 +915,7 @@ async fn save_settings(
         relay: clean(relay),
         lan_hidden: !lan_visible.unwrap_or(true),
         agent_commands,
+        ai_hint_off: state.settings.lock().unwrap().ai_hint_off,
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
@@ -1008,6 +1077,9 @@ pub fn run() {
             }
             let dir = data_dir.clone();
             std::thread::spawn(move || cli::auto_install(&dir));
+            // 给本机的 AI 装 p2pcli 使用说明，它们新开的会话就知道怎么用
+            let hint_on = !app.state::<AppState>().settings.lock().unwrap().ai_hint_off;
+            std::thread::spawn(move || ai_hint::auto_install(hint_on));
 
             // 传输进度：有变化就推给界面
             let handle = app.handle().clone();
@@ -1127,6 +1199,9 @@ pub fn run() {
             reveal_path,
             open_folder,
             cli_status,
+            ai_hint_status,
+            set_ai_hint_auto,
+            ai_hint_apply,
             install_cli,
             kick,
             remove_trusted,

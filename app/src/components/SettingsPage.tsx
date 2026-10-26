@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownUp, Bot, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowDownUp, BookOpen, Bot, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
 import { Tabs, Checkbox, Description, Radio, RadioGroup } from "@heroui/react";
 import { api, platformLabel, type CliStatus, type InstalledAgent, type Overview, type SettingsView } from "../api";
+import { AiHintSettings } from "./AiHintSettings";
 import { AgentIcon } from "./Agent";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
@@ -23,6 +24,7 @@ const SECTIONS = [
   { id: "proxy", label: "代理设置", icon: Network },
   { id: "files", label: "文件传输", icon: ArrowDownUp },
   { id: "agents", label: "AI 启动", icon: Bot },
+  { id: "aihint", label: "多机互动", icon: BookOpen },
   { id: "trusted", label: "受信设备", icon: ShieldCheck },
   { id: "about", label: "关于", icon: Info },
 ];
@@ -395,6 +397,9 @@ export function SettingsPage({
                     </Field>
                   ))}
                 </FieldGroup>
+              </Tabs.Panel>
+              <Tabs.Panel id="aihint">
+                <AiHintSettings />
               </Tabs.Panel>
               <Tabs.Panel id="trusted">
                 <p className="detail-note mb-4">
