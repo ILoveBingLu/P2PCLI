@@ -91,6 +91,28 @@ pub enum Msg {
     AgentLaunched,
     ChooseAgentOption { session_id: String, approval_id: String, option_id: usize },
     AgentOptionChosen,
+    /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
+    Exec {
+        command: String,
+        /// 工作目录；不写就是对方的用户目录
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        /// 超过这么多秒还没跑完就结束它
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_secs: Option<u64>,
+    },
+    /// 命令跑完了：退出码；被信号结束时是信号编号；超时被结束时 timed_out 为真
+    ExecExit {
+        code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signal: Option<i32>,
+        #[serde(default)]
+        timed_out: bool,
+    },
+    /// 把对方电脑上的文件拉过来：之后这条流按传文件的格式走，对方是发送方
+    GetFiles { paths: Vec<String> },
+    /// 把文件推到对方电脑上指定的目录：之后这条流按传文件的格式走，对方是接收方
+    PutFiles { dest: String },
     Resize {
         cols: u16,
         rows: u16,

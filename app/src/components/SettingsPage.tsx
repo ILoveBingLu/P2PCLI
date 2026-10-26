@@ -306,13 +306,17 @@ export function SettingsPage({
                   <Field>
                     <FieldLabel>命令行工具 p2pcli</FieldLabel>
                     <FieldDescription>
-                      终端里的 AI 也能用它在设备之间传文件，要 P2PCLI 开着。
+                      终端里的 AI 也能用它在设备之间传文件、拉文件、跑命令，要 P2PCLI 开着。
+                      跑命令、拉文件和推到指定目录用的是和开终端一样的认证：先在界面里连过一次，对方没勾受信时每次连接要它点同意。
                     </FieldDescription>
                     <pre className="overflow-x-auto rounded-md bg-muted-surface px-3 py-2 text-xs leading-relaxed [font-variant-ligatures:none]">{[
-                      "p2pcli devices                列出设备、在线和延迟",
-                      "p2pcli send 设备名 文件...      发文件或文件夹，打印对方电脑上的路径",
-                      "p2pcli inbox                  看最近收到的文件",
-                      "p2pcli devices --json         加 --json 输出给程序和 AI 读",
+                      "p2pcli devices                      列出设备、在线和延迟",
+                      "p2pcli send 设备名 文件...            发文件或文件夹，打印对方电脑上的路径",
+                      "p2pcli send 设备名 文件... --to 目录   放到对方电脑的这个目录，同名盖掉",
+                      "p2pcli pull 设备名 对方的路径...       把对方电脑上的文件拉到当前目录（--to 换目录）",
+                      "p2pcli exec 设备名 -- 命令            在对方电脑上跑一条命令，退出码带回来",
+                      "p2pcli inbox                        看最近收到的文件",
+                      "p2pcli devices --json               加 --json 输出给程序和 AI 读",
                     ].join("\n")}</pre>
                     <div className="flex flex-wrap items-center gap-2">
                       <SquareTerminal className="size-4 text-muted-foreground" />

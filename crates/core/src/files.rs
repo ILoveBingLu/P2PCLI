@@ -20,10 +20,11 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::ALPN_FILE;
+use crate::client::RemoteHost;
 use crate::host::{APPROVE_TIMEOUT, FileRequest, Host, HostEvent, clean_name};
 use crate::identity::DeviceInfo;
 use crate::presence::is_unknown_protocol;
-use crate::proto::{AnyFrame, read_frame_as, read_json, write_data, write_json};
+use crate::proto::{AnyFrame, Msg, read_frame_as, read_json, write_data, write_json};
 use crate::store::{RecentStore, now_secs, write_private};
 
 /// 每个数据帧多大
@@ -155,7 +156,8 @@ impl Files {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
-        Arc::new(Self {
+        let linked = host.clone();
+        let files = Arc::new(Self {
             host,
             recent,
             inbox_root,
@@ -164,7 +166,10 @@ impl Files {
             transfers: Default::default(),
             conns: Default::default(),
             receiving: Default::default(),
-        })
+        });
+        // 被连方收“推到指定目录”、发“被拉走的文件”时要用到这里
+        linked.attach_files(&files);
+        files
     }
 
     pub fn inbox_root(&self) -> &Path {
@@ -224,19 +229,37 @@ impl Files {
         })
     }
 
+    /// 这次传输在开始传之前就失败了（比如连不上对方）
+    pub fn fail(&self, id: &str, message: String) {
+        self.end(id, Err(anyhow!(message)));
+    }
+
     /// 登记一次发送，返回编号；真正开始发用 [`Files::run_send`]
     pub fn begin(&self, peer: &EndpointId, peer_name: &str, paths: &[PathBuf]) -> String {
-        let id = new_id();
         let names: Vec<String> = paths
             .iter()
             .map(|p| p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned()))
             .collect();
+        self.begin_as(Direction::Send, peer, peer_name, label(&names))
+    }
+
+    /// 登记一次从对方拉文件，返回编号；真正开始拉用 [`Files::run_pull`]
+    pub fn begin_pull(&self, peer: &EndpointId, peer_name: &str, remote_paths: &[String]) -> String {
+        let names: Vec<String> = remote_paths
+            .iter()
+            .map(|p| p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(p).to_string())
+            .collect();
+        self.begin_as(Direction::Receive, peer, peer_name, label(&names))
+    }
+
+    fn begin_as(&self, direction: Direction, peer: &EndpointId, peer_name: &str, label: String) -> String {
+        let id = new_id();
         self.track(Transfer {
             id: id.clone(),
-            direction: Direction::Send,
+            direction,
             peer: peer.to_string(),
             peer_name: peer_name.to_string(),
-            label: label(&names),
+            label,
             files: 0,
             total: 0,
             done: 0,
@@ -260,23 +283,50 @@ impl Files {
     }
 
     async fn send_inner(&self, id: &str, endpoint: &Endpoint, addr: EndpointAddr, me: &DeviceInfo, paths: Vec<PathBuf>) -> Result<(String, Vec<String>)> {
-        let list = tokio::task::spawn_blocking(move || collect(&paths)).await??;
-        let entries: Vec<FileEntry> = list.iter().map(|(_, e)| e.clone()).collect();
-        let total = entries.iter().map(|e| e.size).sum();
-        self.update(id, |t| {
-            t.files = entries.len();
-            t.total = total;
-        });
+        let list = self.list_for(id, paths).await?;
         let conn = self.connection(endpoint, addr).await?;
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
+        self.send_batch(id, &mut send, &mut recv, me, list).await
+    }
+
+    /// 把本机的文件推到对方电脑上指定的目录（目录在对方电脑上，不存在会建，同名文件会被盖掉）。
+    /// 走已经认证过的终端连接，所以只有密码对了、对方点过同意或者勾了受信的设备才能用。
+    pub async fn run_put(&self, id: &str, remote: &RemoteHost, me: &DeviceInfo, paths: Vec<PathBuf>, dest: String) -> Transfer {
+        let result = async {
+            let list = self.list_for(id, paths).await?;
+            let (mut send, mut recv) = remote.open_stream(&Msg::PutFiles { dest }).await?;
+            self.send_batch(id, &mut send, &mut recv, me, list).await
+        }
+        .await;
+        if let Err(e) = &result {
+            info!(id, "推文件到指定目录失败：{e:#}");
+        }
+        self.end(id, result).unwrap_or_else(|| panic!("传输记录 {id} 不见了"))
+    }
+
+    /// 列出要发的文件并记进传输记录
+    async fn list_for(&self, id: &str, paths: Vec<PathBuf>) -> Result<Vec<(PathBuf, FileEntry)>> {
+        let list = tokio::task::spawn_blocking(move || collect(&paths)).await??;
+        let total = list.iter().map(|(_, e)| e.size).sum();
+        let files = list.len();
+        self.update(id, |t| {
+            t.files = files;
+            t.total = total;
+        });
+        Ok(list)
+    }
+
+    /// 在打开的流上发一批：报清单，等对方回要从哪里接着发，发完等对方核对放好
+    async fn send_batch(&self, id: &str, send: &mut SendStream, recv: &mut RecvStream, me: &DeviceInfo, list: Vec<(PathBuf, FileEntry)>) -> Result<(String, Vec<String>)> {
+        let entries: Vec<FileEntry> = list.iter().map(|(_, e)| e.clone()).collect();
         write_json(
-            &mut send,
+            send,
             &FileMsg::Offer { id: id.to_string(), name: me.name.clone(), platform: me.platform.clone(), entries: entries.clone() },
         )
         .await?;
         self.update(id, |t| t.state = TransferState::Waiting);
         // 对方可能要弹窗问主人，等得比弹窗超时长一点
-        let reply = timeout(APPROVE_TIMEOUT + Duration::from_secs(15), read_json::<_, FileMsg>(&mut recv))
+        let reply = timeout(APPROVE_TIMEOUT + Duration::from_secs(15), read_json::<_, FileMsg>(recv))
             .await
             .map_err(|_| anyhow!("对方一直没有回应"))??;
         let offsets = match reply {
@@ -296,24 +346,24 @@ impl Files {
                     bail!("对方要的续传位置不对");
                 }
                 let hash = self
-                    .send_file(id, &mut send, local, entry.size, offset)
+                    .send_file(id, send, local, entry.size, offset)
                     .await
                     .with_context(|| format!("发 {} 失败", entry.path))?;
-                write_json(&mut send, &FileMsg::Done { index: index as u32, hash }).await?;
+                write_json(send, &FileMsg::Done { index: index as u32, hash }).await?;
             }
             Ok(())
         }
         .await;
         if let Err(e) = streamed {
             // 对方可能先出了错（比如校验没过）就不收了，它的说法更准
-            if let Ok(Ok(FileMsg::Error { message })) = timeout(Duration::from_secs(2), read_json::<_, FileMsg>(&mut recv)).await {
+            if let Ok(Ok(FileMsg::Error { message })) = timeout(Duration::from_secs(2), read_json::<_, FileMsg>(recv)).await {
                 bail!("对方出错：{message}");
             }
             return Err(e);
         }
         let _ = send.finish();
         // 对方核对完、挪到正式位置才回
-        match timeout(Duration::from_secs(120), read_json::<_, FileMsg>(&mut recv))
+        match timeout(Duration::from_secs(120), read_json::<_, FileMsg>(recv))
             .await
             .map_err(|_| anyhow!("对方收完以后没有回应"))??
         {
@@ -321,6 +371,53 @@ impl Files {
             FileMsg::Error { message } => bail!("对方出错：{message}"),
             other => bail!("对方回了意外的消息：{other:?}"),
         }
+    }
+
+    /// 被连方：对面要拉走这些文件（路径在本机，`~` 开头从用户目录算，相对路径也从用户目录算起）。
+    /// 调用前对面已经通过终端连接的认证。
+    pub async fn serve_get(&self, peer: &EndpointId, peer_name: &str, send: &mut SendStream, recv: &mut RecvStream, me: &DeviceInfo, paths: Vec<String>) -> Result<()> {
+        let paths: Vec<PathBuf> = paths.iter().map(|p| resolve_path(p)).collect();
+        let id = self.begin(peer, peer_name, &paths);
+        let result = async {
+            if paths.is_empty() {
+                bail!("没写要拉哪些文件");
+            }
+            let list = self.list_for(&id, paths).await?;
+            self.send_batch(&id, send, recv, me, list).await
+        }
+        .await;
+        if let Err(e) = &result {
+            info!(%id, "被拉文件失败：{e:#}");
+            let _ = write_json(send, &FileMsg::Error { message: format!("{e:#}") }).await;
+        }
+        self.end(&id, result);
+        Ok(())
+    }
+
+    /// 本机去拉对方电脑上的文件，放进本机的 `to` 目录（不存在会建，同名文件会被盖掉）。
+    pub async fn run_pull(&self, id: &str, remote: &RemoteHost, paths: Vec<String>, to: PathBuf) -> Transfer {
+        let result = self.pull_inner(id, remote, paths, to).await;
+        if let Err(e) = &result {
+            info!(id, "拉文件失败：{e:#}");
+        }
+        self.end(id, result).unwrap_or_else(|| panic!("传输记录 {id} 不见了"))
+    }
+
+    async fn pull_inner(&self, id: &str, remote: &RemoteHost, paths: Vec<String>, to: PathBuf) -> Result<(String, Vec<String>)> {
+        let (mut send, mut recv) = remote.open_stream(&Msg::GetFiles { paths }).await?;
+        // 对方要先把文件夹走一遍列出清单，文件多时要等一会儿
+        let first = timeout(Duration::from_secs(120), read_json::<_, FileMsg>(&mut recv))
+            .await
+            .map_err(|_| anyhow!("对方一直没有回应"))?
+            .map_err(|e| anyhow!("对方没有回应，它的 P2PCLI 可能版本太旧、还不支持拉文件，请更新（{e:#}）"))?;
+        let entries = match first {
+            FileMsg::Offer { entries, .. } => entries,
+            FileMsg::Error { message } => bail!("对方出错：{message}"),
+            other => bail!("对方回了意外的消息：{other:?}"),
+        };
+        let plan = Plan::new(&entries)?;
+        let target = Target::Dir { dir: to, notify: false };
+        self.receive_batch(Some(id), remote.connection().remote_id(), &remote.info.name, plan, entries, &mut send, &mut recv, target).await
     }
 
     /// 发一个文件：对方已经有的前 offset 字节只算哈希不再发，返回整个文件的哈希
@@ -398,7 +495,6 @@ impl Files {
             Err(e) => return reply(&mut send, FileMsg::Reject { message: format!("{e:#}") }).await,
         };
         let total: u64 = entries.iter().map(|e| e.size).sum();
-        let tops: Vec<String> = plan.tops.iter().map(|t| t.name.clone()).collect();
         if !self.knows(&remote) {
             let req = FileRequest {
                 id: 0,
@@ -407,22 +503,66 @@ impl Files {
                 platform: platform.clone(),
                 files: entries.len(),
                 total,
-                items: tops.iter().take(5).cloned().collect(),
+                items: plan.tops.iter().take(5).map(|t| t.name.clone()).collect(),
             };
             if !self.host.ask_files(req, conn).await {
                 info!(remote = %remote.fmt_short(), "拒收文件");
                 return reply(&mut send, FileMsg::Reject { message: "对方拒绝接收".into() }).await;
             }
         }
+        // 失败已经回给对方、记进传输记录了
+        let _ = self.receive_batch(None, remote, &name, plan, entries, &mut send, &mut recv, Target::Inbox).await;
+        Ok(())
+    }
+
+    /// 被连方：对面要把文件推到本机指定的目录（`~` 开头从用户目录算，相对路径也从用户目录算起，同名文件会被盖掉）。
+    /// 调用前对面已经通过终端连接的认证，所以不再弹窗问。
+    pub async fn serve_put(&self, peer: &EndpointId, send: &mut SendStream, recv: &mut RecvStream, dest: String) -> Result<()> {
+        let FileMsg::Offer { name, entries, .. } = timeout(Duration::from_secs(10), read_json(recv)).await?? else {
+            bail!("开场消息不对");
+        };
+        if dest.trim().is_empty() {
+            return reply(send, FileMsg::Reject { message: "没写放到哪个目录".into() }).await;
+        }
+        let plan = match Plan::new(&entries) {
+            Ok(plan) => plan,
+            Err(e) => return reply(send, FileMsg::Reject { message: format!("{e:#}") }).await,
+        };
+        let target = Target::Dir { dir: resolve_path(&dest), notify: true };
+        let _ = self.receive_batch(None, *peer, &name, plan, entries, send, recv, target).await;
+        Ok(())
+    }
+
+    /// 收一批：先占住半截文件、告诉对方从哪里接着发，收完核对，再放到目标位置。
+    /// `tid` 是已经登记好的传输编号（拉文件时有）；没有就在这里登记，也由这里收尾。
+    /// 失败会回给对方；返回放在了哪里。
+    #[allow(clippy::too_many_arguments)]
+    async fn receive_batch(
+        &self,
+        tid: Option<&str>,
+        remote: EndpointId,
+        name: &str,
+        plan: Plan,
+        entries: Vec<FileEntry>,
+        send: &mut SendStream,
+        recv: &mut RecvStream,
+        target: Target,
+    ) -> Result<(String, Vec<String>)> {
+        let name = clean_name(name);
+        let total: u64 = entries.iter().map(|e| e.size).sum();
+        let tops: Vec<String> = plan.tops.iter().map(|t| t.name.clone()).collect();
 
         let partial_dir = self.inbox_root.join(PARTIAL_DIR);
         if let Err(e) = tokio::fs::create_dir_all(&partial_dir).await {
             let message = format!("建收件目录失败：{}（{e}）", partial_dir.display());
-            return reply(&mut send, FileMsg::Error { message }).await;
+            let _ = reply(send, FileMsg::Error { message: message.clone() }).await;
+            bail!("{message}");
         }
         let keys: Vec<String> = entries.iter().map(|e| partial_key(&remote, e)).collect();
         let Some(_claim) = Claim::take(&self.receiving, &keys) else {
-            return reply(&mut send, FileMsg::Reject { message: "这批文件正在传，等它传完再发".into() }).await;
+            let message = "这批文件正在传，等它传完再发".to_string();
+            let _ = reply(send, FileMsg::Reject { message: message.clone() }).await;
+            bail!("{message}");
         };
         let busy = self.receiving.lock().unwrap().clone();
         let dir = partial_dir.clone();
@@ -439,72 +579,103 @@ impl Files {
                 offsets.push(len);
             }
         }
-        let id = new_id();
-        self.track(Transfer {
-            id: id.clone(),
-            direction: Direction::Receive,
-            peer: remote.to_string(),
-            peer_name: name.clone(),
-            label: label(&tops),
-            files: entries.len(),
-            total,
-            done: offsets.iter().sum(),
-            state: TransferState::Running,
-            error: None,
-            dir: None,
-            paths: Vec::new(),
-            started_at: now_secs(),
-            finished_at: None,
-        });
+        let own = tid.is_none();
+        let id = match tid {
+            Some(id) => {
+                self.update(id, |t| {
+                    t.label = label(&tops);
+                    t.files = entries.len();
+                    t.total = total;
+                    t.done = offsets.iter().sum();
+                    t.state = TransferState::Running;
+                });
+                id.to_string()
+            }
+            None => {
+                let id = new_id();
+                self.track(Transfer {
+                    id: id.clone(),
+                    direction: Direction::Receive,
+                    peer: remote.to_string(),
+                    peer_name: name.clone(),
+                    label: label(&tops),
+                    files: entries.len(),
+                    total,
+                    done: offsets.iter().sum(),
+                    state: TransferState::Running,
+                    error: None,
+                    dir: None,
+                    paths: Vec::new(),
+                    started_at: now_secs(),
+                    finished_at: None,
+                });
+                id
+            }
+        };
         info!(remote = %remote.fmt_short(), %name, files = entries.len(), total, "开始收文件");
 
+        let (dest, overwrite) = match &target {
+            Target::Inbox => (self.inbox_root.join(safe_component(&name).unwrap_or_else(|| "未命名设备".into())), false),
+            Target::Dir { dir, .. } => (dir.clone(), true),
+        };
         let result: Result<(String, Vec<String>)> = async {
-            write_json(&mut send, &FileMsg::Accept { offsets: offsets.clone() }).await?;
+            write_json(send, &FileMsg::Accept { offsets: offsets.clone() }).await?;
             for (index, ((entry, key), offset)) in entries.iter().zip(&keys).zip(&offsets).enumerate() {
-                self.receive_file(&id, &mut recv, index, &partial_dir.join(key), entry.size, *offset)
+                self.receive_file(&id, recv, index, &partial_dir.join(key), entry.size, *offset)
                     .await
                     .with_context(|| format!("收 {} 失败", entry.path))?;
             }
-            let folder = safe_component(&name).unwrap_or_else(|| "未命名设备".into());
-            let dest = self.inbox_root.join(folder);
             let shown = dest.display().to_string();
             let entries = entries.clone();
             let keys = keys.clone();
-            let paths = tokio::task::spawn_blocking(move || place(&dest, &partial_dir, &plan, &keys, &entries)).await??;
+            let paths = tokio::task::spawn_blocking(move || place(&dest, &partial_dir, &plan, &keys, &entries, overwrite)).await??;
             Ok((shown, paths))
         }
         .await;
 
         match &result {
             Ok((dir, paths)) => {
-                let _ = reply(&mut send, FileMsg::Saved { dir: dir.clone(), paths: paths.clone() }).await;
+                let _ = reply(send, FileMsg::Saved { dir: dir.clone(), paths: paths.clone() }).await;
                 info!(remote = %remote.fmt_short(), %dir, "文件收好了");
-                self.remember(InboxItem {
-                    id: id.clone(),
+                let received = HostEvent::FilesReceived {
                     from: remote.to_string(),
                     from_name: name.clone(),
-                    at: now_secs(),
-                    dir: dir.clone(),
-                    paths: paths.clone(),
-                    files: entries.len(),
-                    total,
-                });
-                self.host.notify(HostEvent::FilesReceived {
-                    from: remote.to_string(),
-                    from_name: name,
                     files: entries.len(),
                     total,
                     dir: dir.clone(),
                     paths: paths.clone(),
-                });
+                };
+                match target {
+                    Target::Inbox => {
+                        self.remember(InboxItem {
+                            id: id.clone(),
+                            from: remote.to_string(),
+                            from_name: name,
+                            at: now_secs(),
+                            dir: dir.clone(),
+                            paths: paths.clone(),
+                            files: entries.len(),
+                            total,
+                        });
+                        self.host.notify(received);
+                    }
+                    Target::Dir { notify: true, .. } => self.host.notify(received),
+                    Target::Dir { .. } => {}
+                }
             }
             Err(e) => {
                 warn!(remote = %remote.fmt_short(), "收文件失败：{e:#}");
-                let _ = reply(&mut send, FileMsg::Error { message: format!("{e:#}") }).await;
+                let _ = reply(send, FileMsg::Error { message: format!("{e:#}") }).await;
             }
         }
-        self.end(&id, result);
-        Ok(())
+        let outcome = match &result {
+            Ok(v) => Ok(v.clone()),
+            Err(e) => Err(anyhow!("{e:#}")),
+        };
+        if own {
+            self.end(&id, result);
+        }
+        outcome
     }
 
     /// 收一个文件写进半截文件；已经有的前 offset 字节先读出来算进哈希，最后和对方给的哈希核对
@@ -640,6 +811,28 @@ fn clean_partials(dir: &Path, busy: &HashSet<String>) {
     }
 }
 
+/// 收到的文件放哪
+enum Target {
+    /// 收件目录里按发送设备分文件夹，重名自动加编号，不盖已有的
+    Inbox,
+    /// 明确指定的目录，同名文件盖掉（和 scp、rsync 一样）
+    Dir { dir: PathBuf, notify: bool },
+}
+
+/// 对方（或命令行）给的路径换成本机的：`~` 开头从用户目录算，相对路径也从用户目录算起
+pub fn resolve_path(s: &str) -> PathBuf {
+    let s = s.trim();
+    let home = || std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    if s == "~" {
+        return home();
+    }
+    if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
+        return home().join(rest);
+    }
+    let p = PathBuf::from(s);
+    if p.is_absolute() { p } else { home().join(p) }
+}
+
 /// 接收方对清单的处理结果：每个文件清理过的相对路径，以及第一层有哪些项
 struct Plan {
     rels: Vec<Vec<String>>,
@@ -715,13 +908,13 @@ fn safe_component(s: &str) -> Option<String> {
     Some(out)
 }
 
-/// 收齐以后挪到正式位置；第一层重名就加 (1)、(2)，不覆盖已有的
-fn place(dest: &Path, partial_dir: &Path, plan: &Plan, keys: &[String], entries: &[FileEntry]) -> Result<Vec<String>> {
+/// 收齐以后挪到正式位置；第一层重名就加 (1)、(2)，不覆盖已有的；overwrite 为真时按原名放，同名文件盖掉
+fn place(dest: &Path, partial_dir: &Path, plan: &Plan, keys: &[String], entries: &[FileEntry], overwrite: bool) -> Result<Vec<String>> {
     std::fs::create_dir_all(dest).with_context(|| format!("建收件目录失败：{}", dest.display()))?;
     let mut renamed = HashMap::new();
     let mut paths = Vec::new();
     for top in &plan.tops {
-        let name = unique_name(dest, &top.name, top.file);
+        let name = if overwrite { top.name.clone() } else { unique_name(dest, &top.name, top.file) };
         paths.push(dest.join(&name).display().to_string());
         renamed.insert(top.name.to_lowercase(), name);
     }
@@ -870,6 +1063,18 @@ mod tests {
         assert_eq!(unique_name(&dir, "folder", false), "folder (1)");
         assert_eq!(unique_name(&dir, "new.txt", true), "new.txt");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn paths_resolve_from_home() {
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(resolve_path("~"), home);
+        assert_eq!(resolve_path("~/a/b"), home.join("a/b"));
+        assert_eq!(resolve_path("  rel/x "), home.join("rel/x"));
+        #[cfg(unix)]
+        assert_eq!(resolve_path("/etc/hosts"), PathBuf::from("/etc/hosts"));
+        #[cfg(windows)]
+        assert_eq!(resolve_path(r"C:\Windows"), PathBuf::from(r"C:\Windows"));
     }
 
     #[test]

@@ -3912,11 +3912,13 @@ name = "p2pcli-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "blake3",
  "bytes",
  "futures-util",
  "iroh",
  "iroh-mdns-address-lookup",
+ "libc",
  "n0-future",
  "netdev 0.45.1",
  "portable-pty",

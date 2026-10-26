@@ -29,3 +29,9 @@ n0-future = "0.3"
 blake3 = "1"
 # 认会话里跑的命令行 AI：读进程的完整命令行，Mac 和 Windows 通用
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+# 控制口里命令输出的原始字节用 base64 装进 JSON
+base64 = "0.22"
+
+[target.'cfg(unix)'.dependencies]
+# 远程执行的命令超时或被取消时，按进程组结束它和它的子进程
+libc = "0.2"
