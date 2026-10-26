@@ -161,6 +161,9 @@ pub struct Prober {
     fails: Mutex<HashMap<EndpointId, u32>>,
     seen: Mutex<HashMap<String, Seen>>,
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
+    /// 建的时候所在的 tokio 运行时。界面上点“刷新状态”是同步命令，跑在主线程上，
+    /// 那里没有运行时，直接 tokio::spawn 会 panic，Windows 上整个软件闪退
+    runtime: tokio::runtime::Handle,
 }
 
 impl Prober {
@@ -173,6 +176,7 @@ impl Prober {
             fails: Default::default(),
             seen: Default::default(),
             tasks: Mutex::new(Vec::new()),
+            runtime: tokio::runtime::Handle::current(),
         })
     }
 
@@ -183,7 +187,7 @@ impl Prober {
         }
         let this = self.clone();
         tasks.push(
-            tokio::spawn(async move {
+            self.runtime.spawn(async move {
                 // 刚启动时牵线服务器还没连上，稍等一下再探第一轮
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 loop {
@@ -195,7 +199,7 @@ impl Prober {
         );
         let this = self.clone();
         tasks.push(
-            tokio::spawn(async move {
+            self.runtime.spawn(async move {
                 let mut tick = tokio::time::interval(PING_EVERY);
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 for round in 0u64.. {
@@ -264,10 +268,10 @@ impl Prober {
         }
     }
 
-    /// 马上探一轮，比如刚连过、刚删过历史
+    /// 马上探一轮，比如刚连过、刚删过历史；哪个线程调都行
     pub fn refresh_now(self: &Arc<Self>) {
         let this = self.clone();
-        tokio::spawn(async move { this.probe_all().await });
+        self.runtime.spawn(async move { this.probe_all().await });
     }
 
     /// 连接历史里的设备，每台只算一次（同一台可能换过设备码）
