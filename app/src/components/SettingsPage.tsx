@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownUp, BookOpen, Bot, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
-import { Tabs, Checkbox, Description, Radio, RadioGroup } from "@heroui/react";
-import { api, platformLabel, type CliStatus, type InstalledAgent, type Overview, type SettingsView } from "../api";
+import { ArrowDownUp, BookOpen, Bot, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, LockKeyhole, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
+import { Tabs, Checkbox, Description, Radio, RadioGroup, Switch } from "@heroui/react";
+import { api, platformLabel, type CliStatus, type InstalledAgent, type Overview, type SettingsView, type SystemPermission } from "../api";
 import { AboutPanel } from "./AboutPanel";
 import { AiHintSettings } from "./AiHintSettings";
 import { AgentIcon } from "./Agent";
@@ -27,6 +27,7 @@ const SECTIONS = [
   { id: "agents", label: "AI 启动", icon: Bot },
   { id: "aihint", label: "多机互动", icon: BookOpen },
   { id: "trusted", label: "受信设备", icon: ShieldCheck },
+  { id: "permissions", label: "系统权限", icon: LockKeyhole },
   { id: "about", label: "关于", icon: Info },
 ];
 
@@ -58,6 +59,11 @@ export function SettingsPage({
   const [agentCommands, setAgentCommands] = useState<Record<string, string>>({});
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [permissions, setPermissions] = useState<SystemPermission[]>([]);
+  const [permissionsLoading, setPermissionsLoading] = useState(true);
+  const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
+  const mac = ov.platform === "macos";
+  const sections = mac ? SECTIONS : SECTIONS.filter((section) => section.id !== "permissions");
   useEffect(() => {
     api.cliStatus().then(setCli).catch(() => {});
   }, []);
@@ -83,6 +89,17 @@ export function SettingsPage({
       setAgentsLoading(false);
     }
   }, []);
+  const loadPermissions = useCallback(async () => {
+    if (!mac) return;
+    setPermissionsLoading(true);
+    try {
+      setPermissions(await api.systemPermissions());
+    } catch (e) {
+      toast.error(`读取系统权限失败：${String(e)}`);
+    } finally {
+      setPermissionsLoading(false);
+    }
+  }, [mac]);
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -108,7 +125,14 @@ export function SettingsPage({
   useEffect(() => {
     void load();
     void loadAgents();
-  }, [load, loadAgents]);
+    void loadPermissions();
+  }, [load, loadAgents, loadPermissions]);
+  useEffect(() => {
+    if (!mac || tab !== "permissions") return;
+    const refresh = () => void loadPermissions();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [loadPermissions, mac, tab]);
   const save = async () => {
     if (!settings || saving) return;
     setSaving(true);
@@ -139,14 +163,37 @@ export function SettingsPage({
       setRemoving(null);
     }
   };
-  const current = SECTIONS.find((item) => item.id === tab) ?? SECTIONS[0];
+  const requestPermission = async (permission: SystemPermission) => {
+    if (permission.status === "granted" || permissionBusy) return;
+    setPermissionBusy(permission.id);
+    try {
+      const next = await api.requestSystemPermission(permission.id);
+      setPermissions(next);
+      const updated = next.find((item) => item.id === permission.id);
+      if (updated?.status === "denied") {
+        toast.error("系统仍未允许这项权限，请在系统设置中打开。");
+      }
+    } catch (e) {
+      toast.error(`申请权限失败：${String(e)}`);
+    } finally {
+      setPermissionBusy(null);
+    }
+  };
+  const openSystemSettings = async (permission: SystemPermission) => {
+    try {
+      await api.openSystemSettings(permission.id);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+  const current = sections.find((item) => item.id === tab) ?? sections[0];
   return (
     <section className="settings-page" aria-labelledby="settings-title">
       <Tabs orientation="vertical" selectedKey={tab} onSelectionChange={(key) => setTab(String(key))} className="settings-tabs">
         <nav className="settings-nav">
           <h1 id="settings-title" className="settings-nav-title">设置</h1>
           <Tabs.List aria-label="设置分类">
-            {SECTIONS.map(({ id, label, icon: Icon }) => (
+            {sections.map(({ id, label, icon: Icon }) => (
               <Tabs.Tab key={id} id={id}>
                 <Icon />
                 {label}
@@ -484,6 +531,58 @@ export function SettingsPage({
                       </div>
                     ))}
                   </div>
+                )}
+              </Tabs.Panel>
+              <Tabs.Panel id="permissions">
+                {permissionsLoading ? (
+                  <div className="loading-state" role="status">
+                    <LoaderCircle className="animate-spin" />
+                    正在读取系统权限…
+                  </div>
+                ) : permissions.length === 0 ? (
+                  <Empty>
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon"><LockKeyhole /></EmptyMedia>
+                      <EmptyTitle>没有需要申请的系统权限</EmptyTitle>
+                      <EmptyDescription>当前平台没有发现 P2PCLI 需要单独申请的系统权限。</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <FieldGroup className="gap-3">
+                    <p className="detail-note">
+                      这些权限只用于 P2PCLI 已启用的功能。打开开关时会先尝试申请；如果之前已经拒绝，需要到系统设置里重新开启。
+                    </p>
+                    {permissions.map((permission) => {
+                      const granted = permission.status === "granted";
+                      const busy = permissionBusy === permission.id;
+                      return (
+                        <div key={permission.id} className="flex items-start gap-4 rounded-lg border border-border bg-muted-surface p-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <strong className="text-sm">{permission.name}</strong>
+                              <span className="text-xs text-muted-foreground">{granted ? "已允许" : permission.status === "denied" ? "未允许" : "未确认"}</span>
+                            </div>
+                            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{permission.description}</p>
+                            {permission.status === "denied" && (
+                              <Button variant="link" size="sm" className="mt-2 h-auto px-0" onClick={() => void openSystemSettings(permission)}>
+                                打开系统设置
+                              </Button>
+                            )}
+                          </div>
+                          <Switch
+                            aria-label={permission.name}
+                            isSelected={granted}
+                            isDisabled={busy}
+                            onChange={() => void requestPermission(permission)}
+                          >
+                            <Switch.Content>
+                              <Switch.Control><Switch.Thumb /></Switch.Control>
+                            </Switch.Content>
+                          </Switch>
+                        </div>
+                      );
+                    })}
+                  </FieldGroup>
                 )}
               </Tabs.Panel>
               <Tabs.Panel id="about">

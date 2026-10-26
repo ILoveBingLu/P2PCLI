@@ -1,7 +1,7 @@
 // 开发用：浏览器里假数据渲染界面，看排版。不进正式包。
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Overview, SettingsView, TerminalSession, Transfer } from "./api";
+import type { Overview, SettingsView, SystemPermission, TerminalSession, Transfer } from "./api";
 
 const s = new URLSearchParams(location.search).get("s") ?? "empty";
 
@@ -71,6 +71,14 @@ const previewSettings: SettingsView = {
     { address: "wss://p2pcli.yscopy.cn", label: "Cloudflare", note: "海外节点，适合在国外用，国内访问有时不稳" },
   ],
 };
+const previewPermissions: SystemPermission[] = [{
+  id: "local_network",
+  name: "局域网访问",
+  description: "用于发现同一局域网里的 P2PCLI 设备，并尝试局域网直连。",
+  status: s === "permissions-off" ? "denied" : "granted",
+  can_request: true,
+  settings_url: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork",
+}];
 // s=custom-server：设置里填过自定义牵线服务器
 if (s === "custom-server") previewSettings.server = "b840307fdbdff2aa164308932575e8f7396b7fd539bd7cfd1927b2456b3fc8a8@rdv.example.com:7788";
 let termSeq = 0;
@@ -451,6 +459,11 @@ mockIPC(
         return { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" };
       case "get_settings":
         return { ...previewSettings };
+      case "system_permissions":
+      case "request_system_permission":
+        return previewPermissions;
+      case "open_system_settings":
+        return null;
       case "save_settings":
         previewSettings.server = args.server?.trim() || null;
         previewSettings.device_name = args.deviceName?.trim() || null;
