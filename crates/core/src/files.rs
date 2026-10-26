@@ -67,11 +67,21 @@ enum FileMsg {
         entries: Vec<FileEntry>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lanes: Option<u32>,
+        /// 发送方看得懂 Progress：接收方可以定期回报真正收到了多少（旧版本没有这一项，不能给它发）
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        progress: bool,
     },
     /// 接收方同意：每个文件已经有多少字节，从那里接着发
     Accept { offsets: Vec<u64> },
     /// 接收方同意并发分段收：用几条流、每段多大、每个文件里已经收好的段（段编号）
-    LaneAccept { lanes: u32, segment: u64, done: Vec<Vec<u32>> },
+    /// progress 为真是说接收方会定期回报 Progress，发送方就按回报显示进度；旧版本没有这一项
+    LaneAccept {
+        lanes: u32,
+        segment: u64,
+        done: Vec<Vec<u32>>,
+        #[serde(default)]
+        progress: bool,
+    },
     /// 并发分段：这条单向流属于哪次传输（流上的第一条消息）
     Lane { id: String },
     /// 一段数据：第 file 个文件从 offset 开始 len 字节，后面跟着这么多字节的数据帧
@@ -80,6 +90,9 @@ enum FileMsg {
     SegEnd { hash: String },
     /// 所有段都发完了
     Finish,
+    /// 接收方回报：到现在真正收到（写进文件）了多少字节。发送方显示进度用它，
+    /// 不然只能看到“写进发送缓冲区的字节”，比对方真收到的多出各条流在途的窗口，收尾时看起来像卡住
+    Progress { done: u64 },
     Reject { message: String },
     /// 第 index 个文件发完了，附上整个文件的哈希
     Done { index: u32, hash: String },
@@ -129,6 +142,9 @@ pub struct Transfer {
     /// 并发分段时用了几条流；0 是一条流（对方是旧版本，或者本机关了并发）
     #[serde(default)]
     pub lanes: u32,
+    /// 并发分段传输的诊断：往返延迟、丢包、时间花在读盘还是等网络上，查慢的时候看
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diag: String,
 }
 
 impl Transfer {
@@ -301,6 +317,7 @@ impl Files {
             started_at: now_secs(),
             finished_at: None,
             lanes: 0,
+            diag: String::new(),
         });
         id
     }
@@ -363,7 +380,7 @@ impl Files {
         let want_lanes = lanes.filter(|_| self.lanes_max > 0).map(|_| self.lanes_max);
         write_json(
             send,
-            &FileMsg::Offer { id: id.to_string(), name: me.name.clone(), platform: me.platform.clone(), entries: entries.clone(), lanes: want_lanes },
+            &FileMsg::Offer { id: id.to_string(), name: me.name.clone(), platform: me.platform.clone(), entries: entries.clone(), lanes: want_lanes, progress: want_lanes.is_some() },
         )
         .await?;
         self.update(id, |t| t.state = TransferState::Waiting);
@@ -373,9 +390,9 @@ impl Files {
             .map_err(|_| anyhow!("对方一直没有回应"))??;
         let offsets = match reply {
             FileMsg::Accept { offsets } if offsets.len() == entries.len() => offsets,
-            FileMsg::LaneAccept { lanes: n, segment, done } if done.len() == entries.len() => {
+            FileMsg::LaneAccept { lanes: n, segment, done, progress } if done.len() == entries.len() => {
                 let conn = lanes.ok_or_else(|| anyhow!("对方回了意外的消息：没请求并发分段"))?;
-                return self.send_lanes(id, conn, send, recv, &list, n, segment, done).await;
+                return self.send_lanes(id, conn, send, recv, &list, n, segment, done, progress).await;
             }
             FileMsg::Reject { message } => bail!("{message}"),
             FileMsg::Error { message } => bail!("对方出错：{message}"),
@@ -547,7 +564,7 @@ impl Files {
 
     async fn receive(&self, conn: &Connection, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
         let remote = conn.remote_id();
-        let FileMsg::Offer { id: offer_id, name, platform, entries, lanes } = timeout(Duration::from_secs(10), read_json(&mut recv)).await?? else {
+        let FileMsg::Offer { id: offer_id, name, platform, entries, lanes, progress } = timeout(Duration::from_secs(10), read_json(&mut recv)).await?? else {
             bail!("开场消息不对");
         };
         let name = clean_name(&name);
@@ -576,7 +593,7 @@ impl Files {
         match lanes.filter(|n| *n > 0 && self.lanes_max > 0) {
             // 对方想并发分段，本机也开着：多条流一起收
             Some(offered) => {
-                let _ = self.receive_lanes(remote, offer_id, &name, plan, entries, offered, &mut send, &mut recv).await;
+                let _ = self.receive_lanes(remote, offer_id, &name, plan, entries, offered, progress, &mut send, &mut recv).await;
             }
             None => {
                 let _ = self.receive_batch(None, remote, &name, plan, entries, &mut send, &mut recv, Target::Inbox).await;
@@ -679,6 +696,7 @@ impl Files {
                     started_at: now_secs(),
                     finished_at: None,
                     lanes: 0,
+                    diag: String::new(),
                 });
                 id
             }

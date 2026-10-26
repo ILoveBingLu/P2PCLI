@@ -521,3 +521,82 @@ async fn file_transfer_over_lossy_links() {
         println!("{name:<28}{:>4}M  {:>16}{:>16}（{lanes} 条流，快 {:.1} 倍）", mb, rate(single), rate(parallel), single / parallel);
     }
 }
+
+/// 看一次传输从头到尾的时间线：每半秒记一次“发送方认为发了多少”和“接收方真收到多少”，
+/// 用来看收尾阶段有没有卡住、两边的进度差多少
+async fn transfer_timeline(link: Link, lanes: Option<u32>, megabytes: usize) -> Vec<(f64, u64, u64)> {
+    let net = Net::new(link);
+    let root = std::env::temp_dir().join(format!("p2pcli-timeline-{}-{}", std::process::id(), rand::random::<u32>()));
+    let node = |tag: &str, name: &str, lanes: Option<u32>| {
+        let dir = root.join(tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = p2pcli_core::identity::load_or_create_key(&dir).unwrap();
+        let transport = net.transport(key.public());
+        let (name, inbox) = (name.to_string(), root.join(format!("{tag}-inbox")));
+        async move {
+            Node::start(
+                NodeConfig { data_dir: dir, device_name: Some(name), offline: true, relay_only: true, inbox_dir: Some(inbox), file_lanes: lanes, custom_transport: Some(transport), ..Default::default() },
+                Arc::new(AllowAll),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let host = node("host", "收件机", None).await;
+    let sender = node("sender", "发件机", lanes).await;
+    host.host.set_password("abc234");
+    let addr = EndpointAddr::from_parts(host.id(), [TransportAddr::Custom(addr_of(host.id()))]);
+    sender.connect_addr(addr.clone(), Some("abc234".into())).await.expect("应该连上").close();
+    let file = root.join("big.bin");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&file).unwrap();
+        let block: Vec<u8> = (0..1_048_576u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        for _ in 0..megabytes {
+            f.write_all(&block).unwrap();
+        }
+    }
+    let started = Instant::now();
+    let send = {
+        let (sender, file) = (sender.clone(), file.clone());
+        tokio::spawn(async move { sender.send_files(addr, "收件机", vec![file]).await })
+    };
+    let mut timeline = Vec::new();
+    while !send.is_finished() {
+        sleep(Duration::from_millis(500)).await;
+        let sent = sender.files.transfers().first().map_or(0, |t| t.done);
+        let got = host.files.transfers().first().map_or(0, |t| t.done);
+        timeline.push((started.elapsed().as_secs_f64(), sent, got));
+    }
+    let t = send.await.unwrap();
+    println!("  发送方诊断：{}", sender.files.transfers().first().map_or(String::new(), |t| t.diag.clone()));
+    println!("  接收方诊断：{}", host.files.transfers().first().map_or(String::new(), |t| t.diag.clone()));
+    timeline.push((started.elapsed().as_secs_f64(), t.done, host.files.transfers().first().map_or(0, |t| t.done)));
+    assert_eq!(t.state, p2pcli_core::files::TransferState::Done, "{:?}", t.error);
+    host.shutdown().await;
+    sender.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+    timeline
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "手动跑，看一次传输的时间线"]
+async fn transfer_timeline_on_a_clean_domestic_link() {
+    let q = Duration::from_millis(100);
+    // 往返 40 ms、几乎不丢包、20 Mbps 带宽：和一次国内家宽之间的传输差不多
+    let link = Link { one_way: Duration::from_millis(20), loss: 0.0, rate_bps: 20_000_000, queue_limit: q };
+    for (label, lanes) in [("并发分段", None), ("一条流", Some(0))] {
+        let tl = transfer_timeline(link, lanes, 56).await;
+        println!("\n{label}：56 MiB，往返 40 ms，20 Mbps，无丢包；总用时 {:.1} 秒", tl.last().unwrap().0);
+        println!("{:>6}  {:>16}  {:>16}  {:>10}", "时间", "发送方显示已发", "接收方真收到", "差");
+        // 发送方显示的进度不能比接收方真收到的多：是对方回报的，最多落后半秒
+        if lanes != Some(0) {
+            for (t, sent, got) in &tl {
+                assert!(*sent <= *got + (1 << 20), "{t:.1}s 发送方显示 {sent}，接收方只收到 {got}，显示跑到了前面");
+            }
+        }
+        for (t, sent, got) in tl.iter().step_by(2) {
+            println!("{t:>5.1}s  {:>13.1} MiB  {:>13.1} MiB  {:>7.1} MiB", *sent as f64 / 1048576.0, *got as f64 / 1048576.0, (*sent as f64 - *got as f64) / 1048576.0);
+        }
+    }
+}

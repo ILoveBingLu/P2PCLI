@@ -237,6 +237,8 @@ export interface Transfer {
   finished_at: number | null;
   /** 并发分段时用了几条流；0 是一条流（对方是旧版本，或者关了并发） */
   lanes?: number;
+  /** 并发分段传输的诊断：往返延迟、丢包、时间花在读盘还是等网络上，查慢的时候看 */
+  diag?: string;
 }
 
 /** 终端里用的命令行工具 p2pcli */
