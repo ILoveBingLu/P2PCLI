@@ -1182,3 +1182,66 @@ async fn control_socket_runs_exec_pull_and_put() {
     host.shutdown().await;
     guest.shutdown().await;
 }
+
+/// 本机连过的设备反过来连本机：不要配对密码，但一定要主人点同意；被拒绝后短时间内不再弹窗；
+/// 没连过的陌生设备照旧要密码；从“连过的设备”里去掉以后又要密码；勾了受信的直接放行
+#[tokio::test(flavor = "multi_thread")]
+async fn connected_peer_comes_back_with_approval_only() {
+    let start = |tag: &str, name: &str, delegate: Arc<TestDelegate>| {
+        let (dir, name) = (temp_dir(tag), name.to_string());
+        async move { Node::start(NodeConfig { data_dir: dir, device_name: Some(name), offline: true, ..Default::default() }, delegate).await.unwrap() }
+    };
+    let (a_delegate, b_delegate) = (TestDelegate::new(), TestDelegate::new());
+    let a = start("mutual-a", "甲机", a_delegate.clone()).await;
+    let b = start("mutual-b", "乙机", b_delegate.clone()).await;
+    let stranger = start("mutual-c", "陌生机", TestDelegate::new()).await;
+    a.host.set_password("abc234");
+    b.host.set_password("zzz789");
+    let (a_addr, b_addr) = (local_addr(&a), local_addr(&b));
+
+    // 乙还没连过甲，甲也没连过乙：甲连乙要密码，不弹窗
+    assert_eq!(rejected(a.connect_addr(b_addr.clone(), None).await), RejectCode::NeedPassword);
+    assert_eq!(b_delegate.request_count(), 0);
+
+    // 乙连甲（输了密码，甲点同意）：乙记下“连过甲”
+    a_delegate.set(Decision::Allow { trust: false });
+    b.connect_addr(a_addr.clone(), Some("abc234".into())).await.expect("乙应该连上甲").close();
+    assert!(b.host.connected.contains(&a.id()));
+
+    // 甲反过来连乙，不带密码：乙弹窗，弹窗里写明是连过的设备；点同意就连上
+    b_delegate.set(Decision::Allow { trust: false });
+    a.connect_addr(b_addr.clone(), None).await.expect("乙点同意就该连上").close();
+    assert_eq!(b_delegate.request_count(), 1);
+    let req = b_delegate.requests.lock().unwrap()[0].clone();
+    assert!(req.known, "弹窗要标明这是乙连过的设备");
+    assert_eq!(req.name, "甲机");
+
+    // 带着过期的错密码也一样走弹窗，不当成“密码错”
+    a.connect_addr(b_addr.clone(), Some("xxxxxx".into())).await.expect("错密码不该挡住连过的设备").close();
+    assert_eq!(b_delegate.request_count(), 2);
+
+    // 陌生设备照旧要密码，不弹窗
+    assert_eq!(rejected(stranger.connect_addr(b_addr.clone(), None).await), RejectCode::NeedPassword);
+    assert_eq!(b_delegate.request_count(), 2);
+
+    // 主人拒绝：这次被拒，紧接着再来也直接被拒，不再弹窗
+    b_delegate.set(Decision::Deny);
+    assert_eq!(rejected(a.connect_addr(b_addr.clone(), None).await), RejectCode::Denied);
+    assert_eq!(b_delegate.request_count(), 3);
+    assert_eq!(rejected(a.connect_addr(b_addr.clone(), None).await), RejectCode::Denied);
+    assert_eq!(b_delegate.request_count(), 3, "冷却期里不该再弹窗");
+
+    // 乙把甲从“连过的设备”里去掉：又要密码
+    assert!(b.host.connected.remove(&a.id().to_string()).unwrap());
+    assert_eq!(rejected(a.connect_addr(b_addr.clone(), None).await), RejectCode::NeedPassword);
+
+    // 互相信任：乙勾了信任甲，甲连乙既不要密码也不弹窗
+    b.host.trust.add(&a.id(), "甲机", "macos").unwrap();
+    let before = b_delegate.request_count();
+    a.connect_addr(b_addr, None).await.expect("受信设备应该直接连上").close();
+    assert_eq!(b_delegate.request_count(), before);
+
+    for n in [a, b, stranger] {
+        n.shutdown().await;
+    }
+}

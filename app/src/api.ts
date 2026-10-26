@@ -109,6 +109,8 @@ export interface Connected {
   code: string | null;
   info: RemoteInfo;
   path: PathInfo;
+  /** 连接时勾了互相信任并且已经记下 */
+  mutual: boolean;
 }
 
 export type RejectCode = "need_password" | "bad_password" | "denied" | "timeout" | "locked" | "version";
@@ -198,6 +200,8 @@ export interface IncomingRequest {
   remote: string;
   name: string;
   platform: string;
+  /** 本机连过的设备反过来要连本机：没要配对密码，只靠主人点同意 */
+  known: boolean;
 }
 
 /** 没配对过的设备要发文件过来 */
@@ -368,7 +372,7 @@ export const api = {
   setDeviceRemark: (endpointId: string, remark: string) => invoke<string>("set_device_remark", { endpointId, remark }),
   setSessionRemark: (endpointId: string, sessionId: string, remark: string) =>
     invoke<string>("set_session_remark", { endpointId, sessionId, remark }),
-  connect: (target: string, password: string | null) => invoke<Connected>("connect", { target, password }),
+  connect: (target: string, password: string | null, mutual = false) => invoke<Connected>("connect", { target, password, mutual }),
   disconnect: (connId: number) => invoke("disconnect", { connId }),
   pathInfo: (connId: number) => invoke<PathInfo>("path_info", { connId }),
   listTerminals: (connId: number) => invoke<TerminalSession[]>("list_terminals", { connId }),

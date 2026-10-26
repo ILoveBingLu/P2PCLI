@@ -202,6 +202,15 @@ impl Node {
             host
         });
         let recent = recent.unwrap_or_else(|| Arc::new(RecentStore::open(&cfg.data_dir)));
+        // 老版本只有连接历史，没有“连过的设备”这份记录：把历史里的设备补进去，升级后它们反过来连本机也认得
+        for d in recent.list() {
+            if let Ok(id) = d.endpoint_id.parse::<EndpointId>()
+                && !host.connected.contains(&id)
+                && let Err(e) = host.connected.add(&id, &d.name, &d.platform)
+            {
+                warn!("把连接历史补进连过的设备失败：{e:#}");
+            }
+        }
         let files = shared_files.unwrap_or_else(|| {
             let inbox = cfg.inbox_dir.clone().unwrap_or_else(default_inbox_dir);
             Files::new(host.clone(), recent.clone(), &cfg.data_dir, inbox)
@@ -309,6 +318,7 @@ impl Node {
         let remote = self
             .with_saved_password(id, password, |pw| client::handshake(conn, &self.me, pw))
             .await?;
+        self.remember_connected(id, &remote);
         if let Err(e) = self.recent.upsert(RecentDevice {
             code,
             endpoint_id: id.to_string(),
@@ -521,7 +531,8 @@ impl Node {
         let remote = match connected {
             Ok(remote) => Arc::new(remote),
             Err(ConnectError::Rejected(RejectCode::NeedPassword | RejectCode::BadPassword)) => bail!(
-                "需要 {} 的配对密码：先在 P2PCLI 里连一次这台设备并输入密码，或者让它在弹窗里勾选“以后不用确认”",
+                "需要 {} 的配对密码：它没有连接过本机，本机也没连过它，所以要先在 P2PCLI 里连一次这台设备并输入它的配对密码（它那边点允许，勾选“以后不用确认”就不用再点）。\
+                 连接是单向授权的：只有它连过本机、或本机连过它，另一边才能靠“点允许”连上，不需要密码",
                 device.name
             ),
             Err(ConnectError::Rejected(code)) => bail!("{}（{}）", code.describe(), device.name),
@@ -588,6 +599,7 @@ impl Node {
         let remote = self
             .with_saved_password(id, password, |pw| client::connect(&self.endpoint, EndpointAddr::new(id), &self.me, pw))
             .await?;
+        self.remember_connected(id, &remote);
         // 只更新已有的历史记录：局域网广播里的信息没法核实，不拿它新建记录
         if let Err(e) = self.recent.touch(&id.to_string(), &remote.info.name, &remote.info.platform) {
             warn!("更新连接历史失败：{e:#}");
@@ -629,7 +641,28 @@ impl Node {
 
     /// 直接用对方公钥（加可选地址）连，开发和测试用
     pub async fn connect_addr(&self, addr: EndpointAddr, password: Option<String>) -> Result<RemoteHost, ConnectError> {
-        client::connect(&self.endpoint, addr, &self.me, password).await
+        let remote = client::connect(&self.endpoint, addr, &self.me, password).await?;
+        self.remember_connected(remote.connection().remote_id(), &remote);
+        Ok(remote)
+    }
+
+    /// 从连接历史里删掉一台设备；它没有别的历史记录了，就不再算本机连过的设备，反过来连本机要重新输密码
+    pub fn forget_recent(&self, code: &str) -> Result<()> {
+        let endpoint = self.recent.get(code).map(|d| d.endpoint_id);
+        self.recent.remove(code)?;
+        if let Some(id) = endpoint
+            && !self.recent.list().iter().any(|d| d.endpoint_id == id)
+        {
+            self.host.connected.remove(&id)?;
+        }
+        Ok(())
+    }
+
+    /// 记下本机成功连过这台设备：它以后反过来连本机时不要求配对密码，只要主人点同意
+    fn remember_connected(&self, id: EndpointId, remote: &RemoteHost) {
+        if let Err(e) = self.host.connected.add(&id, &remote.info.name, &remote.info.platform) {
+            warn!("记连过的设备失败：{e:#}");
+        }
     }
 
     /// 本机完整地址，给不走牵线服务器的测试用
