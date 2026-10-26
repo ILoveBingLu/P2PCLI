@@ -345,6 +345,8 @@ export const api = {
   openFolder: (path: string) => invoke("open_folder", { path }),
   cliStatus: () => invoke<CliStatus>("cli_status"),
   installCli: () => invoke<CliStatus>("install_cli"),
+  /** 在默认浏览器里打开本项目的 GitHub 页面，别的链接后端不开 */
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
   aiHintStatus: () => invoke<AiHintStatus>("ai_hint_status"),
   setAiHintAuto: (enabled: boolean) => invoke<AiHintStatus>("set_ai_hint_auto", { enabled }),
   /** action 是 install 或 remove；path 不写就是全部 */

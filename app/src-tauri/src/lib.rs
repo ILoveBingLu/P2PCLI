@@ -2,6 +2,7 @@
 
 mod ai_hint;
 mod cli;
+mod links;
 mod update;
 mod logging;
 
@@ -465,6 +466,12 @@ fn open_folder(path: String) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let r = std::process::Command::new("xdg-open").arg(&path).spawn();
     r.map(|_| ()).map_err(|e| format!("打不开：{e}"))
+}
+
+/// 在默认浏览器里打开本项目的 GitHub 页面；别的链接一律不开
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    links::open(&url)
 }
 
 #[tauri::command]
@@ -1199,6 +1206,7 @@ pub fn run() {
             reveal_path,
             open_folder,
             cli_status,
+            open_url,
             ai_hint_status,
             set_ai_hint_auto,
             ai_hint_apply,
