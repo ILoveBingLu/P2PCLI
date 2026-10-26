@@ -270,6 +270,7 @@ struct Overview {
     server: serde_json::Value,
     sessions: Vec<SessionSummary>,
     recent: Vec<RecentDevice>,
+    remarks: std::collections::BTreeMap<String, p2pcli_core::store::Remarks>,
     /// 局域网里发现的设备
     nearby: Vec<NearbyDevice>,
     /// 连接历史里各台设备的在线、线路、延迟、会话列表
@@ -298,6 +299,7 @@ fn overview(state: State<'_, AppState>) -> Overview {
         server,
         sessions: node.host.sessions(),
         recent: node.recent.list(),
+        remarks: node.recent.remarks(),
         nearby: node.nearby(),
         devices: node.devices(),
         inbox_dir: node.files.inbox_root().display().to_string(),
@@ -507,6 +509,29 @@ fn refresh_devices(state: State<'_, AppState>) {
 #[tauri::command]
 fn forget_recent(state: State<'_, AppState>, code: String) -> Result<(), String> {
     state.node().recent.remove(&code).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn set_device_remark(state: State<'_, AppState>, endpoint_id: String, remark: String) -> Result<String, String> {
+    state
+        .node()
+        .recent
+        .set_device_remark(&endpoint_id, &remark)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn set_session_remark(
+    state: State<'_, AppState>,
+    endpoint_id: String,
+    session_id: String,
+    remark: String,
+) -> Result<String, String> {
+    state
+        .node()
+        .recent
+        .set_session_remark(&endpoint_id, &session_id, &remark)
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[derive(Serialize)]
@@ -1104,6 +1129,8 @@ pub fn run() {
             kick,
             remove_trusted,
             forget_recent,
+            set_device_remark,
+            set_session_remark,
             connect,
             disconnect,
             path_info,

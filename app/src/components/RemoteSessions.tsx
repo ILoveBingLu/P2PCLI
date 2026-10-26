@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, ChevronRight, LoaderCircle, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2, Unplug } from "lucide-react";
+import { ArrowLeft, ChevronRight, LoaderCircle, Pencil, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2, Unplug } from "lucide-react";
 import { api, pathLabel, platformLabel, type PathInfo, type RemoteInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,8 @@ import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
 import { useContextMenu } from "./ContextMenu";
 import { AgentIcon, AgentStateLabel } from "./Agent";
+import { RemarkDialog } from "./RemarkDialog";
+import { useRemarks } from "./Remarks";
 import { relativeTime, sessionTitles } from "./sessionText";
 
 export interface SessionTarget { connId: number; info: RemoteInfo; code: string | null }
@@ -34,6 +36,8 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
   const [refreshing, setRefreshing] = useState(false);
   const [ending, setEnding] = useState<TerminalSession | null>(null);
   const [path, setPath] = useState<PathInfo | null>(null);
+  const remarks = useRemarks();
+  const [remarkTarget, setRemarkTarget] = useState<{ id: string; label: string; remark: string } | null>(null);
   const menu = useContextMenu();
 
   // 新的一份快照到了，手动刷新就算完成
@@ -67,6 +71,7 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
 
   // 名字、排序和侧边栏同一套：跑着 AI 的叫 AI 的名字，别的按创建先后叫会话 1、会话 2…
   const titles = sessionTitles(sessions ?? []);
+  const remarkFor = (id: string) => remarks.session(target.info.endpoint_id, id);
   const ordered = [...(sessions ?? [])].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id));
   const { info } = target;
   const hasSessions = ordered.length > 0;
@@ -82,13 +87,25 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
       ])}
     >
       {menu.element}
+      <RemarkDialog
+        open={!!remarkTarget}
+        title="会话备注"
+        description={remarkTarget?.label ?? ""}
+        initialValue={remarkTarget?.remark ?? ""}
+        onOpenChange={(next) => !next && setRemarkTarget(null)}
+        onSave={async (remark) => {
+          if (!remarkTarget) return;
+          await remarks.saveSession(target.info.endpoint_id, remarkTarget.id, remark);
+          toast.success("会话备注已保存");
+        }}
+      />
         <header className="remote-device">
           <Button variant="ghost" size="icon-sm" title="返回工作区" aria-label="返回工作区" onClick={onBack}><ArrowLeft /></Button>
           <div className="remote-device-icon">
             <PlatformIcon platform={info.platform} decorative />
           </div>
           <div className="remote-device-summary">
-            <h1 id="remote-sessions-title" className="truncate text-base font-semibold">{info.name}</h1>
+            <h1 id="remote-sessions-title" className="truncate text-base font-semibold">{remarks.device(info.endpoint_id) || info.name}</h1>
             <p className="remote-device-meta">
               <span className="remote-connection-state"><span className="status-dot" data-kind={path?.kind ?? "unknown"} />已连接</span>
               <span>{pathLabel(path)}</span>
@@ -129,7 +146,7 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
             <ul className="session-list">
               {ordered.map((s) => {
                 const open = openSessions.has(s.id);
-                const label = titles.get(s.id) ?? "会话";
+                const label = remarkFor(s.id).trim() || titles.get(s.id) || "会话";
                 // 刷新失败时列表留着，但旧的 AI 状态不能当成现在的
                 const agent = error ? null : s.agent ?? null;
                 return (
@@ -141,6 +158,7 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
                       onClick={() => onOpen(s.id)}
                       onContextMenu={(e) => menu.open(e, [
                         { id: "open", label: open ? "切换过去" : "打开", icon: <SquareArrowOutUpRight className="size-4" />, onAction: () => onOpen(s.id) },
+                        { id: "remark", label: remarkFor(s.id).trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ id: s.id, label, remark: remarkFor(s.id) }) },
                         { id: "end", label: "结束会话", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => setEnding(s) },
                       ])}
                     >
@@ -172,7 +190,7 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
         <AlertDialog open>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>结束{titles.get(ending.id) ?? "这个会话"}？</AlertDialogTitle>
+              <AlertDialogTitle>结束{remarkFor(ending.id) || titles.get(ending.id) || "这个会话"}？</AlertDialogTitle>
               <AlertDialogDescription>会话里正在跑的程序会被结束，没保存的内容可能丢失。只是想暂时离开的话，关掉终端标签就行。</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

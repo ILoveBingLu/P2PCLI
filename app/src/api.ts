@@ -158,6 +158,7 @@ export interface Overview {
   server: ServerState;
   sessions: SessionSummary[];
   recent: RecentDevice[];
+  remarks: Record<string, { device: string; sessions: Record<string, string> }>;
   /** 局域网里发现的设备 */
   nearby: NearbyDevice[];
   /** 连接历史里各台设备的在线、线路、延迟、会话列表 */
@@ -330,6 +331,9 @@ export const api = {
   kick: (session: number) => invoke<boolean>("kick", { session }),
   removeTrusted: (endpointId: string) => invoke("remove_trusted", { endpointId }),
   forgetRecent: (code: string) => invoke("forget_recent", { code }),
+  setDeviceRemark: (endpointId: string, remark: string) => invoke<string>("set_device_remark", { endpointId, remark }),
+  setSessionRemark: (endpointId: string, sessionId: string, remark: string) =>
+    invoke<string>("set_session_remark", { endpointId, sessionId, remark }),
   connect: (target: string, password: string | null) => invoke<Connected>("connect", { target, password }),
   disconnect: (connId: number) => invoke("disconnect", { connId }),
   pathInfo: (connId: number) => invoke<PathInfo>("path_info", { connId }),

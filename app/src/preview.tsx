@@ -47,6 +47,7 @@ const ov: Overview = {
     },
   ],
   paired: [{ endpoint_id: "zz", name: "小王的 ThinkPad", platform: "windows", added_at: 0 }],
+  remarks: {},
   inbox_dir: "/Users/me/Downloads/P2PCLI",
 };
 
@@ -402,6 +403,21 @@ mockIPC(
       case "forget_recent":
         ov.recent = ov.recent.filter((device) => device.code !== args.code);
         return null;
+      case "set_device_remark":
+        ov.remarks[args.endpointId] ??= { device: "", sessions: {} };
+        ov.remarks[args.endpointId].device = String(args.remark ?? "").trim();
+        if (!ov.remarks[args.endpointId].device && !Object.keys(ov.remarks[args.endpointId].sessions).length)
+          delete ov.remarks[args.endpointId];
+        return ov.remarks[args.endpointId]?.device ?? "";
+      case "set_session_remark": {
+        ov.remarks[args.endpointId] ??= { device: "", sessions: {} };
+        const remark = String(args.remark ?? "").trim();
+        if (remark) ov.remarks[args.endpointId].sessions[args.sessionId] = remark;
+        else delete ov.remarks[args.endpointId].sessions[args.sessionId];
+        if (!ov.remarks[args.endpointId].device && !Object.keys(ov.remarks[args.endpointId].sessions).length)
+          delete ov.remarks[args.endpointId];
+        return remark;
+      }
       case "refresh_devices":
         return null;
       case "remove_paired":

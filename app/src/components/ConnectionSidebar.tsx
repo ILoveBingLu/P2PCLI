@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, LoaderCircle, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, LoaderCircle, Pencil, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,8 @@ import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
 import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
+import { RemarkDialog } from "./RemarkDialog";
+import { useRemarks } from "./Remarks";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 
@@ -58,6 +60,8 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
     }
   }, [expanded]);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["nearby", "history"]));
+  const remarks = useRemarks();
+  const [remarkTarget, setRemarkTarget] = useState<{ endpointId: string; name: string; remark: string } | null>(null);
   useEffect(() => {
     if (nearbyReveal > 0) {
       setExpandedSections((keys) => new Set([...keys, "nearby"]));
@@ -70,13 +74,15 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       setExpandedSections((keys) => new Set([...keys, "history"]));
     }
   }, [activeDevice]);
-  // A device may have historical codes; show it once, using its most recent code.
+  // The store preserves device order; duplicate codes use the most recently used entry.
   const seen = new Set<string>();
   const devices = (ov?.recent ?? []).filter((device) => {
     if (seen.has(device.endpoint_id)) return false;
     seen.add(device.endpoint_id);
     return true;
   });
+  const deviceRemark = (device: { endpoint_id: string }) => remarks.device(device.endpoint_id);
+  const deviceLabel = (device: { endpoint_id: string; name: string }) => deviceRemark(device) || device.name;
   const nearby = ov?.nearby ?? [];
   // 正连着的设备：开着的标签，或者正在看它的会话页
   const connected = new Set(tabs.filter((t) => t.state === "open" || t.state === "opening").map((t) => t.info.endpoint_id));
@@ -147,6 +153,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         ];
       actions = [
         ...actions,
+        { id: "remark", label: deviceRemark(device).trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }) },
         ...sendActions(endpointId, !target && offline),
         { id: "copy", label: "复制设备码", icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
         { id: "forget", label: "从连接历史移除", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => void forget(endpointId) },
@@ -158,6 +165,12 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       actions = target
         ? [{ id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
         : [{ id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
+      actions.push({
+          id: "remark",
+          label: deviceRemark(device) ? "修改备注" : "添加备注",
+          icon: <Pencil className="size-4" />,
+          onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }),
+      });
       actions = [...actions, ...sendActions(endpointId, !target && !device.online)];
     }
     if (actions.length) menu.open(e, actions);
@@ -166,6 +179,19 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   return (
     <aside id="connection-sidebar" className="connection-sidebar" data-collapsed={open ? undefined : ""} aria-label="连接历史" onContextMenu={onContextMenu}>
       {menu.element}
+      <RemarkDialog
+        open={!!remarkTarget}
+        title="设备备注"
+        description={remarkTarget?.name ?? ""}
+        initialValue={remarkTarget?.remark ?? ""}
+        onOpenChange={(next) => !next && setRemarkTarget(null)}
+        onSave={async (remark) => {
+          if (!remarkTarget) return;
+          await remarks.saveDevice(remarkTarget.endpointId, remark);
+          onRefresh();
+          toast.success("设备备注已保存");
+        }}
+      />
       <div className="connection-sidebar-inner">
         <Accordion allowsMultipleExpanded expandedKeys={expandedSections}
           onExpandedChange={(keys) => setExpandedSections(new Set([...keys].map(String)))}>
@@ -190,14 +216,15 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
           {nearby.length ? (
             <div className="flex flex-col">
               {nearby.map((device) => (
-                <Button key={device.endpoint_id} variant="ghost" disabled={busy || !device.online}
-                  data-menu={`nearby:${device.endpoint_id}`}
+                <div key={device.endpoint_id} data-menu={`nearby:${device.endpoint_id}`}>
+                <Button variant="ghost" disabled={busy || !device.online}
                   className="h-auto w-full min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
-                  aria-label={`${device.name}${connected.has(device.endpoint_id) ? "（已连接）" : device.online ? "" : "（离线）"}`}
-                  title={device.online ? `连接 ${device.name}` : `${device.name} · 离线`} onClick={() => onConnectLan(device)}>
+                  aria-label={`${deviceLabel(device)}${connected.has(device.endpoint_id) ? "（已连接）" : device.online ? "" : "（离线）"}`}
+                  title={device.online ? `连接 ${deviceLabel(device)}` : `${deviceLabel(device)} · 离线`} onClick={() => onConnectLan(device)}>
                   {deviceIcon(device.endpoint_id, device.platform)}
-                  <span className="min-w-0 flex-1 truncate text-left">{device.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-left">{deviceLabel(device)}</span>
                 </Button>
+                </div>
               ))}
             </div>
           ) : (
@@ -221,6 +248,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
             <Accordion allowsMultipleExpanded expandedKeys={expanded}
               onExpandedChange={(keys) => setExpanded(new Set([...keys].map(String)))}>
               {devices.map((device) => {
+                const label = deviceLabel(device);
                 const deviceTabs = tabs.filter((tab) => tab.info.endpoint_id === device.endpoint_id);
                 const target = sessionTarget?.info.endpoint_id === device.endpoint_id ? sessionTarget : deviceTabs.find((tab) => tab.state !== "closed");
                 // A device can have multiple connections: match the visible terminal first.
@@ -231,12 +259,12 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                     <Accordion.Heading className="flex items-stretch" data-menu={`device:${device.endpoint_id}`}>
                       <Button slot={null} variant="ghost"
                         className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-lg px-2 py-2 text-xs"
-                        aria-label={`${target ? "查看会话" : "连接"} ${device.name}`}
+                        aria-label={`${target ? "查看会话" : "连接"} ${label}`}
                         disabled={!target && busy}
                         onPress={() => target ? onShowSessions(target) : connectDevice(device)}
                         data-offline={!target && status?.state === "offline" ? "" : undefined}>
                         {deviceIcon(device.endpoint_id, device.platform)}
-                        <span className="min-w-0 flex-1 truncate text-left">{device.name}</span>
+                        <span className="min-w-0 flex-1 truncate text-left" title={deviceRemark(device).trim() ? `${label} · ${device.name}` : undefined}>{label}</span>
                         {lanOnline.has(device.endpoint_id) && (
                           <span className="lan-mark" title="在同一个局域网里，连接不经过牵线服务器">
                             <House aria-hidden="true" /><span className="sr-only">局域网</span>
@@ -245,7 +273,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                         <PresenceLabel status={status} connected={!!pathTarget} path={pathTarget ? paths[pathTarget.connId] : undefined} />
                       </Button>
                       <Accordion.Trigger className="w-8 min-w-0 flex-none justify-center rounded-lg p-2"
-                        aria-label={`${expanded.has(device.endpoint_id) ? "收起" : "展开"} ${device.name}的会话`}>
+                        aria-label={`${expanded.has(device.endpoint_id) ? "收起" : "展开"} ${label}的会话`}>
                         <Accordion.Indicator className="size-3.5" />
                       </Accordion.Trigger>
                     </Accordion.Heading>
@@ -255,6 +283,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                         <div className="ml-4 min-w-0 border-l border-border pl-2">
                           {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
                             key={target?.connId ?? "disconnected"} target={target} status={status} tabs={deviceTabs}
+                            endpointId={device.endpoint_id}
                             snapshot={target ? liveSessions[target.connId] : undefined}
                             activeKey={sessionTarget ? null : activeKey} busy={busy}
                             onChangeSessions={(sessions) => target && onSessionsLocalChange(target.connId, sessions)}
@@ -285,7 +314,7 @@ function PresenceLabel({ status, connected, path }: { status?: DeviceStatus; con
       <Tooltip content="正在与设备握手并探测延迟">
         <TooltipTrigger<"span"> render={(props) => <span {...props} />}
           role="status" aria-label="正在探测" className="presence-label" data-kind="checking">
-          <LoaderCircle className="presence-spinner" aria-hidden="true" />
+          <LoaderCircle className="presence-spinner animate-spin" aria-hidden="true" />
           <span>探测中…</span>
         </TooltipTrigger>
       </Tooltip>

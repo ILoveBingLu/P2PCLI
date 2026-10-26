@@ -68,6 +68,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { RemarksProvider } from "./components/Remarks";
 
 interface Tab {
   key: number;
@@ -504,6 +505,7 @@ export default function App() {
   if (window.__ptTest) window.__ptTest.respond = respond;
 
   return (
+    <RemarksProvider snapshot={ov?.remarks}>
     <div className="app-shell">
       <UpdateIsland updater={updater} />
       <Titlebar
@@ -879,5 +881,6 @@ export default function App() {
       <Toaster />
       <GlobalContextMenu />
     </div>
+    </RemarksProvider>
   );
 }

@@ -308,6 +308,7 @@ impl Node {
             endpoint_id: id.to_string(),
             name: remote.info.name.clone(),
             platform: remote.info.platform.clone(),
+            sort_at: 0,
             last_used: now_secs(),
         }) {
             warn!("记最近设备失败：{e:#}");
