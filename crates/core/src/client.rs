@@ -1,6 +1,9 @@
 //! 连接方：连上对方、开终端、收发字节。
 
 use std::fmt;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -8,12 +11,14 @@ use bytes::Bytes;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr};
 use serde::Serialize;
+use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::time::timeout;
 
-use crate::host::APPROVE_TIMEOUT;
+use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
 use crate::proto::{Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
 #[derive(Debug)]
@@ -51,12 +56,25 @@ pub struct RemoteInfo {
     pub multiplexer: Option<String>,
 }
 
-/// 一台已经同意连接的对方设备
+/// 一台已经同意连接的设备：远程的，或者本机自己
 pub struct RemoteHost {
-    conn: Connection,
+    link: Link,
     pub info: RemoteInfo,
-    /// 控制流一直开着；关掉它对面就当我们走了
-    _control: SendStream,
+}
+
+enum Link {
+    /// 走网络的连接
+    Net {
+        conn: Connection,
+        /// 控制流一直开着；关掉它对面就当我们走了
+        _control: SendStream,
+    },
+    /// 本机自己：不走网络，直接用本机的会话管理器，终端和会话的行为和远程设备完全一样
+    Local {
+        host: Arc<Host>,
+        /// 会话归在这个名下；用本机的公钥，重启以后还能认回自己的后台会话
+        owner: String,
+    },
 }
 
 pub async fn connect(
@@ -110,7 +128,6 @@ pub async fn handshake(
             os,
             multiplexer,
         } => Ok(RemoteHost {
-            conn,
             info: RemoteInfo {
                 endpoint_id,
                 name,
@@ -120,7 +137,7 @@ pub async fn handshake(
                 os,
                 multiplexer,
             },
-            _control: send,
+            link: Link::Net { conn, _control: send },
         }),
         Msg::Reject { code } => {
             conn.close(0u32.into(), b"rejected");
@@ -130,7 +147,48 @@ pub async fn handshake(
     }
 }
 
+/// 本机内部通道的缓冲大小：终端输出慢慢读也不会丢，写满了就等
+const LOCAL_PIPE: usize = 256 * 1024;
+
 impl RemoteHost {
+    /// 本机自己：不走网络，直接用本机的会话管理器，所以会话、终端、AI 识别和远程设备一模一样
+    pub async fn local(host: Arc<Host>, me: &DeviceInfo, endpoint_id: String) -> RemoteHost {
+        let multiplexer = host.terminals.describe().await;
+        RemoteHost {
+            info: RemoteInfo {
+                endpoint_id: endpoint_id.clone(),
+                name: me.name.clone(),
+                platform: me.platform.clone(),
+                user: me.user.clone(),
+                version: me.version.clone(),
+                os: me.os.clone(),
+                multiplexer,
+            },
+            link: Link::Local { host, owner: endpoint_id },
+        }
+    }
+
+    /// 是本机自己，不是远程设备
+    pub fn is_local(&self) -> bool {
+        matches!(self.link, Link::Local { .. })
+    }
+
+    /// 对面的公钥；本机自己就是本机的公钥
+    pub fn peer_id(&self) -> iroh::EndpointId {
+        match &self.link {
+            Link::Net { conn, .. } => conn.remote_id(),
+            Link::Local { .. } => self.info.endpoint_id.parse().expect("本机公钥一定能解析"),
+        }
+    }
+
+    /// 网络连接；本机自己没有
+    fn conn(&self) -> Result<&Connection> {
+        match &self.link {
+            Link::Net { conn, .. } => Ok(conn),
+            Link::Local { .. } => bail!("本机自己没有这条通道"),
+        }
+    }
+
     pub async fn open_terminal(&self, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
         self.attach_terminal(None, cols, rows).await
     }
@@ -145,16 +203,26 @@ impl RemoteHost {
     }
 
     async fn open(&self, persistent: bool, session_id: Option<String>, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
-        let (mut send, mut recv) = self.conn.open_bi().await?;
+        let conn = match &self.link {
+            Link::Net { conn, .. } => conn,
+            Link::Local { host, owner } => return open_local(host, owner, persistent, session_id, cols, rows).await,
+        };
+        let (mut send, mut recv) = conn.open_bi().await?;
         write_msg(&mut send, &Msg::Open { persistent, cols, rows, session_id }).await?;
         match timeout(Duration::from_secs(35), read_msg(&mut recv)).await?? {
-            Msg::Opened { shell, session_id } => Ok((TermInput { send }, TermOutput { recv, shell, session_id })),
+            Msg::Opened { shell, session_id } => Ok((
+                TermInput { send: Some(TermWrite::Quic(send)) },
+                TermOutput { recv: TermRead::Quic(recv), shell, session_id },
+            )),
             Msg::Error { message } => bail!("对方开终端失败：{message}"),
             other => bail!("意外的回复：{other:?}"),
         }
     }
 
     pub async fn list_terminals(&self) -> Result<Vec<TerminalSession>> {
+        if let Link::Local { host, owner } = &self.link {
+            return host.terminals.list(owner).await;
+        }
         match self.session_request(Msg::ListTerminals).await? {
             Msg::Terminals { sessions } => Ok(sessions),
             other => bail!("读取会话失败：{other:?}"),
@@ -162,6 +230,9 @@ impl RemoteHost {
     }
 
     pub async fn end_terminal(&self, session_id: String) -> Result<()> {
+        if let Link::Local { host, owner } = &self.link {
+            return host.terminals.end(owner, &session_id).await;
+        }
         match self.session_request(Msg::EndTerminal { session_id }).await? {
             Msg::TerminalEnded => Ok(()),
             other => bail!("结束会话失败：{other:?}"),
@@ -169,6 +240,9 @@ impl RemoteHost {
     }
 
     pub async fn installed_agents(&self, refresh: bool) -> Result<Vec<crate::launchers::InstalledAgent>> {
+        if let Link::Local { host, .. } = &self.link {
+            return host.terminals.installed_agents(refresh).await;
+        }
         match self.session_request(Msg::ListInstalledAgents { refresh }).await? {
             Msg::InstalledAgents { agents } => Ok(agents),
             other => bail!("检测 AI 失败（对方可能需要更新）：{other:?}"),
@@ -176,6 +250,9 @@ impl RemoteHost {
     }
 
     pub async fn launch_agent(&self, session_id: String, kind: String, allow_bypass: bool) -> Result<()> {
+        if let Link::Local { host, owner } = &self.link {
+            return host.terminals.launch_agent(owner, &session_id, &kind, allow_bypass).await;
+        }
         match self.session_request(Msg::LaunchAgent { session_id, kind, allow_bypass }).await? {
             Msg::AgentLaunched => Ok(()),
             other => bail!("启动 AI 失败：{other:?}"),
@@ -183,6 +260,9 @@ impl RemoteHost {
     }
 
     pub async fn choose_agent_option(&self, session_id: String, approval_id: String, option_id: usize) -> Result<()> {
+        if let Link::Local { host, owner } = &self.link {
+            return host.terminals.choose_agent_option(owner, &session_id, &approval_id, option_id).await;
+        }
         match self.session_request(Msg::ChooseAgentOption { session_id, approval_id, option_id }).await? {
             Msg::AgentOptionChosen => Ok(()),
             other => bail!("提交选项失败：{other:?}"),
@@ -190,9 +270,10 @@ impl RemoteHost {
     }
 
     async fn session_request(&self, msg: Msg) -> Result<Msg> {
+        let conn = self.conn()?;
         // 超时要覆盖整个请求，不能只包住 read：open_bi/write 挂住同样会让前端一直等待。
         timeout(Duration::from_secs(20), async {
-            let (mut send, mut recv) = self.conn.open_bi().await?;
+            let (mut send, mut recv) = conn.open_bi().await?;
             write_msg(&mut send, &msg).await?;
             let reply = read_msg(&mut recv).await?;
             if let Msg::Error { message } = reply { bail!("{message}"); }
@@ -204,8 +285,9 @@ impl RemoteHost {
 
     /// 开一条新流并先发一条控制消息，后面怎么走由这条消息决定（跑命令、拉文件、推文件）
     pub async fn open_stream(&self, first: &Msg) -> Result<(SendStream, RecvStream)> {
+        let conn = self.conn()?;
         timeout(Duration::from_secs(20), async {
-            let (mut send, recv) = self.conn.open_bi().await?;
+            let (mut send, recv) = conn.open_bi().await?;
             write_msg(&mut send, first).await?;
             Ok((send, recv))
         })
@@ -220,30 +302,85 @@ impl RemoteHost {
         Ok(ExecStream { _send: send, recv, seen: false })
     }
 
-    /// 连接已经断了
+    /// 连接已经断了；本机自己不会断
     pub fn is_closed(&self) -> bool {
-        self.conn.close_reason().is_some()
+        match &self.link {
+            Link::Net { conn, .. } => conn.close_reason().is_some(),
+            Link::Local { .. } => false,
+        }
     }
 
     pub fn path(&self) -> PathInfo {
-        path::current(&self.conn)
+        match &self.link {
+            Link::Net { conn, .. } => path::current(conn),
+            Link::Local { .. } => PathInfo { kind: path::PathKind::Local, rtt_ms: None, remote: None },
+        }
     }
 
     pub fn stats(&self, endpoint: &iroh::Endpoint) -> path::ConnStats {
-        path::stats(&self.conn, endpoint)
-    }
-
-    pub fn connection(&self) -> &Connection {
-        &self.conn
+        match &self.link {
+            Link::Net { conn, .. } => path::stats(conn, endpoint),
+            Link::Local { .. } => path::ConnStats::local(),
+        }
     }
 
     pub fn close(&self) {
-        self.conn.close(0u32.into(), b"bye");
+        if let Link::Net { conn, .. } = &self.link {
+            conn.close(0u32.into(), b"bye");
+        }
     }
 
-    /// 等连接断开，返回原因
+    /// 等连接断开，返回原因；本机自己不会断，一直等下去
     pub async fn closed(&self) -> String {
-        describe_close(self.conn.closed().await)
+        match &self.link {
+            Link::Net { conn, .. } => describe_close(conn.closed().await),
+            Link::Local { .. } => std::future::pending().await,
+        }
+    }
+}
+
+/// 在本机开一个终端：起一对内存里的管道，当作“连接”的两头，服务端那头直接交给和远程设备同一套的终端服务
+async fn open_local(
+    host: &Arc<Host>,
+    owner: &str,
+    persistent: bool,
+    session_id: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(TermInput, TermOutput)> {
+    let attachment = if persistent {
+        match host.terminals.attach(owner, session_id.as_deref(), cols, rows).await {
+            Ok(attachment) => Some(attachment),
+            // 没装 tmux、psmux 这类会话管理器：新开的退回普通终端，照样能用，只是软件关了就没了；
+            // 要接回指定的后台会话就不能糊弄，照实报错
+            Err(e) if session_id.is_none() => {
+                tracing::warn!("本机用不了后台会话，改开普通终端：{e:#}");
+                None
+            }
+            Err(e) => return Err(e),
+        }
+    } else {
+        None
+    };
+    let (client_w, host_r) = tokio::io::duplex(LOCAL_PIPE);
+    let (mut host_w, client_r) = tokio::io::duplex(LOCAL_PIPE);
+    tokio::spawn(async move {
+        let result = match attachment {
+            Some((cmd, id)) => serve_session(host_r, &mut host_w, cols, rows, cmd, id).await,
+            None => serve_terminal(host_r, &mut host_w, cols, rows).await,
+        };
+        if let Err(e) = result {
+            let _ = write_msg(&mut host_w, &Msg::Error { message: format!("{e:#}") }).await;
+        }
+    });
+    let mut recv = TermRead::Local(client_r);
+    match timeout(Duration::from_secs(35), read_msg(&mut recv)).await?? {
+        Msg::Opened { shell, session_id } => Ok((
+            TermInput { send: Some(TermWrite::Local(client_w)) },
+            TermOutput { recv, shell, session_id },
+        )),
+        Msg::Error { message } => bail!("开本机终端失败：{message}"),
+        other => bail!("意外的回复：{other:?}"),
     }
 }
 
@@ -264,22 +401,72 @@ fn describe_close(e: iroh::endpoint::ConnectionError) -> String {
     }
 }
 
+/// 终端输入这一头：远程设备是 QUIC 流，本机自己是内存管道
+enum TermWrite {
+    Quic(SendStream),
+    Local(DuplexStream),
+}
+
+impl AsyncWrite for TermWrite {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            TermWrite::Quic(s) => Pin::new(s).poll_write(cx, buf).map_err(std::io::Error::other),
+            TermWrite::Local(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            TermWrite::Quic(s) => Pin::new(s).poll_flush(cx),
+            TermWrite::Local(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            TermWrite::Quic(s) => Pin::new(s).poll_shutdown(cx),
+            TermWrite::Local(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+/// 终端输出这一头
+enum TermRead {
+    Quic(RecvStream),
+    Local(DuplexStream),
+}
+
+impl AsyncRead for TermRead {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            TermRead::Quic(s) => Pin::new(s).poll_read(cx, buf),
+            TermRead::Local(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
 pub struct TermInput {
-    send: SendStream,
+    send: Option<TermWrite>,
 }
 
 impl TermInput {
+    fn stream(&mut self) -> Result<&mut TermWrite> {
+        self.send.as_mut().ok_or_else(|| anyhow!("终端输入已经关了"))
+    }
+
     pub async fn write(&mut self, data: &[u8]) -> Result<()> {
-        write_data(&mut self.send, data).await
+        write_data(self.stream()?, data).await
     }
 
     pub async fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
-        write_msg(&mut self.send, &Msg::Resize { cols, rows }).await
+        write_msg(self.stream()?, &Msg::Resize { cols, rows }).await
     }
 
     /// 关闭当前附着；后台会话继续运行。
     pub fn close(&mut self) {
-        let _ = self.send.finish();
+        if let Some(TermWrite::Quic(s)) = &mut self.send {
+            let _ = s.finish();
+        }
+        // 本机自己的内存管道，丢掉写的这头对面就读到结尾
+        self.send = None;
     }
 }
 
@@ -296,7 +483,7 @@ pub enum TermEvent {
 }
 
 pub struct TermOutput {
-    recv: RecvStream,
+    recv: TermRead,
     pub shell: String,
     pub session_id: String,
 }

@@ -1,7 +1,7 @@
 // 和 Rust 端对应的类型与调用
 import { Channel, invoke } from "@tauri-apps/api/core";
 
-export type PathKind = "ipv6" | "ipv4" | "relay" | "unknown";
+export type PathKind = "ipv6" | "ipv4" | "relay" | "local" | "unknown";
 export interface PathInfo {
   kind: PathKind;
   rtt_ms: number | null;
@@ -150,6 +150,8 @@ export type ServerState =
   | { state: "offline"; error: string };
 
 export interface Overview {
+  /** 本机自己：常驻的一条连接，侧边栏的“本机”用它开本地终端、读会话 */
+  local?: { conn_id: number; info: RemoteInfo } | null;
   name: string;
   platform: string;
   endpoint_id: string;
@@ -404,7 +406,7 @@ export function platformLabel(p: string): string {
 
 export function pathLabel(p: PathInfo | null | undefined): string {
   if (!p) return "连接中";
-  const name = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", unknown: "连接中" }[p.kind];
+  const name = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", local: "本机", unknown: "连接中" }[p.kind];
   return p.rtt_ms != null && p.kind !== "unknown" ? `${name} · ${p.rtt_ms} ms` : name;
 }
 

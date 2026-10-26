@@ -5,7 +5,7 @@ import { Signal, SignalHigh, SignalLow, SignalMedium } from "lucide-react";
 import { api, pathLabel, platformLabel, type ConnStats, type PathInfo, type RemoteInfo } from "../api";
 import { Button } from "@/components/ui/button";
 
-const PATH_NAMES = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", unknown: "连接中" } as const;
+const PATH_NAMES = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", local: "本机", unknown: "连接中" } as const;
 
 /** 延迟分档，和信号格对应 */
 function quality(rtt: number | null | undefined) {

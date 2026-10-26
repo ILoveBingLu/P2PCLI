@@ -417,7 +417,7 @@ impl Files {
         };
         let plan = Plan::new(&entries)?;
         let target = Target::Dir { dir: to, notify: false };
-        self.receive_batch(Some(id), remote.connection().remote_id(), &remote.info.name, plan, entries, &mut send, &mut recv, target).await
+        self.receive_batch(Some(id), remote.peer_id(), &remote.info.name, plan, entries, &mut send, &mut recv, target).await
     }
 
     /// 发一个文件：对方已经有的前 offset 字节只算哈希不再发，返回整个文件的哈希

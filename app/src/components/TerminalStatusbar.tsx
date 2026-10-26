@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CircleAlert, Folder } from "lucide-react";
+import { CircleAlert, Folder, Monitor } from "lucide-react";
 import type { PathInfo, RemoteInfo, TerminalSessionSnapshot } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentIcon, AgentQuotaLabel, AgentStateLabel, agentStateTip } from "./Agent";
@@ -43,7 +43,9 @@ export function TerminalStatusbar({ connId, info, sessionId, state, path, snapsh
         </Detail>}
       </div>
       {error && state !== "closed" && <Detail tip={error}><CircleAlert aria-label="状态更新失败" /></Detail>}
-      {state === "open" && path && <ConnectionCard connId={connId} info={info} path={path} echoLatency={echoLatency} />}
+      {state === "open" && path && (path.kind === "local"
+        ? <span className="terminal-status-local" title="本机自己的终端，不走网络"><Monitor aria-hidden="true" />本机</span>
+        : <ConnectionCard connId={connId} info={info} path={path} echoLatency={echoLatency} />)}
     </footer>
   );
 }
