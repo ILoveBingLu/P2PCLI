@@ -59,6 +59,11 @@ pub struct NodeConfig {
     pub app_version: Option<String>,
     /// 本机作为被控端时，各 AI 的自定义启动命令；不会发给连接方
     pub agent_commands: BTreeMap<String, String>,
+    /// 传文件最多开几条并发流；不写是默认的 8 条，写 0 是关掉并发、只用一条流
+    pub file_lanes: Option<u32>,
+    /// 测试用：额外挂一个自定义传输（比如带延迟丢包的模拟链路），和 relay_only 一起用就只走它
+    #[doc(hidden)]
+    pub custom_transport: Option<Arc<dyn iroh::endpoint::transports::CustomTransport>>,
 }
 
 /// 本机知道的一台设备：连接历史、配对过的、局域网里看到的合在一起，命令行列设备、按名字找设备用
@@ -149,6 +154,9 @@ impl Node {
         if cfg.relay_only {
             builder = builder.clear_ip_transports();
         }
+        if let Some(transport) = &cfg.custom_transport {
+            builder = builder.add_custom_transport(transport.clone());
+        }
         let relays = cfg
             .relays
             .iter()
@@ -214,7 +222,7 @@ impl Node {
         }
         let files = shared_files.unwrap_or_else(|| {
             let inbox = cfg.inbox_dir.clone().unwrap_or_else(default_inbox_dir);
-            Files::new(host.clone(), recent.clone(), &cfg.data_dir, inbox)
+            Files::new(host.clone(), recent.clone(), &cfg.data_dir, inbox, cfg.file_lanes.unwrap_or(crate::files::DEFAULT_LANES))
         });
 
         if start_accept {

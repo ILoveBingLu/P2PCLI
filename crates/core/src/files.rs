@@ -19,6 +19,8 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
+mod lanes;
+
 use crate::ALPN_FILE;
 use crate::client::RemoteHost;
 use crate::host::{APPROVE_TIMEOUT, FileRequest, Host, HostEvent, clean_name};
@@ -57,10 +59,27 @@ pub struct FileEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum FileMsg {
-    /// 发送方开场：我是谁，要发哪些文件
-    Offer { id: String, name: String, platform: String, entries: Vec<FileEntry> },
+    /// 发送方开场：我是谁，要发哪些文件。lanes 是发送方最多想开几条并发流（旧版本没有这一项）
+    Offer {
+        id: String,
+        name: String,
+        platform: String,
+        entries: Vec<FileEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lanes: Option<u32>,
+    },
     /// 接收方同意：每个文件已经有多少字节，从那里接着发
     Accept { offsets: Vec<u64> },
+    /// 接收方同意并发分段收：用几条流、每段多大、每个文件里已经收好的段（段编号）
+    LaneAccept { lanes: u32, segment: u64, done: Vec<Vec<u32>> },
+    /// 并发分段：这条单向流属于哪次传输（流上的第一条消息）
+    Lane { id: String },
+    /// 一段数据：第 file 个文件从 offset 开始 len 字节，后面跟着这么多字节的数据帧
+    Seg { file: u32, offset: u64, len: u64 },
+    /// 这一段发完了，附上这一段的哈希
+    SegEnd { hash: String },
+    /// 所有段都发完了
+    Finish,
     Reject { message: String },
     /// 第 index 个文件发完了，附上整个文件的哈希
     Done { index: u32, hash: String },
@@ -107,6 +126,9 @@ pub struct Transfer {
     pub paths: Vec<String>,
     pub started_at: u64,
     pub finished_at: Option<u64>,
+    /// 并发分段时用了几条流；0 是一条流（对方是旧版本，或者本机关了并发）
+    #[serde(default)]
+    pub lanes: u32,
 }
 
 impl Transfer {
@@ -147,10 +169,17 @@ pub struct Files {
     conns: Mutex<HashMap<EndpointId, Connection>>,
     /// 正在收的半截文件：同一个文件不能两批同时收
     receiving: Mutex<HashSet<String>>,
+    /// 并发分段最多开几条流；0 是关掉，只用一条流
+    lanes_max: u32,
+    /// 正在并发分段收的传输，各条车道按编号找到它
+    lane_sessions: Mutex<HashMap<String, Arc<lanes::LaneSession>>>,
 }
 
+/// 默认最多开几条并发流
+pub const DEFAULT_LANES: u32 = 8;
+
 impl Files {
-    pub fn new(host: Arc<Host>, recent: Arc<RecentStore>, data_dir: &Path, inbox_root: PathBuf) -> Arc<Self> {
+    pub fn new(host: Arc<Host>, recent: Arc<RecentStore>, data_dir: &Path, inbox_root: PathBuf, lanes_max: u32) -> Arc<Self> {
         let inbox_path = data_dir.join("inbox.json");
         let inbox = std::fs::read(&inbox_path)
             .ok()
@@ -166,6 +195,8 @@ impl Files {
             transfers: Default::default(),
             conns: Default::default(),
             receiving: Default::default(),
+            lanes_max,
+            lane_sessions: Default::default(),
         });
         // 被连方收“推到指定目录”、发“被拉走的文件”时要用到这里
         linked.attach_files(&files);
@@ -269,6 +300,7 @@ impl Files {
             paths: Vec::new(),
             started_at: now_secs(),
             finished_at: None,
+            lanes: 0,
         });
         id
     }
@@ -286,7 +318,7 @@ impl Files {
         let list = self.list_for(id, paths).await?;
         let conn = self.connection(endpoint, addr).await?;
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        self.send_batch(id, &mut send, &mut recv, me, list).await
+        self.send_batch(id, &mut send, &mut recv, me, list, Some(&conn)).await
     }
 
     /// 把本机的文件推到对方电脑上指定的目录（目录在对方电脑上，不存在会建，同名文件会被盖掉）。
@@ -295,7 +327,7 @@ impl Files {
         let result = async {
             let list = self.list_for(id, paths).await?;
             let (mut send, mut recv) = remote.open_stream(&Msg::PutFiles { dest }).await?;
-            self.send_batch(id, &mut send, &mut recv, me, list).await
+            self.send_batch(id, &mut send, &mut recv, me, list, None).await
         }
         .await;
         if let Err(e) = &result {
@@ -317,11 +349,21 @@ impl Files {
     }
 
     /// 在打开的流上发一批：报清单，等对方回要从哪里接着发，发完等对方核对放好
-    async fn send_batch(&self, id: &str, send: &mut SendStream, recv: &mut RecvStream, me: &DeviceInfo, list: Vec<(PathBuf, FileEntry)>) -> Result<(String, Vec<String>)> {
+    /// `lanes` 有值就是这条流所在的连接：可以请对方并发分段收（对方是旧版本会自动退回一条流）
+    async fn send_batch(
+        &self,
+        id: &str,
+        send: &mut SendStream,
+        recv: &mut RecvStream,
+        me: &DeviceInfo,
+        list: Vec<(PathBuf, FileEntry)>,
+        lanes: Option<&Connection>,
+    ) -> Result<(String, Vec<String>)> {
         let entries: Vec<FileEntry> = list.iter().map(|(_, e)| e.clone()).collect();
+        let want_lanes = lanes.filter(|_| self.lanes_max > 0).map(|_| self.lanes_max);
         write_json(
             send,
-            &FileMsg::Offer { id: id.to_string(), name: me.name.clone(), platform: me.platform.clone(), entries: entries.clone() },
+            &FileMsg::Offer { id: id.to_string(), name: me.name.clone(), platform: me.platform.clone(), entries: entries.clone(), lanes: want_lanes },
         )
         .await?;
         self.update(id, |t| t.state = TransferState::Waiting);
@@ -331,6 +373,10 @@ impl Files {
             .map_err(|_| anyhow!("对方一直没有回应"))??;
         let offsets = match reply {
             FileMsg::Accept { offsets } if offsets.len() == entries.len() => offsets,
+            FileMsg::LaneAccept { lanes: n, segment, done } if done.len() == entries.len() => {
+                let conn = lanes.ok_or_else(|| anyhow!("对方回了意外的消息：没请求并发分段"))?;
+                return self.send_lanes(id, conn, send, recv, &list, n, segment, done).await;
+            }
             FileMsg::Reject { message } => bail!("{message}"),
             FileMsg::Error { message } => bail!("对方出错：{message}"),
             other => bail!("对方回了意外的消息：{other:?}"),
@@ -383,7 +429,7 @@ impl Files {
                 bail!("没写要拉哪些文件");
             }
             let list = self.list_for(&id, paths).await?;
-            self.send_batch(&id, send, recv, me, list).await
+            self.send_batch(&id, send, recv, me, list, None).await
         }
         .await;
         if let Err(e) = &result {
@@ -472,20 +518,36 @@ impl Files {
 
     /// 被发文件的一方：一条连接上可以有好几批，每批一条流
     pub async fn handle(self: Arc<Self>, conn: Connection) {
-        while let Ok((send, recv)) = conn.accept_bi().await {
-            let this = self.clone();
-            let conn = conn.clone();
-            tokio::spawn(async move {
-                if let Err(e) = this.receive(&conn, send, recv).await {
-                    debug!(remote = %conn.remote_id().fmt_short(), "收文件失败：{e:#}");
+        loop {
+            tokio::select! {
+                bi = conn.accept_bi() => {
+                    let Ok((send, recv)) = bi else { break };
+                    let this = self.clone();
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = this.receive(&conn, send, recv).await {
+                            debug!(remote = %conn.remote_id().fmt_short(), "收文件失败：{e:#}");
+                        }
+                    });
                 }
-            });
+                // 并发分段的车道：单向流，第一条消息说明属于哪次传输
+                uni = conn.accept_uni() => {
+                    let Ok(recv) = uni else { break };
+                    let this = self.clone();
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = this.receive_lane(&conn, recv).await {
+                            debug!(remote = %conn.remote_id().fmt_short(), "收车道失败：{e:#}");
+                        }
+                    });
+                }
+            }
         }
     }
 
     async fn receive(&self, conn: &Connection, mut send: SendStream, mut recv: RecvStream) -> Result<()> {
         let remote = conn.remote_id();
-        let FileMsg::Offer { name, platform, entries, .. } = timeout(Duration::from_secs(10), read_json(&mut recv)).await?? else {
+        let FileMsg::Offer { id: offer_id, name, platform, entries, lanes } = timeout(Duration::from_secs(10), read_json(&mut recv)).await?? else {
             bail!("开场消息不对");
         };
         let name = clean_name(&name);
@@ -511,7 +573,15 @@ impl Files {
             }
         }
         // 失败已经回给对方、记进传输记录了
-        let _ = self.receive_batch(None, remote, &name, plan, entries, &mut send, &mut recv, Target::Inbox).await;
+        match lanes.filter(|n| *n > 0 && self.lanes_max > 0) {
+            // 对方想并发分段，本机也开着：多条流一起收
+            Some(offered) => {
+                let _ = self.receive_lanes(remote, offer_id, &name, plan, entries, offered, &mut send, &mut recv).await;
+            }
+            None => {
+                let _ = self.receive_batch(None, remote, &name, plan, entries, &mut send, &mut recv, Target::Inbox).await;
+            }
+        }
         Ok(())
     }
 
@@ -608,6 +678,7 @@ impl Files {
                     paths: Vec::new(),
                     started_at: now_secs(),
                     finished_at: None,
+                    lanes: 0,
                 });
                 id
             }
@@ -633,6 +704,24 @@ impl Files {
         }
         .await;
 
+        self.conclude(&id, own, remote, name, entries.len(), total, target, result, send).await
+    }
+
+    /// 收完（或失败）以后的收尾：回给对方、记收件记录、通知界面、结束传输记录。
+    /// 一条流收和并发分段收共用。
+    #[allow(clippy::too_many_arguments)]
+    async fn conclude(
+        &self,
+        id: &str,
+        own: bool,
+        remote: EndpointId,
+        name: String,
+        files: usize,
+        total: u64,
+        target: Target,
+        result: Result<(String, Vec<String>)>,
+        send: &mut SendStream,
+    ) -> Result<(String, Vec<String>)> {
         match &result {
             Ok((dir, paths)) => {
                 let _ = reply(send, FileMsg::Saved { dir: dir.clone(), paths: paths.clone() }).await;
@@ -640,7 +729,7 @@ impl Files {
                 let received = HostEvent::FilesReceived {
                     from: remote.to_string(),
                     from_name: name.clone(),
-                    files: entries.len(),
+                    files,
                     total,
                     dir: dir.clone(),
                     paths: paths.clone(),
@@ -648,13 +737,13 @@ impl Files {
                 match target {
                     Target::Inbox => {
                         self.remember(InboxItem {
-                            id: id.clone(),
+                            id: id.to_string(),
                             from: remote.to_string(),
                             from_name: name,
                             at: now_secs(),
                             dir: dir.clone(),
                             paths: paths.clone(),
-                            files: entries.len(),
+                            files,
                             total,
                         });
                         self.host.notify(received);
@@ -673,7 +762,7 @@ impl Files {
             Err(e) => Err(anyhow!("{e:#}")),
         };
         if own {
-            self.end(&id, result);
+            self.end(id, result);
         }
         outcome
     }

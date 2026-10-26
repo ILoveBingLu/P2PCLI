@@ -774,7 +774,8 @@ async fn file_transfer_paired_resume_and_stranger() {
     let start = |tag: &str, name: &str| {
         let (dir, name) = (temp_dir(tag), name.to_string());
         async move {
-            Node::start(NodeConfig { data_dir: dir, device_name: Some(name), offline: true, ..Default::default() }, TestDelegate::new())
+            // 这个测试按一条流的方式检查续传、校验和半截文件，所以发的一方关掉并发分段；并发分段另有测试
+            Node::start(NodeConfig { data_dir: dir, device_name: Some(name), offline: true, file_lanes: Some(0), ..Default::default() }, TestDelegate::new())
                 .await
                 .unwrap()
         }
@@ -1349,4 +1350,208 @@ async fn congestion_control_stays_cubic_on_a_fast_local_link() {
     remote.close();
     host.shutdown().await;
     guest.shutdown().await;
+}
+
+/// 传文件在本机回环上的上限：读盘、BLAKE3 校验、QUIC、写盘都算在内，网络几乎不拖后腿。
+/// 用来确认广域网上慢的时候，问题不在软件自己的这些环节。手动跑：
+///   cargo test -p p2pcli-core --test e2e -- --ignored --nocapture file_transfer_loopback_throughput
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "手动跑的性能测量"]
+async fn file_transfer_loopback_throughput() {
+    let delegate = TestDelegate::new();
+    let host = Node::start(
+        NodeConfig { data_dir: temp_dir("tput-host"), device_name: Some("收件机".into()), offline: true, inbox_dir: Some(temp_dir("tput-inbox")), ..Default::default() },
+        delegate.clone(),
+    )
+    .await
+    .unwrap();
+    let sender = Node::start(
+        NodeConfig { data_dir: temp_dir("tput-sender"), device_name: Some("发件机".into()), offline: true, ..Default::default() },
+        TestDelegate::new(),
+    )
+    .await
+    .unwrap();
+    host.host.set_password("abc234");
+    let addr = local_addr(&host);
+    delegate.set(Decision::Allow { trust: false });
+    sender.connect_addr(addr.clone(), Some("abc234".into())).await.expect("应该连上").close();
+
+    let src = temp_dir("tput-src");
+    std::fs::create_dir_all(&src).unwrap();
+    let file = src.join("big.bin");
+    let mib = 256usize;
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&file).unwrap();
+        let block: Vec<u8> = (0..1_048_576u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        for _ in 0..mib {
+            f.write_all(&block).unwrap();
+        }
+    }
+    let started = std::time::Instant::now();
+    let t = sender.send_files(addr, "收件机", vec![file]).await;
+    let secs = started.elapsed().as_secs_f64();
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    println!("\n本机回环传 {mib} MiB：{secs:.2} 秒，{:.0} MiB/s（{:.0} Mbps）", mib as f64 / secs, mib as f64 * 8.0 * 1.048576 / secs);
+    host.shutdown().await;
+    sender.shutdown().await;
+}
+
+/// 起一台收件机和一台发件机（都用默认的并发分段），发件机连过收件机，收件机认识它
+async fn lane_pair(tag: &str, host_lanes: Option<u32>) -> (Arc<Node>, Arc<Node>, std::path::PathBuf, EndpointAddr) {
+    let delegate = TestDelegate::new();
+    let inbox = temp_dir(&format!("{tag}-inbox"));
+    let host = Node::start(
+        NodeConfig { data_dir: temp_dir(&format!("{tag}-host")), device_name: Some("收件机".into()), offline: true, inbox_dir: Some(inbox.clone()), file_lanes: host_lanes, ..Default::default() },
+        delegate.clone(),
+    )
+    .await
+    .unwrap();
+    let sender = Node::start(
+        NodeConfig { data_dir: temp_dir(&format!("{tag}-sender")), device_name: Some("发件机".into()), offline: true, ..Default::default() },
+        TestDelegate::new(),
+    )
+    .await
+    .unwrap();
+    host.host.set_password("abc234");
+    let addr = local_addr(&host);
+    delegate.set(Decision::Allow { trust: false });
+    sender.connect_addr(addr.clone(), Some("abc234".into())).await.expect("应该连上").close();
+    (host, sender, inbox, addr)
+}
+
+/// 并发分段传输：大文件切成多段多条流一起发，小文件、空文件、可执行文件、文件夹也都原样收到
+#[tokio::test(flavor = "multi_thread")]
+async fn parallel_transfer_delivers_every_kind_of_file() {
+    let (host, sender, inbox, addr) = lane_pair("lanes", None).await;
+    let src = temp_dir("lanes-src");
+    std::fs::create_dir_all(src.join("proj/sub")).unwrap();
+    let big: Vec<u8> = (0..40_000_000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+    std::fs::write(src.join("big.bin"), &big).unwrap();
+    std::fs::write(src.join("empty.txt"), b"").unwrap();
+    for i in 0..150 {
+        std::fs::write(src.join(format!("proj/sub/f{i:03}.txt")), format!("第 {i} 个文件").repeat(i + 1)).unwrap();
+    }
+    std::fs::write(src.join("proj/run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(src.join("proj/run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let t = sender.send_files(addr, "收件机", vec![src.join("big.bin"), src.join("empty.txt"), src.join("proj")]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert!(t.lanes > 1, "大文件应该用多条流并发发，实际 {} 条", t.lanes);
+    assert_eq!(t.done, t.total);
+    assert_eq!(t.files, 1 + 1 + 150 + 1);
+    let dest = inbox.join("发件机");
+    let got = std::fs::read(dest.join("big.bin")).unwrap();
+    assert_eq!(got.len(), big.len());
+    assert!(got == big, "大文件内容对不上");
+    assert_eq!(std::fs::read(dest.join("empty.txt")).unwrap(), b"");
+    for i in 0..150 {
+        assert_eq!(std::fs::read_to_string(dest.join(format!("proj/sub/f{i:03}.txt"))).unwrap(), format!("第 {i} 个文件").repeat(i + 1));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(std::fs::metadata(dest.join("proj/run.sh")).unwrap().permissions().mode() & 0o111, 0, "可执行权限要保留");
+    }
+    // 收件机那边的记录也是并发的，收件记录和通知照常
+    let received = host.files.transfers().into_iter().next().unwrap();
+    assert!(received.lanes > 1 && received.state == TransferState::Done);
+    assert_eq!(host.files.inbox(1)[0].from_name, "发件机");
+    // 收完不留半截文件和进度文件
+    let leftovers: Vec<_> = std::fs::read_dir(inbox.join(".partial")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(leftovers.is_empty(), "不该留下：{leftovers:?}");
+
+    // 再发一次：不盖已有的，加编号
+    let t = sender.send_files(local_addr(&host), "收件机", vec![src.join("big.bin")]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert!(std::fs::read(dest.join("big (1).bin")).unwrap() == big);
+
+    host.shutdown().await;
+    sender.shutdown().await;
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// 对方是旧版本（或者关了并发）：自动退回一条流，照样传得完
+#[tokio::test(flavor = "multi_thread")]
+async fn parallel_transfer_falls_back_when_the_receiver_has_no_lanes() {
+    let (host, sender, inbox, addr) = lane_pair("lanes-off", Some(0)).await;
+    let src = temp_dir("lanes-off-src");
+    std::fs::create_dir_all(&src).unwrap();
+    let data: Vec<u8> = (0..12_000_000u32).map(|i| (i.wrapping_mul(40503) >> 8) as u8).collect();
+    std::fs::write(src.join("a.bin"), &data).unwrap();
+    let t = sender.send_files(addr, "收件机", vec![src.join("a.bin")]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(t.lanes, 0, "对方不支持并发，应该是一条流");
+    assert!(std::fs::read(inbox.join("发件机/a.bin")).unwrap() == data);
+    host.shutdown().await;
+    sender.shutdown().await;
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// 传到一半断了，再发同一个文件：已经校验通过的段不重发，接着传；最后内容完全一致
+#[tokio::test(flavor = "multi_thread")]
+async fn parallel_transfer_resumes_from_the_verified_segments() {
+    let (host, sender, inbox, addr) = lane_pair("lanes-resume", None).await;
+    let src = temp_dir("lanes-resume-src");
+    std::fs::create_dir_all(&src).unwrap();
+    let data: Vec<u8> = (0..96_000_000u32).map(|i| (i.wrapping_mul(2246822519) >> 24) as u8).collect();
+    std::fs::write(src.join("big.bin"), &data).unwrap();
+
+    // 发到收件机至少有一段校验通过（进度文件里有记录），就把发送方掐掉
+    let partial = inbox.join(".partial");
+    let verified = || -> usize {
+        std::fs::read_dir(&partial)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with(".segs"))
+            .filter_map(|p| std::fs::read(p).ok())
+            .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .map(|v| v["done"].as_array().map_or(0, Vec::len))
+            .sum()
+    };
+    let first = {
+        let (sender, addr, file) = (sender.clone(), addr.clone(), src.join("big.bin"));
+        tokio::spawn(async move { sender.send_files(addr, "收件机", vec![file]).await })
+    };
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while verified() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("收件机一直没有校验通过的段");
+    first.abort();
+    let _ = first.await;
+    // 等收件机发现断了、把这次传输结束
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if host.files.transfers().first().is_some_and(|t| t.finished()) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("收件机没发现断了");
+    assert_eq!(host.files.transfers()[0].state, TransferState::Failed);
+
+    // 留下了半截文件和进度文件，进度里有已经校验过的段，但不是全部
+    let kept = verified();
+    assert!((2..12).contains(&kept), "进度里应该有一部分段，实际 {kept}");
+
+    // 再发一次：接着传，收到的内容和原文件完全一致
+    let t = sender.send_files(addr, "收件机", vec![src.join("big.bin")]).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert!(std::fs::read(inbox.join("发件机/big.bin")).unwrap() == data, "续传后的内容对不上");
+    assert!(std::fs::read_dir(&partial).unwrap().flatten().next().is_none(), "收完不该留半截文件和进度文件");
+
+    host.shutdown().await;
+    sender.shutdown().await;
+    let _ = std::fs::remove_dir_all(&src);
 }

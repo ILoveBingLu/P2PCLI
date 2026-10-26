@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, FolderOpen, X } from "lucide-react";
 import { api, formatSize, type Transfer } from "../api";
 import { Button } from "@/components/ui/button";
@@ -39,13 +39,37 @@ export function TransferPanel({ transfers }: { transfers: Transfer[] }) {
   );
 }
 
+/** 最近几秒的平均速度（字节每秒）；刚开始、还没攒够一秒的数据时是 null */
+function useSpeed(t: Transfer): number | null {
+  const samples = useRef<{ at: number; done: number }[]>([]);
+  const [speed, setSpeed] = useState<number | null>(null);
+  useEffect(() => {
+    if (t.state !== "running") {
+      samples.current = [];
+      setSpeed(null);
+      return;
+    }
+    const at = Date.now();
+    const list = samples.current;
+    list.push({ at, done: t.done });
+    while (list.length > 1 && at - list[0].at > 4000) list.shift();
+    const elapsed = (at - list[0].at) / 1000;
+    setSpeed(elapsed >= 1 ? Math.max(0, (t.done - list[0].done) / elapsed) : null);
+  }, [t.state, t.done]);
+  return speed;
+}
+
 function TransferRow({ t, onDismiss }: { t: Transfer; onDismiss: () => void }) {
   const send = t.direction === "send";
+  const speed = useSpeed(t);
   const percent = t.total ? Math.min(100, Math.floor((t.done * 100) / t.total)) : t.state === "done" ? 100 : 0;
   const status = {
     connecting: "连接中…",
     waiting: send ? "等对方同意…" : "准备中…",
-    running: `${percent}% · ${formatSize(t.done)} / ${formatSize(t.total)}`,
+    running:
+      `${percent}% · ${formatSize(t.done)} / ${formatSize(t.total)}` +
+      (speed != null ? ` · ${formatSize(speed)}/s` : "") +
+      ((t.lanes ?? 0) > 1 ? ` · ${t.lanes} 条并发` : ""),
     done: send ? `已发到 ${t.peer_name}，${formatSize(t.total)}` : `已收到，${formatSize(t.total)}`,
     failed: t.error ?? "失败",
   }[t.state];

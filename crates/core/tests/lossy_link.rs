@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use iroh::endpoint::transports::{CustomEndpoint, CustomSender, CustomTransport, RecvInfo, Transmit};
+use p2pcli_core::host::{BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest};
+use p2pcli_core::node::{Node, NodeConfig};
 use iroh::endpoint::{PathId, QuicTransportConfig, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr};
 use iroh_base::CustomAddr;
@@ -330,5 +332,192 @@ async fn congestion_control_on_typical_links() {
         let (c, chose) = measure(Cc::Adaptive, link).await;
         println!("{name:<28}{:>14}{:>14}{:>14}（{chose}）", mbps(a), mbps(b), mbps(c));
         assert_eq!(chose, expect, "{name} 选错了算法");
+    }
+}
+
+/// 并发：同一条连接里开多条流（共用一个拥塞窗口），或者开多条独立连接（各有各的窗口），灌数据 RUN 这么久，
+/// 返回总的稳定速率。一条链路上所有连接共用同一个带宽和队列。
+async fn measure_parallel(cc: Cc, link: Link, connections: usize, streams: usize) -> f64 {
+    let net = Net::new(link);
+    let (server, client) = (endpoint(&net, cc).await, endpoint(&net, cc).await);
+    let received = Arc::new(AtomicU64::new(0));
+    let accept = {
+        let (server, received) = (server.clone(), received.clone());
+        tokio::spawn(async move {
+            let mut readers = Vec::new();
+            for _ in 0..connections {
+                let conn = server.accept().await.unwrap().accept().unwrap().await.unwrap();
+                let received = received.clone();
+                readers.push(tokio::spawn(async move {
+                    let mut tasks = Vec::new();
+                    for _ in 0..streams {
+                        let mut recv = conn.accept_uni().await.unwrap();
+                        let received = received.clone();
+                        tasks.push(tokio::spawn(async move {
+                            let mut buf = vec![0u8; 256 * 1024];
+                            while let Ok(Some(n)) = recv.read(&mut buf).await {
+                                received.fetch_add(n as u64, Ordering::Relaxed);
+                            }
+                        }));
+                    }
+                    for t in tasks {
+                        let _ = t.await;
+                    }
+                    conn
+                }));
+            }
+            for r in readers {
+                let _ = r.await;
+            }
+        })
+    };
+    let addr = EndpointAddr::from_parts(server.id(), [TransportAddr::Custom(addr_of(server.id()))]);
+    let started = Instant::now();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut senders = Vec::new();
+    let mut conns = Vec::new();
+    for _ in 0..connections {
+        let conn = client.connect(addr.clone(), ALPN).await.unwrap();
+        for _ in 0..streams {
+            let mut send = conn.open_uni().await.unwrap();
+            let stop = stop.clone();
+            senders.push(tokio::spawn(async move {
+                let chunk = vec![7u8; 256 * 1024];
+                while !stop.load(Ordering::Relaxed) {
+                    if send.write_all(&chunk).await.is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        conns.push(conn);
+    }
+    sleep(WARMUP).await;
+    let at_warmup = received.load(Ordering::Relaxed);
+    let warm_at = Instant::now();
+    sleep(RUN.saturating_sub(started.elapsed())).await;
+    let end_bytes = received.load(Ordering::Relaxed);
+    let end_at = Instant::now();
+    stop.store(true, Ordering::Relaxed);
+    for c in &conns {
+        c.close(0u32.into(), b"done");
+    }
+    accept.abort();
+    for s in senders {
+        s.abort();
+    }
+    sleep(Duration::from_millis(100)).await;
+    server.close().await;
+    client.close().await;
+    (end_bytes - at_warmup) as f64 / (end_at - warm_at).as_secs_f64()
+}
+
+/// 并发有没有用：一条流、同一条连接多条流、多条连接，各自在几种链路上的总速度
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "几分钟的对比实验，手动跑，加 --test-threads=1"]
+async fn parallel_streams_and_connections() {
+    let q = Duration::from_millis(100);
+    let cases = [
+        ("跨境 106ms 100M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 100_000_000, queue_limit: q }),
+        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }),
+        ("国内 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q }),
+    ];
+    println!("\n{:<26}{:>6}  {:>12}{:>12}{:>12}{:>12}", "链路", "算法", "1连接1流", "1连接4流", "4连接各1流", "4连接各2流");
+    for (name, link) in cases {
+        for (cc, label) in [(Cc::Cubic, "Cubic"), (Cc::Adaptive, "自适应")] {
+            let a = measure_parallel(cc, link, 1, 1).await;
+            let b = measure_parallel(cc, link, 1, 4).await;
+            let c = measure_parallel(cc, link, 4, 1).await;
+            let d = measure_parallel(cc, link, 4, 2).await;
+            println!("{name:<26}{label:>6}  {:>12}{:>12}{:>12}{:>12}", mbps(a), mbps(b), mbps(c), mbps(d));
+        }
+    }
+}
+
+/// 什么都同意的被连方：这个实验只量传文件的速度
+struct AllowAll;
+
+impl HostDelegate for AllowAll {
+    fn approve(&self, _req: IncomingRequest) -> BoxFuture<Decision> {
+        Box::pin(async { Decision::Allow { trust: false } })
+    }
+    fn event(&self, _ev: HostEvent) {}
+    fn approve_files(&self, _req: FileRequest) -> BoxFuture<bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// 在模拟链路上，用真正的 Node 和真正的传文件代码，发一个文件，返回耗时（秒）和用了几条流
+async fn transfer_over(link: Link, lanes: Option<u32>, megabytes: usize) -> (f64, u32) {
+    let net = Net::new(link);
+    let root = std::env::temp_dir().join(format!("p2pcli-lossy-{}-{}", std::process::id(), rand::random::<u32>()));
+    let node = |tag: &str, name: &str, lanes: Option<u32>| {
+        let dir = root.join(tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = p2pcli_core::identity::load_or_create_key(&dir).unwrap();
+        let transport = net.transport(key.public());
+        let (name, inbox) = (name.to_string(), root.join(format!("{tag}-inbox")));
+        async move {
+            Node::start(
+                NodeConfig {
+                    data_dir: dir,
+                    device_name: Some(name),
+                    offline: true,
+                    relay_only: true,
+                    inbox_dir: Some(inbox),
+                    file_lanes: lanes,
+                    custom_transport: Some(transport),
+                    ..Default::default()
+                },
+                Arc::new(AllowAll),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let host = node("host", "收件机", None).await;
+    let sender = node("sender", "发件机", lanes).await;
+    host.host.set_password("abc234");
+    let addr = EndpointAddr::from_parts(host.id(), [TransportAddr::Custom(addr_of(host.id()))]);
+    sender.connect_addr(addr.clone(), Some("abc234".into())).await.expect("应该连上").close();
+
+    let file = root.join("big.bin");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&file).unwrap();
+        let block: Vec<u8> = (0..1_048_576u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        for _ in 0..megabytes {
+            f.write_all(&block).unwrap();
+        }
+    }
+    let started = Instant::now();
+    let t = sender.send_files(addr, "收件机", vec![file.clone()]).await;
+    let secs = started.elapsed().as_secs_f64();
+    assert_eq!(t.state, p2pcli_core::files::TransferState::Done, "{:?}", t.error);
+    let got = std::fs::metadata(root.join("host-inbox/发件机/big.bin")).unwrap().len();
+    assert_eq!(got as usize, megabytes << 20, "收到的大小不对");
+    host.shutdown().await;
+    sender.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+    (secs, t.lanes)
+}
+
+/// 真实的传文件代码在模拟链路上：一条流（旧版本对端、或者关了并发）对比并发分段
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "几分钟的对比实验，手动跑，加 --test-threads=1"]
+async fn file_transfer_over_lossy_links() {
+    let q = Duration::from_millis(100);
+    let cases = [
+        ("跨境 106ms 100M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 100_000_000, queue_limit: q }, 64),
+        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }, 160),
+        ("国内 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q }, 64),
+        ("局域网 2ms 300M 无丢包", Link { one_way: Duration::from_millis(1), loss: 0.0, rate_bps: 300_000_000, queue_limit: q }, 160),
+    ];
+    println!("\n{:<28}{:>6}  {:>16}{:>22}", "链路", "大小", "一条流", "并发分段");
+    for (name, link, mb) in cases {
+        let (single, _) = transfer_over(link, Some(0), mb).await;
+        let (parallel, lanes) = transfer_over(link, None, mb).await;
+        let rate = |secs: f64| format!("{:.1} Mbps", mb as f64 * 8.0 * 1.048576 / secs);
+        println!("{name:<28}{:>4}M  {:>16}{:>16}（{lanes} 条流，快 {:.1} 倍）", mb, rate(single), rate(parallel), single / parallel);
     }
 }
