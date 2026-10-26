@@ -875,3 +875,310 @@ async fn file_transfer_paired_resume_and_stranger() {
     }
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// 起一台被连机和一台连接机，连接机用密码连上被连机（对方点同意），返回两台和那条连接
+async fn paired_pair(tag: &str) -> (Arc<Node>, Arc<TestDelegate>, Arc<Node>, Arc<p2pcli_core::client::RemoteHost>) {
+    let delegate = TestDelegate::new();
+    let host = Node::start(
+        NodeConfig { data_dir: temp_dir(&format!("{tag}-host")), device_name: Some("被连机".into()), offline: true, inbox_dir: Some(temp_dir(&format!("{tag}-inbox"))), ..Default::default() },
+        delegate.clone(),
+    )
+    .await
+    .unwrap();
+    let guest = Node::start(
+        NodeConfig { data_dir: temp_dir(&format!("{tag}-guest")), device_name: Some("连接机".into()), offline: true, inbox_dir: Some(temp_dir(&format!("{tag}-guest-inbox"))), ..Default::default() },
+        TestDelegate::new(),
+    )
+    .await
+    .unwrap();
+    host.host.set_password("abc234");
+    delegate.set(Decision::Allow { trust: false });
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.expect("应该连上");
+    (host, delegate, guest, Arc::new(remote))
+}
+
+/// 跑一条命令，收齐标准输出、标准错误和退出情况
+async fn run_exec(
+    remote: &p2pcli_core::client::RemoteHost,
+    command: &str,
+    cwd: Option<String>,
+    timeout_secs: Option<u64>,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>, p2pcli_core::client::ExecEvent)> {
+    use p2pcli_core::client::ExecEvent;
+    let mut stream = remote.exec(command, cwd, timeout_secs).await?;
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    loop {
+        match tokio::time::timeout(Duration::from_secs(30), stream.next()).await.expect("命令没有结果")? {
+            ExecEvent::Stdout(d) => out.extend_from_slice(&d),
+            ExecEvent::Stderr(d) => err.extend_from_slice(&d),
+            exit @ ExecEvent::Exit { .. } => return Ok((out, err, exit)),
+        }
+    }
+}
+
+/// 在对方电脑上跑命令：标准输出和标准错误分开、退出码、工作目录、字节原样、超时、输入为空、取消
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn exec_runs_commands_on_the_host() {
+    use p2pcli_core::client::ExecEvent;
+    let (host, _delegate, guest, remote) = paired_pair("exec").await;
+
+    let (out, err, exit) = run_exec(&remote, "echo out-$((2+3)); echo err-line 1>&2; exit 7", None, None).await.unwrap();
+    assert!(String::from_utf8_lossy(&out).contains("out-5"), "标准输出：{out:?}");
+    assert!(String::from_utf8_lossy(&err).contains("err-line"), "标准错误：{err:?}");
+    assert!(!String::from_utf8_lossy(&out).contains("err-line"), "两路要分开");
+    assert_eq!(exit, ExecEvent::Exit { code: Some(7), signal: None, timed_out: false });
+
+    // 工作目录
+    let work = temp_dir("exec-cwd");
+    std::fs::create_dir_all(&work).unwrap();
+    let (out, _, exit) = run_exec(&remote, "pwd", Some(work.display().to_string()), None).await.unwrap();
+    assert!(matches!(exit, ExecEvent::Exit { code: Some(0), .. }));
+    let shown = String::from_utf8_lossy(&out);
+    let printed = shown.lines().rev().find(|l| l.starts_with('/')).unwrap_or_default().to_string();
+    assert_eq!(std::fs::canonicalize(&printed).unwrap(), std::fs::canonicalize(&work).unwrap(), "输出：{shown}");
+    let missing = run_exec(&remote, "pwd", Some("/没有/这个/目录".into()), None).await.unwrap_err();
+    assert!(format!("{missing:#}").contains("工作目录不存在"), "{missing:#}");
+
+    // 字节原样回来，包括不是 UTF-8 的
+    let (out, _, _) = run_exec(&remote, r"printf '\377\000abc\n'", None, None).await.unwrap();
+    assert!(out.windows(6).any(|w| w == [0xff, 0, b'a', b'b', b'c', b'\n']), "{out:?}");
+
+    // 大量输出不丢不乱
+    let (out, _, exit) = run_exec(&remote, "seq 1 20000", None, None).await.unwrap();
+    assert!(matches!(exit, ExecEvent::Exit { code: Some(0), .. }));
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.lines().any(|l| l == "20000") && text.lines().filter(|l| l.parse::<u32>().is_ok()).count() == 20000);
+
+    // 输入是空的：读输入的命令马上读到结尾，不会卡住
+    let (out, _, exit) = tokio::time::timeout(Duration::from_secs(20), run_exec(&remote, "cat; echo after-cat", None, None)).await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&out).contains("after-cat"));
+    assert!(matches!(exit, ExecEvent::Exit { code: Some(0), .. }));
+
+    // 超时：先请它退出，退出码不是 0，timed_out 为真
+    let started = std::time::Instant::now();
+    let (_, _, exit) = run_exec(&remote, "sleep 60", None, Some(1)).await.unwrap();
+    assert!(matches!(exit, ExecEvent::Exit { timed_out: true, .. }), "{exit:?}");
+    assert!(started.elapsed() < Duration::from_secs(15), "超时没生效");
+
+    // 取消：丢掉流，对方结束整组进程（包括 shell 起的子进程）
+    let pidfile = work.join("pid");
+    let stream = remote.exec(&format!("echo $$ > {} ; sleep 60", pidfile.display()), None, None).await.unwrap();
+    let pid = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&pidfile)
+                && let Ok(pid) = text.trim().parse::<u32>()
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("命令没起来");
+    let alive = |pid: u32| std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().unwrap().success();
+    assert!(alive(pid));
+    drop(stream);
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while alive(pid) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("取消以后命令还在跑");
+
+    // 跑完的命令不留“正在用终端”的计数
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(host.host.sessions()[0].terminals, 0);
+
+    remote.close();
+    host.shutdown().await;
+    guest.shutdown().await;
+}
+
+/// 拉文件和推到指定目录：目录不存在会建、同名盖掉、可执行权限保留、对方的收件目录不受影响
+#[tokio::test(flavor = "multi_thread")]
+async fn pull_and_put_files_to_explicit_dirs() {
+    use p2pcli_core::files::Direction;
+    let (host, delegate, guest, remote) = paired_pair("pullput").await;
+
+    let src = temp_dir("pullput-src");
+    std::fs::create_dir_all(src.join("proj/sub")).unwrap();
+    let big: Vec<u8> = (0..2_000_000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+    std::fs::write(src.join("a.txt"), "第一版").unwrap();
+    std::fs::write(src.join("proj/big.bin"), &big).unwrap();
+    std::fs::write(src.join("proj/sub/empty.txt"), b"").unwrap();
+    std::fs::write(src.join("proj/run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(src.join("proj/run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // 拉：被连机上的文件和文件夹拉到连接机的新目录
+    let to = temp_dir("pullput-to").join("没有的/子目录");
+    let remote_paths = vec![src.join("a.txt").display().to_string(), src.join("proj").display().to_string()];
+    let id = guest.files.begin_pull(&host.id(), "被连机", &remote_paths);
+    let t = guest.files.run_pull(&id, &remote, remote_paths.clone(), to.clone()).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(t.direction, Direction::Receive);
+    assert_eq!((t.files, t.done, t.total), (4, big.len() as u64 + 9 + 18, big.len() as u64 + 9 + 18));
+    assert_eq!(t.paths, [to.join("a.txt").display().to_string(), to.join("proj").display().to_string()]);
+    assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "第一版");
+    assert_eq!(std::fs::read(to.join("proj/big.bin")).unwrap(), big);
+    assert_eq!(std::fs::read(to.join("proj/sub/empty.txt")).unwrap(), b"");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(std::fs::metadata(to.join("proj/run.sh")).unwrap().permissions().mode() & 0o111, 0);
+    }
+    assert!(guest.files.inbox(10).is_empty(), "拉到指定目录不该进收件记录");
+    // 被拉的一方在传输记录里看得到是谁拉走了什么
+    // 拉的一方收完就返回，被拉的一方还要处理收尾消息才记成完成，稍等一下
+    let served = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let t = host.files.transfers().into_iter().next().unwrap();
+            if t.state == TransferState::Done {
+                return t;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("被拉的一方没把这次传输记成完成");
+    assert_eq!(served.direction, Direction::Send);
+    assert_eq!(served.peer_name, "连接机");
+
+    // 源文件改了再拉：同名盖掉，不加编号
+    std::fs::write(src.join("a.txt"), "第二版，更长一点").unwrap();
+    let id = guest.files.begin_pull(&host.id(), "被连机", &remote_paths);
+    let t = guest.files.run_pull(&id, &remote, remote_paths.clone(), to.clone()).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(std::fs::read_to_string(to.join("a.txt")).unwrap(), "第二版，更长一点");
+    assert!(!to.join("a (1).txt").exists());
+
+    // 拉不存在的路径：失败，说清楚找不到什么
+    let missing = vec![src.join("没有这个文件").display().to_string()];
+    let id = guest.files.begin_pull(&host.id(), "被连机", &missing);
+    let t = guest.files.run_pull(&id, &remote, missing, temp_dir("pullput-none")).await;
+    assert_eq!(t.state, TransferState::Failed);
+    assert!(t.error.unwrap().contains("找不到"), "应该说找不到");
+
+    // 推：连接机的文件推到被连机的新目录，被连机的收件目录和记录不动
+    let dest = temp_dir("pullput-dest").join("新目录/再一层");
+    let paths = vec![src.join("a.txt"), src.join("proj")];
+    let id = guest.files.begin(&host.id(), "被连机", &paths);
+    let t = guest.files.run_put(&id, &remote, &guest.me, paths.clone(), dest.display().to_string()).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(t.paths, [dest.join("a.txt").display().to_string(), dest.join("proj").display().to_string()]);
+    assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "第二版，更长一点");
+    assert_eq!(std::fs::read(dest.join("proj/big.bin")).unwrap(), big);
+    assert!(host.files.inbox(10).is_empty(), "推到指定目录不该进被连机的收件记录");
+    assert!(delegate.file_requests.lock().unwrap().is_empty(), "已认证的连接不该再弹窗问");
+    assert!(delegate.events.lock().unwrap().iter().any(|e| matches!(e, HostEvent::FilesReceived { files: 4, .. })));
+
+    // 再推：同名盖掉
+    std::fs::write(src.join("a.txt"), "第三版").unwrap();
+    let id = guest.files.begin(&host.id(), "被连机", &paths);
+    let t = guest.files.run_put(&id, &remote, &guest.me, paths, dest.display().to_string()).await;
+    assert_eq!(t.state, TransferState::Done, "{:?}", t.error);
+    assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "第三版");
+    assert!(!dest.join("a (1).txt").exists());
+
+    remote.close();
+    host.shutdown().await;
+    guest.shutdown().await;
+}
+
+/// 从命令行那一层（本机控制口）走一遍：跑命令、拉文件、推到指定目录
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn control_socket_runs_exec_pull_and_put() {
+    use p2pcli_core::control::{self, Reply, Request};
+    use p2pcli_core::store::RecentDevice;
+    let (host, _delegate, guest, remote) = paired_pair("control").await;
+    // 命令行按名字找设备，找得到才能办事；连接用现成的这条
+    guest
+        .recent
+        .upsert(RecentDevice { code: "123456789".into(), endpoint_id: host.id().to_string(), name: "被连机".into(), platform: "macos".into(), sort_at: 0, last_used: 0 })
+        .unwrap();
+    guest.adopt_remote(remote.clone());
+    let data_dir = std::env::temp_dir().join(format!("p2pcli-ctl-{}", std::process::id()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let node = guest.clone();
+    control::serve(&data_dir, Arc::new(move || node.clone())).await.unwrap();
+
+    let ask = |req: Request| {
+        let data_dir = data_dir.clone();
+        async move {
+            let mut replies = Vec::new();
+            control::request(&data_dir, &req, |r| replies.push(r)).await.unwrap();
+            replies
+        }
+    };
+
+    let replies = ask(Request::Exec { target: "被连机".into(), command: "echo hi-ctl; echo oops 1>&2; exit 3".into(), cwd: None, timeout_secs: None }).await;
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let mut done = None;
+    for r in &replies {
+        match r {
+            Reply::ExecOut { stderr: false, data } => out.extend(control::decode_output(data)),
+            Reply::ExecOut { stderr: true, data } => err.extend(control::decode_output(data)),
+            Reply::ExecDone { code, signal, timed_out } => done = Some((*code, *signal, *timed_out)),
+            Reply::Error { message } => panic!("出错：{message}"),
+            _ => {}
+        }
+    }
+    assert!(String::from_utf8_lossy(&out).contains("hi-ctl"));
+    assert!(String::from_utf8_lossy(&err).contains("oops"));
+    assert_eq!(done, Some((Some(3), None, false)));
+
+    // 找不到设备：给错误，不是卡住
+    let replies = ask(Request::Exec { target: "不存在的设备".into(), command: "true".into(), cwd: None, timeout_secs: None }).await;
+    assert!(matches!(replies.last(), Some(Reply::Error { message }) if message.contains("没找到")), "{replies:?}");
+
+    // 拉和推
+    let src = temp_dir("control-src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("x.txt"), "x 的内容").unwrap();
+    let to = temp_dir("control-to");
+    let replies = ask(Request::Pull { target: "被连机".into(), paths: vec![src.join("x.txt").display().to_string()], to: to.clone() }).await;
+    assert!(matches!(replies.last(), Some(Reply::Done { transfer }) if transfer.state == TransferState::Done), "{replies:?}");
+    assert_eq!(std::fs::read_to_string(to.join("x.txt")).unwrap(), "x 的内容");
+
+    let dest = temp_dir("control-dest");
+    let replies = ask(Request::Send { target: "被连机".into(), paths: vec![to.join("x.txt")], to: Some(dest.display().to_string()) }).await;
+    assert!(matches!(replies.last(), Some(Reply::Done { transfer }) if transfer.state == TransferState::Done), "{replies:?}");
+    assert_eq!(std::fs::read_to_string(dest.join("x.txt")).unwrap(), "x 的内容");
+
+    // 命令行中途走了：对方的命令要被取消
+    let marker = temp_dir("control-cancel");
+    std::fs::create_dir_all(&marker).unwrap();
+    let pidfile = marker.join("pid");
+    let req = Request::Exec { target: "被连机".into(), command: format!("echo $$ > {} ; sleep 60", pidfile.display()), cwd: None, timeout_secs: None };
+    let dir = data_dir.clone();
+    let cli = tokio::spawn(async move { control::request(&dir, &req, |_| {}).await });
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !pidfile.exists() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("命令没起来");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // 命令行走了：连接被丢掉
+    cli.abort();
+    let pid: u32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+    let alive = |pid: u32| std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().unwrap().success();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while alive(pid) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("命令行走了以后对方的命令还在跑");
+
+    remote.close();
+    host.shutdown().await;
+    guest.shutdown().await;
+}

@@ -202,6 +202,29 @@ impl RemoteHost {
         .map_err(|_| anyhow!("会话请求超时"))?
     }
 
+    /// 开一条新流并先发一条控制消息，后面怎么走由这条消息决定（跑命令、拉文件、推文件）
+    pub async fn open_stream(&self, first: &Msg) -> Result<(SendStream, RecvStream)> {
+        timeout(Duration::from_secs(20), async {
+            let (mut send, recv) = self.conn.open_bi().await?;
+            write_msg(&mut send, first).await?;
+            Ok((send, recv))
+        })
+        .await
+        .map_err(|_| anyhow!("对方没有响应"))?
+    }
+
+    /// 在对方电脑上跑一条命令，不开终端；用返回的流收输出和退出码。
+    /// 流被丢掉就等于取消，对方会结束这条命令。
+    pub async fn exec(&self, command: &str, cwd: Option<String>, timeout_secs: Option<u64>) -> Result<ExecStream> {
+        let (send, recv) = self.open_stream(&Msg::Exec { command: command.to_string(), cwd, timeout_secs }).await?;
+        Ok(ExecStream { _send: send, recv, seen: false })
+    }
+
+    /// 连接已经断了
+    pub fn is_closed(&self) -> bool {
+        self.conn.close_reason().is_some()
+    }
+
     pub fn path(&self) -> PathInfo {
         path::current(&self.conn)
     }
@@ -290,5 +313,60 @@ impl TermOutput {
                 None => Ok(None),
             };
         }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ExecEvent {
+    Stdout(Bytes),
+    Stderr(Bytes),
+    /// 命令结束：退出码；被信号结束时是信号编号；超时被结束时 timed_out 为真
+    Exit { code: Option<i32>, signal: Option<i32>, timed_out: bool },
+}
+
+/// 一条正在对方电脑上跑的命令。命令的输入是空的；丢掉这个值会取消命令。
+pub struct ExecStream {
+    /// 留着不关：丢掉它流就被重置，对方据此结束命令
+    _send: SendStream,
+    recv: RecvStream,
+    seen: bool,
+}
+
+impl ExecStream {
+    /// 下一段输出或者退出码；收到 Exit 以后不要再调
+    pub async fn next(&mut self) -> Result<ExecEvent> {
+        loop {
+            let frame = read_frame(&mut self.recv).await.map_err(|e| self.broken(Some(e)))?;
+            match frame {
+                Some(Frame::Data(d)) => {
+                    self.seen = true;
+                    match d.first() {
+                        Some(&crate::exec::STDOUT) => return Ok(ExecEvent::Stdout(d.slice(1..))),
+                        Some(&crate::exec::STDERR) => return Ok(ExecEvent::Stderr(d.slice(1..))),
+                        _ => continue,
+                    }
+                }
+                Some(Frame::Msg(Msg::ExecExit { code, signal, timed_out })) => return Ok(ExecEvent::Exit { code, signal, timed_out }),
+                Some(Frame::Msg(Msg::Error { message })) => bail!("{message}"),
+                Some(Frame::Msg(_)) => continue,
+                None => return Err(self.broken(None)),
+            }
+        }
+    }
+
+    fn broken(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
+        if self.seen {
+            anyhow!("连接中断，没收到命令的结果")
+        } else {
+            let cause = cause.map(|e| format!("（{e:#}）")).unwrap_or_default();
+            anyhow!("对方没有回应，它的 P2PCLI 可能版本太旧、还不支持远程执行，请更新{cause}")
+        }
+    }
+}
+
+impl Drop for ExecStream {
+    fn drop(&mut self) {
+        // 明确重置发送端：对方在这条流上读到错误就知道要取消命令
+        let _ = self._send.reset(0u32.into());
     }
 }

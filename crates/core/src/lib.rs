@@ -9,6 +9,7 @@ pub mod launchers;
 pub mod client;
 pub mod control;
 pub mod diag;
+pub mod exec;
 pub mod files;
 pub mod host;
 pub mod identity;

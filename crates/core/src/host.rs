@@ -5,7 +5,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
@@ -16,6 +16,7 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::PROTO_VERSION;
+use crate::files::Files;
 use crate::identity::DeviceInfo;
 use crate::proto::{Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
@@ -199,6 +200,8 @@ pub struct Host {
     sessions: Mutex<HashMap<u64, SessionEntry>>,
     next_id: AtomicU64,
     delegate: Arc<dyn HostDelegate>,
+    /// 传文件那一头，Files 建好以后挂上来：对面推文件到指定目录、拉文件时要用
+    files: OnceLock<Weak<Files>>,
 }
 
 impl Host {
@@ -220,7 +223,17 @@ impl Host {
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             delegate,
+            files: OnceLock::new(),
         }
+    }
+
+    /// 传文件那一头挂上来，只挂一次
+    pub(crate) fn attach_files(&self, files: &Arc<Files>) {
+        let _ = self.files.set(Arc::downgrade(files));
+    }
+
+    fn files(&self) -> Result<Arc<Files>> {
+        self.files.get().and_then(Weak::upgrade).ok_or_else(|| anyhow::anyhow!("文件传输还没准备好"))
     }
 
     pub fn set_info(&self, me: DeviceInfo) { *self.me.write().unwrap() = me; }
@@ -524,6 +537,28 @@ impl Host {
                 Msg::EndTerminal { session_id } => {
                     self.terminals.end(&owner, &session_id).await?;
                     write_msg(&mut send, &Msg::TerminalEnded).await?;
+                }
+                Msg::Exec { command, cwd, timeout_secs } => {
+                    info!(session, bytes = command.len(), "对面要在本机跑一条命令");
+                    debug!(session, %command, "远程执行");
+                    self.bump_terminals(session, 1);
+                    self.delegate.event(HostEvent::TerminalOpened { session });
+                    let result = crate::exec::serve(&mut recv, &mut send, command, cwd, timeout_secs).await;
+                    self.bump_terminals(session, -1);
+                    self.delegate.event(HostEvent::TerminalClosed { session });
+                    result?;
+                }
+                Msg::GetFiles { paths } => {
+                    let peer: EndpointId = owner.parse()?;
+                    let peer_name = self.sessions.lock().unwrap().get(&session).map(|e| e.summary.name.clone()).unwrap_or_default();
+                    let me = self.me.read().unwrap().clone();
+                    info!(session, count = paths.len(), "对面要拉走本机的文件");
+                    self.files()?.serve_get(&peer, &peer_name, &mut send, &mut recv, &me, paths).await?;
+                }
+                Msg::PutFiles { dest } => {
+                    let peer: EndpointId = owner.parse()?;
+                    info!(session, "对面要把文件推到本机指定目录");
+                    self.files()?.serve_put(&peer, &mut send, &mut recv, dest).await?;
                 }
                 Msg::Open { cols, rows, session_id, persistent } => {
                     let attachment = if persistent {

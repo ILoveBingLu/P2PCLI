@@ -592,6 +592,8 @@ async fn connect(
     };
     let conn_id = state.next();
     state.remotes.lock().unwrap().insert(conn_id, remote.clone());
+    // 命令行（p2pcli exec、pull）对这台设备办事时复用这条连接，不用再弹一次同意
+    state.node().adopt_remote(remote.clone());
     info!(conn_id, name = %remote.info.name, "已连上对方");
     let watch = remote.clone();
     tauri::async_runtime::spawn(async move {

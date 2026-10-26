@@ -93,6 +93,10 @@ pub struct Node {
     pub files: Arc<Files>,
     /// 配合对方 IPv6 直连发过几次包，排查和测试用
     pub punches: Arc<std::sync::atomic::AtomicU64>,
+    /// 命令行（跑命令、拉文件、推到指定目录）用的认证连接，连上一次留着复用
+    remotes: std::sync::Mutex<HashMap<EndpointId, Arc<RemoteHost>>>,
+    /// 同一时间只建一个这样的连接，免得并发的命令把对方的同意弹窗弹好几遍
+    connecting: tokio::sync::Mutex<()>,
 }
 
 impl Node {
@@ -260,6 +264,8 @@ impl Node {
             files,
             config: cfg,
             punches,
+            remotes: Default::default(),
+            connecting: Default::default(),
         }))
     }
 
@@ -494,6 +500,83 @@ impl Node {
     pub async fn send_files(&self, addr: EndpointAddr, peer_name: &str, paths: Vec<PathBuf>) -> Transfer {
         let transfer = self.files.begin(&addr.id, peer_name, &paths);
         self.files.run_send(&transfer, &self.endpoint, addr, &self.me, paths).await
+    }
+
+    /// 命令行要对一台设备办事（跑命令、拉文件、推到指定目录）：用现成的认证连接，没有就连一个。
+    /// 和在界面里点连接是同一套认证：用连上过时记住的配对密码，对方没勾受信就会弹窗问它。
+    pub async fn remote_for(&self, device: &KnownDevice) -> Result<Arc<RemoteHost>> {
+        let id: EndpointId = device.endpoint_id.parse().map_err(|_| anyhow!("设备公钥不对"))?;
+        if id == self.id() {
+            bail!("这是本机");
+        }
+        let _gate = self.connecting.lock().await;
+        let alive = self.remotes.lock().unwrap().get(&id).filter(|r| !r.is_closed()).cloned();
+        if let Some(remote) = alive {
+            return Ok(remote);
+        }
+        let connected = match &device.code {
+            Some(code) => self.connect_code(code, None).await,
+            None => self.connect_endpoint(id, None).await,
+        };
+        let remote = match connected {
+            Ok(remote) => Arc::new(remote),
+            Err(ConnectError::Rejected(RejectCode::NeedPassword | RejectCode::BadPassword)) => bail!(
+                "需要 {} 的配对密码：先在 P2PCLI 里连一次这台设备并输入密码，或者让它在弹窗里勾选“以后不用确认”",
+                device.name
+            ),
+            Err(ConnectError::Rejected(code)) => bail!("{}（{}）", code.describe(), device.name),
+            Err(ConnectError::Other(e)) => return Err(e),
+        };
+        self.remotes.lock().unwrap().insert(id, remote.clone());
+        Ok(remote)
+    }
+
+    /// 把一条已经连好的认证连接交给命令行复用（比如界面里刚连上的）
+    pub fn adopt_remote(&self, remote: Arc<RemoteHost>) {
+        if let Ok(id) = remote.info.endpoint_id.parse::<EndpointId>() {
+            self.remotes.lock().unwrap().insert(id, remote);
+        }
+    }
+
+    /// 在后台把本机的文件推到对方电脑上指定的目录，马上返回传输编号
+    pub fn start_put(self: &Arc<Self>, device: &KnownDevice, paths: Vec<PathBuf>, dest: String) -> Result<String> {
+        let id: EndpointId = device.endpoint_id.parse().map_err(|_| anyhow!("设备公钥不对"))?;
+        if id == self.id() {
+            bail!("这是本机");
+        }
+        let transfer = self.files.begin(&id, &device.name, &paths);
+        let (node, device, t) = (self.clone(), device.clone(), transfer.clone());
+        tokio::spawn(async move {
+            match node.remote_for(&device).await {
+                Ok(remote) => {
+                    node.files.run_put(&t, &remote, &node.me, paths, dest).await;
+                }
+                Err(e) => node.files.fail(&t, format!("{e:#}")),
+            }
+        });
+        Ok(transfer)
+    }
+
+    /// 在后台把对方电脑上的文件拉到本机的 to 目录，马上返回传输编号
+    pub fn start_pull(self: &Arc<Self>, device: &KnownDevice, remote_paths: Vec<String>, to: PathBuf) -> Result<String> {
+        let id: EndpointId = device.endpoint_id.parse().map_err(|_| anyhow!("设备公钥不对"))?;
+        if id == self.id() {
+            bail!("这是本机");
+        }
+        if remote_paths.is_empty() {
+            bail!("没写要拉哪些文件");
+        }
+        let transfer = self.files.begin_pull(&id, &device.name, &remote_paths);
+        let (node, device, t) = (self.clone(), device.clone(), transfer.clone());
+        tokio::spawn(async move {
+            match node.remote_for(&device).await {
+                Ok(remote) => {
+                    node.files.run_pull(&t, &remote, remote_paths, to).await;
+                }
+                Err(e) => node.files.fail(&t, format!("{e:#}")),
+            }
+        });
+        Ok(transfer)
     }
 
     /// 按公钥连：局域网里发现的设备，或者连接历史里正好在局域网在线的设备。
