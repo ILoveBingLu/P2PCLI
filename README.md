@@ -61,6 +61,14 @@ p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失
 
 `send` 不带 `--to` 时只往对方的收件目录放，不盖已有的文件，对方认识这台设备就直接收。`send --to`、`pull`、`exec` 能碰对方电脑上任意位置，所以走和开终端一样的认证：配对密码对、对方点过同意（或勾了以后不用确认）才行，连上后复用同一条连接。第一次要先在界面里连一次，让软件记住配对密码；对方没勾受信时每次新连接都要它点同意。被拉走、被写入文件时，对方的传输记录和提醒里看得到，跑命令时标题栏会算一个正在用的终端。两边都要更新到支持这些命令的版本，对方版本太旧会提示更新。
 
+多机互动：软件启动时会自动把一份使用说明（Agent Skills 格式的 `SKILL.md`）放进本机已安装的 AI 的技能目录，AI 新开的会话就知道有 `p2pcli`、什么时候该用、出错怎么办，不用用户教：
+
+- Claude Code：`~/.claude/skills/p2pcli/`（`CLAUDE_CONFIG_DIR` 换了位置就跟着换）
+- Codex、Gemini CLI、Cursor、OpenCode、Copilot CLI、Kimi CLI：通用的 `~/.agents/skills/p2pcli/`
+- Qwen Code：`~/.qwen/skills/p2pcli/`；CodeBuddy：`~/.codebuddy/skills/p2pcli/`
+
+只往已经存在的 AI 配置目录里写，不替没装的 AI 建目录；只写一个叫 `p2pcli` 的文件夹，不改 `CLAUDE.md`、`AGENTS.md`。文件里带 `managed-by: p2pcli` 标记，软件升级时只覆盖带标记的，别人放的同名技能不动。设置 → 多机互动 里能看到检测到哪些 AI、各自装没装，可以单个或全部安装、更新、删除，也能关掉“启动时自动安装和更新”（关掉只是不再自动动，已装的不会被删；开发版也能手动装，只是不自动装）。已经开着的 AI 窗口要重开才会读到。说明的原文在 `app/src-tauri/src/p2pcli-skill.md`，加了命令或改了用法要同步改它。
+
 `exec` 细节：
 
 - 命令交给对方的 shell 解析（macOS、Linux 用登录 shell，Windows 用 PowerShell），引号自己写好，用法同 ssh
