@@ -235,7 +235,8 @@
   background: currentColor;
 }
 .status-dot[data-kind="ipv6"],
-.status-dot[data-kind="ipv4"] {
+.status-dot[data-kind="ipv4"],
+.status-dot[data-kind="local"] {
   background: var(--success);
 }
 .status-dot[data-kind="relay"] {
@@ -618,7 +619,8 @@
   height: 11px;
 }
 .presence-label[data-kind="ipv6"],
-.presence-label[data-kind="ipv4"] {
+.presence-label[data-kind="ipv4"],
+.presence-label[data-kind="local"] {
   color: var(--success);
 }
 .presence-label[data-kind="relay"] {
@@ -1923,4 +1925,18 @@ img.agent-icon {
 }
 .checkbox:not([data-selected="true"]):not([data-indeterminate="true"]) .checkbox__control {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 28%, transparent);
+}
+
+/* 底部栏：本机自己的终端没有网络线路可看，只标一个“本机” */
+.terminal-status-local {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.terminal-status-local svg {
+  width: 12px;
+  height: 12px;
 }

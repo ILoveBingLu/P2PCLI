@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, LoaderCircle, Pencil, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, LoaderCircle, Monitor, Pencil, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,8 @@ import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 
 const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
+/** 本机那一行第一次出现时默认展开，之后听用户的 */
+const LOCAL_SEEDED_KEY = "p2pcli.sidebar.local-seeded";
 
 export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onSessionsLocalChange, onPendingOpen }: {
   ov: Overview | null;
@@ -59,7 +61,21 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       // If storage is unavailable, expansion still works for this session.
     }
   }, [expanded]);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["nearby", "history"]));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["local", "nearby", "history"]));
+  // 本机自己：常驻的一条连接，会话和终端都和远程设备一样用
+  const local = ov?.local ?? null;
+  const localId = local?.info.endpoint_id ?? null;
+  const localTarget: SessionTarget | null = local ? { connId: local.conn_id, info: local.info, code: null } : null;
+  useEffect(() => {
+    if (!localId) return;
+    try {
+      if (localStorage.getItem(LOCAL_SEEDED_KEY)) return;
+      localStorage.setItem(LOCAL_SEEDED_KEY, "1");
+    } catch {
+      // 读不了存储就每次都展开，也不碍事
+    }
+    setExpanded((keys) => new Set([...keys, localId]));
+  }, [localId]);
   const remarks = useRemarks();
   const [remarkTarget, setRemarkTarget] = useState<{ endpointId: string; name: string; remark: string } | null>(null);
   useEffect(() => {
@@ -71,9 +87,9 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   const activeDevice = sessionTarget?.info.endpoint_id ?? tabs.find((tab) => tab.key === activeKey)?.info.endpoint_id;
   useEffect(() => {
     if (activeDevice) {
-      setExpandedSections((keys) => new Set([...keys, "history"]));
+      setExpandedSections((keys) => new Set([...keys, activeDevice === localId ? "local" : "history"]));
     }
-  }, [activeDevice]);
+  }, [activeDevice, localId]);
   // The store preserves device order; duplicate codes use the most recently used entry.
   const seen = new Set<string>();
   const devices = (ov?.recent ?? []).filter((device) => {
@@ -158,6 +174,12 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         { id: "copy", label: "复制设备码", icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
         { id: "forget", label: "从连接历史移除", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => void forget(endpointId) },
       ];
+    } else if (kind === "local") {
+      if (!localTarget) return;
+      actions = [
+        { id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(localTarget) },
+        { id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged },
+      ];
     } else if (kind === "nearby") {
       const device = nearby.find((d) => d.endpoint_id === endpointId);
       if (!device) return;
@@ -195,6 +217,56 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       <div className="connection-sidebar-inner">
         <Accordion allowsMultipleExpanded expandedKeys={expandedSections}
           onExpandedChange={(keys) => setExpandedSections(new Set([...keys].map(String)))}>
+        {local && localTarget && localId && (
+          <Accordion.Item id="local" className="recent-section">
+            <Accordion.Heading level={2} id="local-title">
+              <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
+                <Monitor className="size-3.5 text-muted-foreground" />
+                <span className="flex-1">本机</span>
+                <Accordion.Indicator className="size-3.5" />
+              </Accordion.Trigger>
+            </Accordion.Heading>
+            <Accordion.Panel>
+              <Accordion allowsMultipleExpanded expandedKeys={expanded}
+                onExpandedChange={(keys) => setExpanded(new Set([...keys].map(String)))}>
+                <Accordion.Item id={localId} className="py-1">
+                  <Accordion.Heading className="flex items-stretch" data-menu={`local:${localId}`}>
+                    <Button slot={null} variant="ghost"
+                      className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-lg px-2 py-2 text-xs"
+                      aria-label={`查看本机的会话 ${local.info.name}`}
+                      title="在本机开终端、查看后台会话"
+                      onPress={() => onShowSessions(localTarget)}>
+                      {deviceIcon(localId, local.info.platform)}
+                      <span className="min-w-0 flex-1 truncate text-left">{local.info.name}</span>
+                      <span className="presence-label" data-kind="local">本机</span>
+                    </Button>
+                    <Accordion.Trigger className="w-8 min-w-0 flex-none justify-center rounded-lg p-2"
+                      aria-label={`${expanded.has(localId) ? "收起" : "展开"}本机的会话`}>
+                      <Accordion.Indicator className="size-3.5" />
+                    </Accordion.Trigger>
+                  </Accordion.Heading>
+                  <Accordion.Panel>
+                    <div className="pb-2">
+                      <div className="ml-4 min-w-0 border-l border-border pl-2">
+                        {open && expandedSections.has("local") && expanded.has(localId) && <DeviceSessions
+                          key="local" target={localTarget}
+                          tabs={tabs.filter((tab) => tab.info.endpoint_id === localId)}
+                          endpointId={localId}
+                          snapshot={liveSessions[local.conn_id]}
+                          activeKey={sessionTarget ? null : activeKey} busy={busy}
+                          onChangeSessions={(sessions) => onSessionsLocalChange(local.conn_id, sessions)}
+                          onConnectOpen={() => onOpenSession(localTarget)}
+                          onOpen={onOpenSession} onSelect={onSelectTab}
+                          onEnded={(id) => onSessionEnded(localId, id)}
+                          openMenu={menu.open} />}
+                      </div>
+                    </div>
+                  </Accordion.Panel>
+                </Accordion.Item>
+              </Accordion>
+            </Accordion.Panel>
+          </Accordion.Item>
+        )}
         <Accordion.Item id="nearby" className="recent-section">
           <Accordion.Heading level={2} id="nearby-title" className="grid grid-cols-[max-content_1.5rem_minmax(0,1fr)] items-center gap-2">
             <Accordion.Trigger className="col-span-3 col-start-1 row-start-1 grid grid-cols-subgrid min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">

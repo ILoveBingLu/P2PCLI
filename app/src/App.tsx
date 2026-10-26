@@ -285,6 +285,8 @@ export default function App() {
   const liveConnectionKey = [...new Set([
     ...tabs.filter((tab) => tab.state !== "closed").map((tab) => tab.connId),
     ...(sessionTarget ? [sessionTarget.connId] : []),
+    // 本机那条是常驻的：侧边栏的“本机”随时要显示它的会话
+    ...(ov?.local ? [ov.local.conn_id] : []),
   ])].sort((a, b) => a - b).join(",");
   const updateLiveSessions = useCallback((connId: number, sessions: TerminalSession[]) => {
     setLiveSessions((current) => ({

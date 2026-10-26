@@ -163,6 +163,8 @@ pub enum PathKind {
     Ipv6,
     Ipv4,
     Relay,
+    /// 本机自己，不走网络
+    Local,
     Unknown,
 }
 
@@ -172,6 +174,7 @@ impl PathKind {
             PathKind::Ipv6 => "IPv6 直连",
             PathKind::Ipv4 => "IPv4 直连",
             PathKind::Relay => "中继",
+            PathKind::Local => "本机",
             PathKind::Unknown => "连接中",
         }
     }
@@ -228,6 +231,21 @@ pub struct ConnStats {
     pub recv_bytes: u64,
     pub sent_packets: u64,
     pub lost_packets: u64,
+}
+
+impl ConnStats {
+    /// 本机自己没有网络可统计
+    pub fn local() -> Self {
+        ConnStats {
+            path: PathInfo { kind: PathKind::Local, rtt_ms: None, remote: None },
+            local: None,
+            public_v4: None,
+            sent_bytes: 0,
+            recv_bytes: 0,
+            sent_packets: 0,
+            lost_packets: 0,
+        }
+    }
 }
 
 pub fn stats(conn: &Connection, endpoint: &Endpoint) -> ConnStats {

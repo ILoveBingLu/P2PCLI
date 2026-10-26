@@ -512,6 +512,11 @@ impl Node {
         self.files.run_send(&transfer, &self.endpoint, addr, &self.me, paths).await
     }
 
+    /// 本机自己当作一条“连接”：不走网络，终端、会话、AI 识别都用本机的会话管理器，和连远程设备的行为一样
+    pub async fn local_remote(&self) -> RemoteHost {
+        RemoteHost::local(self.host.clone(), &self.me, self.id().to_string()).await
+    }
+
     /// 命令行要对一台设备办事（跑命令、拉文件、推到指定目录）：用现成的认证连接，没有就连一个。
     /// 和在界面里点连接是同一套认证：用连上过时记住的配对密码，对方没勾受信就会弹窗问它。
     pub async fn remote_for(&self, device: &KnownDevice) -> Result<Arc<RemoteHost>> {
@@ -642,7 +647,7 @@ impl Node {
     /// 直接用对方公钥（加可选地址）连，开发和测试用
     pub async fn connect_addr(&self, addr: EndpointAddr, password: Option<String>) -> Result<RemoteHost, ConnectError> {
         let remote = client::connect(&self.endpoint, addr, &self.me, password).await?;
-        self.remember_connected(remote.connection().remote_id(), &remote);
+        self.remember_connected(remote.peer_id(), &remote);
         Ok(remote)
     }
 

@@ -1245,3 +1245,93 @@ async fn connected_peer_comes_back_with_approval_only() {
         n.shutdown().await;
     }
 }
+
+/// 本机自己当作一条连接：不走网络，没有会话管理器（tmux）时新开的退回普通终端，照样能跑命令、拿到退出码
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn local_terminal_works_without_network_or_tmux() {
+    use p2pcli_core::path::PathKind;
+    let node = Node::start(
+        NodeConfig {
+            data_dir: temp_dir("local-term"),
+            device_name: Some("本机".into()),
+            offline: true,
+            // 故意指向不存在的会话管理器，逼它退回普通终端
+            session_program: Some("/不存在/tmux".into()),
+            ..Default::default()
+        },
+        TestDelegate::new(),
+    )
+    .await
+    .unwrap();
+    let local = node.local_remote().await;
+    assert!(local.is_local() && !local.is_closed());
+    assert_eq!(local.info.endpoint_id, node.id().to_string());
+    assert_eq!(local.info.name, "本机");
+    assert_eq!(local.path().kind, PathKind::Local);
+    assert_eq!(local.stats(&node.endpoint).sent_bytes, 0);
+    // 本机自己没有网络通道：跑命令、拉文件这些远程才有的功能要明确报错，不能卡住
+    assert!(local.exec("true", None, None).await.is_err());
+
+    let (mut input, mut output) = local.attach_terminal(None, 100, 30).await.expect("本机终端应该能开");
+    assert!(!output.shell.is_empty());
+    input.write(b"echo local-$((2+3)); exit 4\r").await.unwrap();
+    let mut text = String::new();
+    let code = loop {
+        match tokio::time::timeout(Duration::from_secs(20), output.next()).await.expect("本机终端没反应").unwrap() {
+            Some(TermEvent::Output(d)) => text.push_str(&String::from_utf8_lossy(&d)),
+            Some(TermEvent::Exit(c)) => break c,
+            None => panic!("没收到退出码"),
+        }
+    };
+    assert!(text.contains("local-5"), "输出：{text}");
+    assert_eq!(code, Some(4));
+
+    // 输入关掉以后再写会报错，不会卡住或崩
+    input.close();
+    assert!(input.write(b"x").await.is_err());
+    node.shutdown().await;
+}
+
+/// 本机的后台会话：新建、出现在列表里、能重新接回、能结束。要真的起 tmux，默认不跑
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux on macOS/Linux"]
+async fn local_persistent_session_lists_reattaches_and_ends() {
+    let node = Node::start(
+        NodeConfig {
+            data_dir: temp_dir("local-tmux"),
+            device_name: Some("本机".into()),
+            offline: true,
+            // 系统里没有 tmux 时，用环境变量 P2PCLI_TMUX 指向软件打包的那份（开发时是 target/debug/tmux）
+            session_program: std::env::var_os("P2PCLI_TMUX").map(Into::into),
+            ..Default::default()
+        },
+        TestDelegate::new(),
+    )
+    .await
+    .unwrap();
+    let local = node.local_remote().await;
+    let (mut input, mut output) = local.attach_terminal(None, 100, 30).await.expect("本机后台会话应该能开");
+    let id = output.session_id.clone();
+    assert!(!id.is_empty(), "要拿到后台会话编号");
+    input.write(b"echo first-$((3+4))\r").await.unwrap();
+    read_until(&mut input, &mut output, "first-7").await;
+    let sessions = local.list_terminals().await.unwrap();
+    assert!(sessions.iter().any(|s| s.id == id), "新会话要出现在列表里：{sessions:?}");
+
+    // 断开再接回同一个会话：之前的输出还在
+    input.close();
+    drop(output);
+    let (mut input, mut output) = local.attach_terminal(Some(id.clone()), 100, 30).await.expect("应该能接回");
+    assert_eq!(output.session_id, id);
+    input.write(b"echo again-$((5+6))\r").await.unwrap();
+    read_until(&mut input, &mut output, "again-11").await;
+
+    input.close();
+    drop(output);
+    local.end_terminal(id.clone()).await.unwrap();
+    let sessions = local.list_terminals().await.unwrap();
+    assert!(sessions.iter().all(|s| s.id != id), "结束以后不该还在列表里");
+    node.shutdown().await;
+}

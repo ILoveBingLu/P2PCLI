@@ -251,6 +251,8 @@ struct AppState {
     remotes: Mutex<HashMap<u64, Arc<RemoteHost>>>,
     terms: Mutex<HashMap<u64, mpsc::UnboundedSender<TermCmd>>>,
     next: AtomicU64,
+    /// 本机自己那条常驻连接的编号：启动时建好，一直在 remotes 里，侧边栏的“本机”用它开终端、读会话
+    local_conn: AtomicU64,
 }
 
 impl AppState {
@@ -276,8 +278,17 @@ struct TrustedView {
     device: TrustedDevice,
 }
 
+/// 侧边栏里的“本机”：常驻连接的编号和本机的信息
+#[derive(Serialize)]
+struct LocalView {
+    conn_id: u64,
+    info: RemoteInfo,
+}
+
 #[derive(Serialize)]
 struct Overview {
+    /// 本机自己，用它开本地终端
+    local: Option<LocalView>,
     name: String,
     platform: String,
     endpoint_id: String,
@@ -308,7 +319,17 @@ fn overview(state: State<'_, AppState>) -> Overview {
         None => serde_json::json!({ "state": "none" }),
         Some(r) => serde_json::to_value(r.status()).unwrap_or_default(),
     };
+    let local = {
+        let conn_id = state.local_conn.load(Ordering::Relaxed);
+        state.remotes.lock().unwrap().get(&conn_id).map(|r| {
+            // 设备名可以在设置里改，这里取最新的
+            let mut info = r.info.clone();
+            info.name = node.me.name.clone();
+            LocalView { conn_id, info }
+        })
+    };
     Overview {
+        local,
         name: node.me.name.clone(),
         platform: node.me.platform.clone(),
         endpoint_id: node.id().to_string(),
@@ -747,6 +768,10 @@ async fn connect(
 
 #[tauri::command]
 fn disconnect(state: State<'_, AppState>, conn_id: u64) {
+    // 本机那条是常驻的：标签都关了它也留着，侧边栏的“本机”还要用
+    if conn_id == state.local_conn.load(Ordering::Relaxed) {
+        return;
+    }
     if let Some(r) = state.remotes.lock().unwrap().remove(&conn_id) {
         r.close();
     }
@@ -1130,7 +1155,17 @@ pub fn run() {
                 remotes: Mutex::new(HashMap::new()),
                 terms: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
+                local_conn: AtomicU64::new(0),
             });
+
+            // 本机自己也是一台能开终端的设备：建一条常驻连接，不走网络
+            {
+                let state = app.state::<AppState>();
+                let local = tauri::async_runtime::block_on(state.node().local_remote());
+                let conn_id = state.next();
+                state.remotes.lock().unwrap().insert(conn_id, Arc::new(local));
+                state.local_conn.store(conn_id, Ordering::Relaxed);
+            }
 
             update::auto_install_for_test(app.handle());
 
