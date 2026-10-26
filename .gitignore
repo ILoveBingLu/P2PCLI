@@ -25,3 +25,4 @@ devices.db*
 .idea/
 .playwright-mcp/
 .env*
+.workbuddy/
