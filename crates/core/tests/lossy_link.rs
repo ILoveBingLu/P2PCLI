@@ -1,0 +1,334 @@
+//! 在一条模拟的“跨境链路”上比较 QUIC 拥塞控制：延迟、丢包、带宽上限都在内存里重现，
+//! 两头是真的 iroh 端点，走真的 QUIC。链路是自定义传输（不经过真实网卡），所以没有别的路能绕过去。
+//! 默认不跑（要两分钟左右）：
+//!   cargo test -p p2pcli-core --test lossy_link -- --ignored --nocapture
+
+use std::collections::BTreeMap;
+use std::io;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use bytes::Bytes;
+use iroh::endpoint::transports::{CustomEndpoint, CustomSender, CustomTransport, RecvInfo, Transmit};
+use iroh::endpoint::{PathId, QuicTransportConfig, presets};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr};
+use iroh_base::CustomAddr;
+use noq_proto::congestion::{Bbr3Config, CubicConfig};
+use tokio::sync::mpsc;
+use tokio::time::{Instant, sleep, sleep_until};
+
+const ALPN: &[u8] = b"bench/1";
+/// 自定义传输的编号，随便挑一个不和别的撞的
+const LINK_TRANSPORT_ID: u64 = 0x7e57;
+/// 每组测多久；前面几秒是慢启动，算稳定速率时去掉
+const RUN: Duration = Duration::from_secs(15);
+const WARMUP: Duration = Duration::from_secs(4);
+
+#[derive(Clone, Copy, Debug)]
+struct Link {
+    one_way: Duration,
+    loss: f64,
+    rate_bps: u64,
+    /// 队列里最多排多久，再多就丢尾（像路由器的缓冲）
+    queue_limit: Duration,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Cc {
+    Cubic,
+    Bbr3,
+    /// 产品里实际用的：按链路延迟自动选 Cubic 或 BBR3
+    Adaptive,
+}
+
+fn addr_of(id: EndpointId) -> CustomAddr {
+    CustomAddr::from((LINK_TRANSPORT_ID, &id.as_bytes()[..]))
+}
+
+fn id_of(addr: &CustomAddr) -> io::Result<EndpointId> {
+    let key: &[u8; 32] = addr.data().try_into().map_err(|_| io::Error::other("地址长度不对"))?;
+    EndpointId::from_bytes(key).map_err(|_| io::Error::other("公钥不对"))
+}
+
+#[derive(Debug)]
+struct Packet {
+    data: Bytes,
+    from: CustomAddr,
+}
+
+/// 排队等着投递的包：什么时候到、包本身、投给谁
+type Due = (Instant, Packet, mpsc::Sender<Packet>);
+
+/// 一个方向的链路：这个方向上所有连接共用同一份带宽和队列，包按进队的顺序投递
+#[derive(Debug)]
+struct Direction {
+    /// 链路下一次空出来的时间：包要按带宽一个接一个发
+    link_free: Mutex<Instant>,
+    delay: mpsc::UnboundedSender<Due>,
+}
+
+/// 内存里的网络：谁发给谁，都经过同一条带损伤的链路
+#[derive(Debug, Clone)]
+struct Net {
+    inboxes: Arc<Mutex<BTreeMap<EndpointId, mpsc::Sender<Packet>>>>,
+    /// (发件人, 收件人) 各自一个方向
+    directions: Arc<Mutex<BTreeMap<(EndpointId, EndpointId), Arc<Direction>>>>,
+    link: Link,
+}
+
+impl Net {
+    fn new(link: Link) -> Self {
+        Net { inboxes: Default::default(), directions: Default::default(), link }
+    }
+
+    /// 取这个方向的链路；第一次用到时建，并起一个按序投递的任务
+    fn direction(&self, from: EndpointId, to: EndpointId) -> Arc<Direction> {
+        self.directions
+            .lock()
+            .unwrap()
+            .entry((from, to))
+            .or_insert_with(|| {
+                // 到期时间只会往后走，所以先进先出，不会把包的顺序打乱
+                // （每个包单独起任务延迟投递会乱序，高速率下一堆乱序包会让 QUIC 误以为丢包）
+                let (delay, mut due) = mpsc::unbounded_channel::<Due>();
+                tokio::spawn(async move {
+                    while let Some((at, packet, inbox)) = due.recv().await {
+                        sleep_until(at).await;
+                        let _ = inbox.try_send(packet);
+                    }
+                });
+                Arc::new(Direction { link_free: Mutex::new(Instant::now()), delay })
+            })
+            .clone()
+    }
+
+    fn transport(&self, id: EndpointId) -> Arc<LinkTransport> {
+        let (tx, rx) = mpsc::channel(1 << 17);
+        self.inboxes.lock().unwrap().insert(id, tx);
+        Arc::new(LinkTransport { id, net: self.clone(), rx: Mutex::new(Some(rx)) })
+    }
+}
+
+#[derive(Debug)]
+struct LinkTransport {
+    id: EndpointId,
+    net: Net,
+    rx: Mutex<Option<mpsc::Receiver<Packet>>>,
+}
+
+impl CustomTransport for LinkTransport {
+    fn bind(&self) -> io::Result<Box<dyn CustomEndpoint>> {
+        let rx = self.rx.lock().unwrap().take().ok_or_else(|| io::Error::other("已经绑过了"))?;
+        Ok(Box::new(LinkEndpoint {
+            id: self.id,
+            net: self.net.clone(),
+            rx,
+            local: n0_watcher::Watchable::new(vec![addr_of(self.id)]),
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct LinkEndpoint {
+    id: EndpointId,
+    net: Net,
+    rx: mpsc::Receiver<Packet>,
+    local: n0_watcher::Watchable<Vec<CustomAddr>>,
+}
+
+impl CustomEndpoint for LinkEndpoint {
+    fn watch_local_addrs(&self) -> n0_watcher::Direct<Vec<CustomAddr>> {
+        self.local.watch()
+    }
+
+    fn create_sender(&self) -> Arc<dyn CustomSender> {
+        Arc::new(LinkSender { id: self.id, net: self.net.clone() })
+    }
+
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context,
+        bufs: &mut [io::IoSliceMut<'_>],
+        metas: &mut [noq_udp::RecvMeta],
+        recv_infos: &mut [RecvInfo],
+    ) -> Poll<io::Result<usize>> {
+        let n = bufs.len();
+        if n == 0 {
+            return Poll::Ready(Ok(0));
+        }
+        let mut packets = Vec::new();
+        match self.rx.poll_recv_many(cx, &mut packets, n) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(0) => return Poll::Ready(Err(io::Error::other("收件箱关了"))),
+            Poll::Ready(_) => {}
+        }
+        let mut count = 0;
+        for (i, packet) in packets.into_iter().enumerate() {
+            if bufs[i].len() < packet.data.len() {
+                break;
+            }
+            bufs[i][..packet.data.len()].copy_from_slice(&packet.data);
+            recv_infos[i] = RecvInfo::new(packet.from, Some(addr_of(self.id)));
+            metas[i].len = packet.data.len();
+            metas[i].stride = packet.data.len();
+            count += 1;
+        }
+        if count > 0 { Poll::Ready(Ok(count)) } else { Poll::Pending }
+    }
+}
+
+#[derive(Debug)]
+struct LinkSender {
+    id: EndpointId,
+    net: Net,
+}
+
+impl CustomSender for LinkSender {
+    fn is_valid_send_addr(&self, addr: &CustomAddr) -> bool {
+        addr.id() == LINK_TRANSPORT_ID
+    }
+
+    fn poll_send(&self, _cx: &mut Context, dst: &CustomAddr, _src: Option<&CustomAddr>, transmit: &Transmit<'_>) -> Poll<io::Result<()>> {
+        let to = id_of(dst)?;
+        let Some(inbox) = self.net.inboxes.lock().unwrap().get(&to).cloned() else {
+            return Poll::Ready(Err(io::Error::other("没有这个收件人")));
+        };
+        let link = self.net.link;
+        let direction = self.net.direction(self.id, to);
+        let segment = transmit.segment_size.unwrap_or(transmit.contents.len()).max(1);
+        for chunk in transmit.contents.chunks(segment) {
+            if rand::random::<f64>() < link.loss {
+                continue;
+            }
+            let now = Instant::now();
+            let (start, tx_time) = {
+                let mut free = direction.link_free.lock().unwrap();
+                let start = (*free).max(now);
+                if start - now > link.queue_limit {
+                    continue; // 队列满了，丢尾
+                }
+                let tx_time = Duration::from_secs_f64(chunk.len() as f64 * 8.0 / link.rate_bps as f64);
+                *free = start + tx_time;
+                (start, tx_time)
+            };
+            let deliver_at = start + tx_time + link.one_way;
+            let packet = Packet { data: Bytes::copy_from_slice(chunk), from: addr_of(self.id) };
+            let _ = direction.delay.send((deliver_at, packet, inbox.clone()));
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+fn transport_config(cc: Cc) -> QuicTransportConfig {
+    match cc {
+        Cc::Cubic => QuicTransportConfig::builder().congestion_controller_factory(Arc::new(CubicConfig::default())).build(),
+        Cc::Bbr3 => QuicTransportConfig::builder().congestion_controller_factory(Arc::new(Bbr3Config::default())).build(),
+        Cc::Adaptive => p2pcli_core::quic::transport_config(),
+    }
+}
+
+async fn endpoint(net: &Net, cc: Cc) -> Endpoint {
+    let key = SecretKey::generate();
+    Endpoint::builder(presets::N0)
+        .secret_key(key.clone())
+        .alpns(vec![ALPN.to_vec()])
+        .relay_mode(RelayMode::Disabled)
+        .clear_address_lookup()
+        .clear_ip_transports()
+        .add_custom_transport(net.transport(key.public()))
+        .transport_config(transport_config(cc))
+        .bind()
+        .await
+        .unwrap()
+}
+
+/// 一组：客户端往服务端灌数据 RUN 这么久，返回稳定阶段的速率（字节每秒）和结束时用的算法
+async fn measure(cc: Cc, link: Link) -> (f64, &'static str) {
+    let net = Net::new(link);
+    let (server, client) = (endpoint(&net, cc).await, endpoint(&net, cc).await);
+    let received = Arc::new(AtomicU64::new(0));
+    let sink = {
+        let (server, received) = (server.clone(), received.clone());
+        tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().accept().unwrap().await.unwrap();
+            let mut recv = conn.accept_uni().await.unwrap();
+            let mut buf = vec![0u8; 256 * 1024];
+            while let Ok(Some(n)) = recv.read(&mut buf).await {
+                received.fetch_add(n as u64, Ordering::Relaxed);
+            }
+        })
+    };
+
+    let addr = EndpointAddr::from_parts(server.id(), [TransportAddr::Custom(addr_of(server.id()))]);
+    let conn = client.connect(addr, ALPN).await.unwrap();
+    let mut send = conn.open_uni().await.unwrap();
+    let chunk = vec![7u8; 256 * 1024];
+    let started = Instant::now();
+    let (mut at_warmup, mut warm_at) = (None::<u64>, started);
+    while started.elapsed() < RUN {
+        send.write_all(&chunk).await.unwrap();
+        if at_warmup.is_none() && started.elapsed() >= WARMUP {
+            at_warmup = Some(received.load(Ordering::Relaxed));
+            warm_at = Instant::now();
+        }
+    }
+    let end_bytes = received.load(Ordering::Relaxed);
+    let end_at = Instant::now();
+    let algorithm = conn
+        .congestion_state(PathId::ZERO)
+        .and_then(p2pcli_core::quic::algorithm)
+        .unwrap_or("?");
+    sink.abort();
+    conn.close(0u32.into(), b"done");
+    sleep(Duration::from_millis(100)).await;
+    server.close().await;
+    client.close().await;
+    ((end_bytes - at_warmup.unwrap_or(0)) as f64 / (end_at - warm_at).as_secs_f64(), algorithm)
+}
+
+fn mbps(b: f64) -> String {
+    format!("{:.1} Mbps", b * 8.0 / 1e6)
+}
+
+/// 丢包率从 0 扫到 3%：同一条跨境链路上三种做法的速度
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "几分钟的对比实验，手动跑，加 --test-threads=1"]
+async fn congestion_control_on_a_lossy_long_link() {
+    let base = Link { one_way: Duration::from_millis(53), loss: 0.0, rate_bps: 100_000_000, queue_limit: Duration::from_millis(100) };
+    println!("\n链路：往返 {} ms，瓶颈带宽 {} Mbps，队列最多 {} ms；每组跑 {} 秒，去掉前 {} 秒慢启动",
+        base.one_way.as_millis() * 2, base.rate_bps / 1_000_000, base.queue_limit.as_millis(), RUN.as_secs(), WARMUP.as_secs());
+    println!("{:>8}  {:>14}  {:>14}  {:>20}", "丢包率", "Cubic（以前）", "BBR3", "自适应（现在）");
+    for loss in [0.0, 0.005, 0.013, 0.03] {
+        let link = Link { loss, ..base };
+        let (cubic, _) = measure(Cc::Cubic, link).await;
+        let (bbr, _) = measure(Cc::Bbr3, link).await;
+        let (adaptive, chose) = measure(Cc::Adaptive, link).await;
+        println!("{:>7.1}%  {:>14}  {:>14}  {:>14}（{chose}）", loss * 100.0, mbps(cubic), mbps(bbr), mbps(adaptive));
+        assert_eq!(chose, "bbr3", "往返 106 ms 的链路应该选 BBR3");
+    }
+}
+
+/// 常见的几种链路：自适应不能比 Cubic 差，该用 BBR3 的链路上要接近 BBR3
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "几分钟的对比实验，手动跑，加 --test-threads=1"]
+async fn congestion_control_on_typical_links() {
+    let q = Duration::from_millis(100);
+    let cases = [
+        ("局域网 2ms 300M 无丢包", Link { one_way: Duration::from_millis(1), loss: 0.0, rate_bps: 300_000_000, queue_limit: q }, "cubic"),
+        ("局域网 2ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(1), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }, "cubic"),
+        ("同城 10ms 300M 无丢包", Link { one_way: Duration::from_millis(5), loss: 0.0, rate_bps: 300_000_000, queue_limit: q }, "cubic"),
+        ("国内宽带 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q }, "bbr3"),
+        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }, "bbr3"),
+        ("跨境 106ms 50M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 50_000_000, queue_limit: q }, "bbr3"),
+    ];
+    println!("\n{:<28}{:>14}{:>14}{:>20}", "链路", "Cubic（以前）", "BBR3", "自适应（现在）");
+    for (name, link, expect) in cases {
+        let (a, _) = measure(Cc::Cubic, link).await;
+        let (b, _) = measure(Cc::Bbr3, link).await;
+        let (c, chose) = measure(Cc::Adaptive, link).await;
+        println!("{name:<28}{:>14}{:>14}{:>14}（{chose}）", mbps(a), mbps(b), mbps(c));
+        assert_eq!(chose, expect, "{name} 选错了算法");
+    }
+}

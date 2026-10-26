@@ -1335,3 +1335,18 @@ async fn local_persistent_session_lists_reattaches_and_ends() {
     assert!(sessions.iter().all(|s| s.id != id), "结束以后不该还在列表里");
     node.shutdown().await;
 }
+
+/// 拥塞控制按链路延迟自动选：本机回环延迟接近 0，要保持 Cubic（BBR3 在低延迟链路上更慢）。
+/// 跨境这类长延迟、有丢包的链路选 BBR3，在 tests/lossy_link.rs 里用模拟链路验证（手动跑）
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn congestion_control_stays_cubic_on_a_fast_local_link() {
+    let (host, _delegate, guest, remote) = paired_pair("congestion").await;
+    // 先跑点数据，攒够确认次数，算法才会判断
+    let (out, _, _) = run_exec(&remote, "seq 1 60000", None, None).await.unwrap();
+    assert!(!out.is_empty());
+    assert_eq!(remote.congestion_algorithm(), Some("cubic"));
+    remote.close();
+    host.shutdown().await;
+    guest.shutdown().await;
+}
