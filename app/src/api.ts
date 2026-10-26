@@ -235,6 +235,8 @@ export interface Transfer {
   paths: string[];
   started_at: number;
   finished_at: number | null;
+  /** 并发分段时用了几条流；0 是一条流（对方是旧版本，或者关了并发） */
+  lanes?: number;
 }
 
 /** 终端里用的命令行工具 p2pcli */
