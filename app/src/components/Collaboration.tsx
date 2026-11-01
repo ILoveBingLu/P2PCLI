@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ListBox, Select, Tabs } from "@heroui/react";
 import { Check, Copy, FolderKanban, ListTodo, LoaderCircle, Network, RefreshCw, Search, Terminal, Users, WifiOff } from "lucide-react";
 import { api, type Overview } from "../api";
+import { writeClipboardText } from "../lib/clipboard";
 import {
   collaborationErrorText, collaborationTime, expectCollaboration, roleLabels, sessionKey, sessionRef, shortId, taskStateLabels,
   type CollaborationAction, type CollaborationMember, type CollaborationProject, type CollaborationRole, type CollaborationSession, type CollaborationTask, type TaskState,
@@ -231,7 +232,7 @@ function CollaborationProjectView({ project, target, overview }: { project: Coll
       <Tabs.Panel id="sessions" className="collab-tab-panel collab-scroll">
         <div className="collab-section-heading"><h3>协作会话</h3><Button size="sm" variant="secondary" onPress={() => {
           const command = `p2pcli collab session register --help`;
-          void navigator.clipboard.writeText(command).then(() => toast.success("已复制 CLI 登记入口")).catch(() => toast.error(command));
+          void writeClipboardText(command).then(() => toast.success("已复制 CLI 登记入口")).catch(() => toast.error(command));
         }}><Copy />CLI 登记入口</Button></div>
         {!sessions.length && <div className="collab-empty"><Terminal />{loading ? "加载会话" : "暂无已登记会话"}</div>}
         {sessions.map((session) => {

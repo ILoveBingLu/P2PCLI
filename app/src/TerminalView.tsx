@@ -11,6 +11,7 @@ import { useContextMenu } from "./components/ContextMenu";
 import { toast } from "./components/ui/toast";
 import { terminalResizeFrame } from "./lib/terminalResizeFrame";
 import { emptyShellPrompt, promptGuard } from "./lib/launcherPrompt";
+import { readClipboardText, writeClipboardText } from "./lib/clipboard";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -115,7 +116,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       {
         id: "copy", label: "复制", icon: <Copy className="size-4" />, disabled: !selected,
         onAction: () => {
-          void navigator.clipboard.writeText(selected)
+          void writeClipboardText(selected)
             .catch((error) => toast.error(`复制失败：${String(error)}`))
             .finally(focus);
         },
@@ -123,7 +124,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       {
         id: "paste", label: "粘贴", icon: <ClipboardPaste className="size-4" />, disabled: !inputReady.current,
         onAction: () => {
-          void navigator.clipboard.readText().then((text) => {
+          void readClipboardText().then((text) => {
             if (termRef.current === term && inputReady.current) term.paste(text);
           }).catch((error) => toast.error(`粘贴失败：${String(error)}`)).finally(focus);
         },
@@ -260,7 +261,8 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
         const k = e.key.toLowerCase();
         // Windows 习惯：有选中时 Ctrl+C 复制，Ctrl+V 粘贴
         if (k === "c" && (e.shiftKey || term.hasSelection())) {
-          navigator.clipboard.writeText(term.getSelection());
+          void writeClipboardText(term.getSelection())
+            .catch((error) => toast.error(`复制失败：${String(error)}`));
           term.clearSelection();
           return false;
         }

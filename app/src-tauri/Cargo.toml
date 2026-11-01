@@ -25,6 +25,7 @@ tauri-plugin-single-instance = "2.5.4"
 tauri-plugin-notification = "2.7.0"
 tauri-plugin-updater = "2.14.0"
 tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-window-controls = "=0.2.1"

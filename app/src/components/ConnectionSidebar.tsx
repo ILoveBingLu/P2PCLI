@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
 import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, LoaderCircle, Monitor, Pencil, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
+import { writeClipboardText } from "../lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
@@ -135,7 +136,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
     } catch (error) { toast.error(String(error)); }
   };
   const copyCode = (code: string) =>
-    navigator.clipboard.writeText(code).then(() => toast.success("设备码已复制"), () => toast.error("复制失败"));
+    void writeClipboardText(code).then(() => toast.success("设备码已复制"), () => toast.error("复制失败"));
   /** 选好文件就在后台发，进度在左下角 */
   const sendTo = async (endpointId: string, folders: boolean) => {
     try {

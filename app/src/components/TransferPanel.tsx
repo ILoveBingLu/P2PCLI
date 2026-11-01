@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, FolderOpen, X } from "lucide-react";
 import { api, formatSize, type Transfer } from "../api";
+import { writeClipboardText } from "../lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 
@@ -74,7 +75,7 @@ function TransferRow({ t, onDismiss }: { t: Transfer; onDismiss: () => void }) {
     failed: t.error ?? "失败",
   }[t.state];
   const copyPaths = () =>
-    navigator.clipboard.writeText(t.paths.join("\n")).then(() => toast.success("已复制对方电脑上的路径"), () => toast.error("复制失败"));
+    void writeClipboardText(t.paths.join("\n")).then(() => toast.success("已复制对方电脑上的路径"), () => toast.error("复制失败"));
   return (
     <div className="transfer-row" data-state={t.state}>
       <span className="transfer-icon" aria-hidden="true">{send ? <ArrowUp /> : <ArrowDown />}</span>
