@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { progressText, type useUpdater } from "./useUpdater";
+import { t } from "@/i18n";
 
 /** 项目主页，和后端 links.rs 里的 REPO_URL 一致；后端只认这个地址和它下面的页面 */
 const REPO_URL = "https://github.com/ILoveBingLu/P2PCLI";
@@ -27,10 +28,12 @@ const FRAMEWORKS = [
   { name: "Vite", icon: viteIcon },
 ];
 
-const SERVERS = [
-  { name: "阿里云", icon: alibabaCloudIcon },
-  { name: "Cloudflare", icon: cloudflareIcon },
-];
+function servers() {
+  return [
+    { name: t("阿里云"), icon: alibabaCloudIcon },
+    { name: "Cloudflare", icon: cloudflareIcon },
+  ];
+}
 
 /** 一行用乘号连起来的图标；两个数组共用这个组件，两行宽度不同但都居中 */
 function StackRow({ items }: { items: { name: string; icon: string }[] }) {
@@ -70,14 +73,14 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
   const status = updater.installing
     ? progressText(updater.progress)
     : updater.checking
-      ? "正在检查更新…"
+      ? t("正在检查更新…")
       : updater.error
         ? updater.error
         : updater.update
-          ? `发现新版本 v${updater.update.version}`
+          ? t("发现新版本 v{{version}}", { version: updater.update.version })
           : updater.checkedAt
-            ? "已经是最新版本"
-            : "启动后会自动检查更新，之后每 6 小时检查一次。";
+            ? t("已经是最新版本")
+            : t("启动后会自动检查更新，之后每 6 小时检查一次。");
 
   return (
     <div className="flex flex-col gap-4">
@@ -93,25 +96,24 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
                 <h2 className="text-xl font-semibold tracking-tight">P2PCLI</h2>
                 <Badge className="border border-[#b78c3f]/50 bg-[#17130c] text-[#e7c477]">Beta</Badge>
               </div>
-              <p className="text-sm text-muted-foreground">点对点远程终端</p>
+              <p className="text-sm text-muted-foreground">{t("点对点远程终端")}</p>
               {updater.version && <p className="text-xs tabular-nums text-muted-foreground">v{updater.version}</p>}
             </div>
           </div>
           <p className="max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
-            输入对方的设备码，对方点同意，就能在软件里用它的终端。Claude Code、Codex 这类命令行 AI 直接用对方电脑上的账号和环境运行。
-            项目开源，觉得好用欢迎点个 Star，遇到问题也可以直接提。
+            {t("输入对方的设备码，对方点同意，就能在软件里用它的终端。Claude Code、Codex 这类命令行 AI 直接用对方电脑上的账号和环境运行。\n            项目开源，觉得好用欢迎点个 Star，遇到问题也可以直接提。")}
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => open()} aria-label="在浏览器中打开 GitHub 项目">
+            <Button onClick={() => open()} aria-label={t("在浏览器中打开 GitHub 项目")}>
               <GithubMark className="size-4" />
-              GitHub 项目
+              {t("GitHub 项目")}
               <ArrowUpRight data-icon="inline-end" />
             </Button>
             <Button variant="outline" onClick={() => open("/issues")}>
-              <Bug data-icon="inline-start" />反馈问题
+              <Bug data-icon="inline-start" />{t("反馈问题")}
             </Button>
             <Button variant="outline" onClick={() => open("/releases")}>
-              <Package data-icon="inline-start" />版本发布
+              <Package data-icon="inline-start" />{t("版本发布")}
             </Button>
           </div>
         </div>
@@ -120,7 +122,7 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
       <section className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-sm font-medium">软件更新</span>
+            <span className="text-sm font-medium">{t("软件更新")}</span>
             <span className="text-xs text-muted-foreground" aria-live="polite">{status}</span>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -129,14 +131,14 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
                 {updater.installing
                   ? <LoaderCircle data-icon="inline-start" className="animate-spin" />
                   : <Download data-icon="inline-start" />}
-                更新并重启
+                {t("更新并重启")}
               </Button>
             ) : null}
             <Button variant="outline" size="sm" onClick={() => void updater.check()} disabled={updater.checking || updater.installing}>
               {updater.checking
                 ? <LoaderCircle data-icon="inline-start" className="animate-spin" />
                 : <RefreshCw data-icon="inline-start" />}
-              检查更新
+              {t("检查更新")}
             </Button>
           </div>
         </div>
@@ -148,8 +150,8 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
       {/* 版权上面两行：软件框架、服务端，各自用乘号连接并居中 */}
       <div className="flex flex-col items-center gap-2.5 text-center">
         <StackRow items={FRAMEWORKS} />
-        <StackRow items={SERVERS} />
-        <p className="text-xs text-muted-foreground">© 2026 ILoveBingLu · MIT 开源协议</p>
+        <StackRow items={servers()} />
+        <p className="text-xs text-muted-foreground">{t("© 2026 ILoveBingLu · MIT 开源协议")}</p>
       </div>
     </div>
   );

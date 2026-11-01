@@ -4,8 +4,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Signal, SignalHigh, SignalLow, SignalMedium } from "lucide-react";
 import { api, pathLabel, platformLabel, type ConnStats, type PathInfo, type RemoteInfo } from "../api";
 import { Button } from "@/components/ui/button";
+import { t } from "@/i18n";
 
-const PATH_NAMES = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", local: "本机", unknown: "连接中" } as const;
+function pathName(kind: string) {
+  const names: Record<string, string> = { ipv6: t("IPv6 直连"), ipv4: t("IPv4 直连"), relay: t("中继"), local: t("本机"), unknown: t("连接中") };
+  return names[kind] ?? t("连接中");
+}
 
 /** 延迟分档，和信号格对应 */
 function quality(rtt: number | null | undefined) {
@@ -117,37 +121,37 @@ export function ConnectionCard({ connId, info, path, echoLatency }: {
   const local = now?.stats.local ?? null;
   const publicV4 = now?.stats.public_v4 ?? null;
   const localText = local
-    ? local.includes(":") || !privateIp(local) || !publicV4 ? local : `${publicV4}（内网 ${local}）`
-    : current?.kind === "relay" ? "经中继，不直连" : null;
+    ? local.includes(":") || !privateIp(local) || !publicV4 ? local : t("{{publicV4}}（内网 {{local}}）", { publicV4, local })
+    : current?.kind === "relay" ? t("经中继，不直连") : null;
 
   return (
     <Popover isOpen={open} onOpenChange={setOpen}>
-      <Button variant="ghost" size="xs" className="terminal-status-path-button" data-level={level} aria-label={`连接详情：${pathLabel(current)}`} title="连接详情">
+      <Button variant="ghost" size="xs" className="terminal-status-path-button" data-level={level} aria-label={t("连接详情：{{value}}", { value: pathLabel(current) })} title={t("连接详情")}>
         <Icon className="connection-signal" />
         <span>{pathLabel(current)}</span>
       </Button>
       <Popover.Content placement="top end" offset={8} className="connection-card">
-        <Popover.Dialog aria-label="连接详情" className="flex flex-col">
+        <Popover.Dialog aria-label={t("连接详情")} className="flex flex-col">
           <div className="connection-card-head" data-level={level}>
             <Icon className="connection-signal" />
-            <Popover.Heading>网络延时</Popover.Heading>
+            <Popover.Heading>{t("网络延时")}</Popover.Heading>
             <strong>{rtt != null ? `${rtt} ms` : "—"}</strong>
           </div>
           <Section>
-            <Row label="按键回显" value={echo != null ? `${echo} ms` : "敲几个字后显示"} hint="从按键到屏幕上出现字的时间，比网络延时多算了对方程序处理的时间" />
-            <Row label="带宽占用" value={up && down ? `↑ ${up}  ↓ ${down}` : "统计中…"} />
-            <Row label="丢包率" value={loss ?? "统计中…"} />
+            <Row label={t("按键回显")} value={echo != null ? `${echo} ms` : t("敲几个字后显示")} hint={t("从按键到屏幕上出现字的时间，比网络延时多算了对方程序处理的时间")} />
+            <Row label={t("带宽占用")} value={up && down ? `↑ ${up}  ↓ ${down}` : t("统计中…")} />
+            <Row label={t("丢包率")} value={loss ?? t("统计中…")} />
           </Section>
           <Section>
-            <Row label="线路" value={current ? PATH_NAMES[current.kind] : "—"} />
-            <Row label="加密" value="QUIC · TLS 1.3 端到端" />
-            <Row label="对方地址" value={remoteHost ?? "—"} mono />
-            <Row label="本机地址" value={localText ?? "—"} mono />
+            <Row label={t("线路")} value={current ? pathName(current.kind) : "—"} />
+            <Row label={t("加密")} value={t("QUIC · TLS 1.3 端到端")} />
+            <Row label={t("对方地址")} value={remoteHost ?? "—"} mono />
+            <Row label={t("本机地址")} value={localText ?? "—"} mono />
           </Section>
           <Section>
-            <Row label="对方版本" value={info.version ? `${info.version}${myVersion && myVersion !== info.version ? `（本机 ${myVersion}）` : ""}` : "0.1.4 以前的版本"} />
-            <Row label="对方系统" value={info.os ?? platformLabel(info.platform)} />
-            <Row label="会话管理" value={info.multiplexer ?? "—"} />
+            <Row label={t("对方版本")} value={info.version ? `${info.version}${myVersion && myVersion !== info.version ? t("（本机 {{myVersion}}）", { myVersion }) : ""}` : t("0.1.4 以前的版本")} />
+            <Row label={t("对方系统")} value={info.os ?? platformLabel(info.platform)} />
+            <Row label={t("会话管理")} value={info.multiplexer ?? "—"} />
           </Section>
         </Popover.Dialog>
       </Popover.Content>

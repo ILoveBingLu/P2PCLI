@@ -1,5 +1,6 @@
 import { Toast, toast as heroToast } from "@heroui/react";
 import { Check, CircleAlert, Info, X } from "lucide-react";
+import { t } from "@/i18n";
 
 export const toast = {
   success: (message: string) => heroToast.success(message),
@@ -31,7 +32,7 @@ export function Toaster() {
             {item.content.description && <Toast.Description>{item.content.description}</Toast.Description>}
           </Toast.Content>
           {item.content.actionProps && <Toast.ActionButton {...item.content.actionProps} />}
-          <Toast.CloseButton aria-label="关闭通知">
+          <Toast.CloseButton aria-label={t("关闭通知")}>
             <X />
           </Toast.CloseButton>
         </Toast>

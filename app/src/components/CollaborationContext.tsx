@@ -7,6 +7,7 @@ import {
 import type { CollaborationDraft, CollaborationEndpoint, CollaborationLink } from "../lib/collaborationLinks";
 import { useCollaborationWires } from "./useCollaborationWires";
 import type { CollaborationRelation, WireActivity } from "../lib/collaborationWires";
+import { t } from "@/i18n";
 
 interface Snapshot {
   projects: CollaborationProject[];
@@ -114,17 +115,17 @@ export function CollaborationProvider({ overview, terminals, transfers, open, on
   }, [identity, target, projectId, revision]);
 
   const run = async <T,>(operation: () => Promise<T>): Promise<T> => {
-    if (writing.current) throw new Error("上一操作尚未完成");
+    if (writing.current) throw new Error(t("上一操作尚未完成"));
     writing.current = true;
     setBusy(true);
     try { return await operation(); }
     finally { writing.current = false; setBusy(false); refresh(); }
   };
   const ensureProject = async () => {
-    if (error || loading || !overview) throw new Error("协作状态尚未确认，请刷新后重试");
+    if (error || loading || !overview) throw new Error(t("协作状态尚未确认，请刷新后重试"));
     if (snapshot.project) return snapshot.project;
-    if (target) throw new Error("请先在协调设备本机创建项目");
-    const response = expectCollaboration(await api.collabRequest(null, null, { type: "project_create", name: "设备协作" }), "project");
+    if (target) throw new Error(t("请先在协调设备本机创建项目"));
+    const response = expectCollaboration(await api.collabRequest(null, null, { type: "project_create", name: t("设备协作") }), "project");
     setSnapshot({ ...empty, projects: [response.project], project: response.project,
       members: [{ device_id: overview.endpoint_id, role: "admin", revoked: false }] });
     setProjectId(response.project.id);

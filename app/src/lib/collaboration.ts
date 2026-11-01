@@ -1,3 +1,4 @@
+import { intlLocale, t } from "@/i18n";
 // Wire types mirror crates/core/src/collaboration/model.rs.
 export type CollaborationRole = "admin" | "dispatcher" | "worker" | "viewer";
 export type TaskState = "queued" | "running" | "blocked" | "result_ready" | "completed" | "failed" | "cancel_requested" | "cancelled";
@@ -62,31 +63,35 @@ export class CollaborationError extends Error {
 }
 export function unwrapCollaboration(reply: CollaborationReply): CollaborationResponse {
   if (reply?.error) throw new CollaborationError(reply.error.code, reply.error.message);
-  if (!reply?.response) throw new CollaborationError("invalid_response", "协调设备未返回有效响应");
+  if (!reply?.response) throw new CollaborationError("invalid_response", t("协调设备未返回有效响应"));
   return reply.response;
 }
 export function expectCollaboration<T extends CollaborationResponse["type"]>(
   response: CollaborationResponse, type: T,
 ): Extract<CollaborationResponse, { type: T }> {
-  if (response.type !== type) throw new CollaborationError("invalid_response", `预期 ${type}，收到 ${response.type}`);
+  if (response.type !== type) throw new CollaborationError("invalid_response", t("预期 {{type}}，收到 {{type2}}", { type, type2: response.type }));
   return response as Extract<CollaborationResponse, { type: T }>;
 }
-export const taskStateLabels: Record<TaskState, string> = {
-  queued: "待领取", running: "执行中", blocked: "待处理", result_ready: "待验收",
-  completed: "已完成", failed: "失败", cancel_requested: "等待停止确认", cancelled: "已取消",
-};
-export const roleLabels: Record<CollaborationRole, string> = { admin: "管理员", dispatcher: "调度者", worker: "执行者", viewer: "观察者" };
+export function taskStateLabels(): Record<TaskState, string> {
+  return {
+    queued: t("待领取"), running: t("执行中"), blocked: t("待处理"), result_ready: t("待验收"),
+    completed: t("已完成"), failed: t("失败"), cancel_requested: t("等待停止确认"), cancelled: t("已取消"),
+  };
+}
+export function roleLabels(): Record<CollaborationRole, string> {
+  return { admin: t("管理员"), dispatcher: t("调度者"), worker: t("执行者"), viewer: t("观察者") };
+}
 export const shortId = (id: string) => id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
 export const sessionKey = (ref: SessionRef) => `${ref.device_id}/${ref.session_id}`;
 export const sessionRef = (session: CollaborationSession): SessionRef => ({ device_id: session.device_id, session_id: session.id });
 export function collaborationTime(seconds: number) {
-  return new Date(seconds * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return new Date(seconds * 1000).toLocaleString(intlLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 export function collaborationErrorText(error: unknown) {
   if (error instanceof CollaborationError) {
-    if (error.code === "version_conflict") return "任务已被其他会话更新。请刷新，核对最新状态后再操作。";
-    if (error.code === "forbidden") return `没有此操作的权限：${error.message}`;
+    if (error.code === "version_conflict") return t("任务已被其他会话更新。请刷新，核对最新状态后再操作。");
+    if (error.code === "forbidden") return t("没有此操作的权限：{{message}}", { message: error.message });
     return `${error.message} (${error.code})`;
   }
-  return `连接或请求失败：${String(error)}。请刷新核对操作是否已提交。`;
+  return t("连接或请求失败：{{error}}。请刷新核对操作是否已提交。", { error: String(error) });
 }

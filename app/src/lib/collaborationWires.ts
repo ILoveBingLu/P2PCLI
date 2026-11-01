@@ -1,6 +1,7 @@
 import type { Overview, Transfer } from "../api";
 import type { CollaborationEvent, CollaborationMember, CollaborationSession, CollaborationTask, SessionRef } from "./collaboration";
 import { canLink, endpointKey, matchingSessions, sessionReady, taskSource, type CollaborationEndpoint, type CollaborationLink } from "./collaborationLinks";
+import { t } from "@/i18n";
 
 export interface WireScope { ownerId: string; coordinatorId: string; projectId: string }
 export interface CollaborationRelation extends CollaborationLink {
@@ -97,15 +98,15 @@ export function activityFromEvent(event: CollaborationEvent, sessions: Collabora
   if (["task_claimed", "task_result", "task_result_after_cancel"].includes(event.kind) && eventTask(data)) {
     const link = taskWire(data, sessions, ownerId);
     if (!canLink(link.source, link.destination)) return null;
-    if (event.kind === "task_claimed") return { ...base, ...link, kind: "task", label: `任务已领取：${data.spec.title}`, taskId: data.id };
+    if (event.kind === "task_claimed") return { ...base, ...link, kind: "task", label: t("任务已领取：{{title}}", { title: data.spec.title }), taskId: data.id };
     const attempts = Array.isArray(data.attempts) ? data.attempts : [];
     const result = attempts.at(-1)?.result;
     return { ...base, source: link.destination, destination: link.source, kind: "result",
-      label: `结果已回传：${data.spec.title}`, taskId: data.id, failed: !!result?.failed };
+      label: t("结果已回传：{{title}}", { title: data.spec.title }), taskId: data.id, failed: !!result?.failed };
   }
   if (event.kind === "message_delivered" && object(data) && sessionRef(data.from) && sessionRef(data.to)) {
     const link = { source: sessionEndpoint(data.from, sessions, ownerId), destination: sessionEndpoint(data.to, sessions, ownerId) };
-    if (canLink(link.source, link.destination)) return { ...base, ...link, kind: "message", label: "协作消息已送达" };
+    if (canLink(link.source, link.destination)) return { ...base, ...link, kind: "message", label: t("协作消息已送达") };
   }
   return null;
 }
@@ -160,7 +161,7 @@ export class TransferActivityTracker {
         id: `file:${transfer.id}`, kind: "file",
         source: transfer.direction === "send" ? local : peer,
         destination: transfer.direction === "send" ? peer : local,
-        label: failed ? `传输失败：${transfer.label}` : `${transfer.direction === "send" ? "发送" : "接收"} ${transfer.label}${progress}`,
+        label: failed ? t("传输失败：{{label}}", { label: transfer.label }) : `${transfer.direction === "send" ? t("发送") : t("接收")} ${transfer.label}${progress}`,
         expiresAt: failed ? failedUntil : movedUntil, failed,
       });
     }

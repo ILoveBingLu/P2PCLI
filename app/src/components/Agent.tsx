@@ -1,6 +1,7 @@
 import { Bot } from "lucide-react";
 import type { AgentInfo, AgentQuota, AgentState } from "../api";
 import { cn } from "@/lib/utils";
+import { intlLocale, t } from "@/i18n";
 
 // 各家命令行 AI 的图标取自 Lobe Icons（MIT）的静态 SVG，放在 assets/agents，见那里的 LICENSE。
 // 按图片显示，不内嵌、不引 @lobehub/icons：那个包会带进整套 Lobe UI，而且新版本常常刚发布、过不了 pnpm 的发布时间检查。
@@ -10,26 +11,24 @@ const ICONS: Readonly<Record<string, string>> = Object.fromEntries(
   Object.entries(files).map(([path, url]) => [path.slice(path.lastIndexOf("/") + 1, -4), url]),
 );
 
-export const AGENT_STATE_TEXT: Record<AgentState, string> = {
-  working: "干活中",
-  waiting: "等你确认",
-  idle: "空闲",
-};
-
 export function agentStalled(agent: AgentInfo) {
   return agent.state === "working" && agent.unchanged_for != null;
 }
 
+function agentStateLabel(state: AgentState) {
+  return { working: t("干活中"), waiting: t("等你确认"), idle: t("空闲") }[state];
+}
+
 export function agentStateText(agent: AgentInfo) {
-  return agentStalled(agent) ? "可能卡住" : AGENT_STATE_TEXT[agent.state];
+  return agentStalled(agent) ? t("可能卡住") : agentStateLabel(agent.state);
 }
 
 export function agentStateTip(agent: AgentInfo) {
   const text = `${agent.name} · ${agentStateText(agent)}`;
   if (!agentStalled(agent)) return text;
   const seconds = agent.unchanged_for ?? 0;
-  const duration = seconds >= 3600 ? `${Math.floor(seconds / 3600)} 小时` : `${Math.max(1, Math.floor(seconds / 60))} 分钟`;
-  return `${text}\n终端画面已 ${duration} 未变化。任务可能仍在执行，也可能卡在工具或 Hook，请到终端检查。`;
+  const duration = seconds >= 3600 ? t("{{value}} 小时", { value: Math.floor(seconds / 3600) }) : t("{{value}} 分钟", { value: Math.max(1, Math.floor(seconds / 60)) });
+  return t("{{text}}\n终端画面已 {{duration}} 未变化。任务可能仍在执行，也可能卡在工具或 Hook，请到终端检查。", { text, duration });
 }
 
 /** AI 的图标；没有收录图标的用通用的机器人图标 */
@@ -70,30 +69,30 @@ export const QUOTA_ALERT = 90;
 
 /** 300 分钟叫“5 小时”，10080 叫“7 天” */
 export function quotaWindowLabel(minutes: number) {
-  if (minutes <= 0) return "额度";
-  if (minutes % 1440 === 0) return `${minutes / 1440} 天`;
-  if (minutes % 60 === 0) return `${minutes / 60} 小时`;
-  return `${minutes} 分钟`;
+  if (minutes <= 0) return t("额度");
+  if (minutes % 1440 === 0) return t("{{value}} 天", { value: minutes / 1440 });
+  if (minutes % 60 === 0) return t("{{value}} 小时", { value: minutes / 60 });
+  return t("{{minutes}} 分钟", { minutes });
 }
 
 /** 今天 18:30、明天 07:00、10月27日 07:00 */
 export function resetText(secs: number | null | undefined) {
-  if (!secs) return "重置时间不详";
+  if (!secs) return t("重置时间不详");
   const at = new Date(secs * 1000);
-  const hm = at.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  const hm = at.toLocaleTimeString(intlLocale(), { hour: "2-digit", minute: "2-digit" });
   const today = new Date();
   const tomorrow = new Date(Date.now() + 86400000);
-  if (at.toDateString() === today.toDateString()) return `今天 ${hm} 重置`;
-  if (at.toDateString() === tomorrow.toDateString()) return `明天 ${hm} 重置`;
-  return `${at.getMonth() + 1}月${at.getDate()}日 ${hm} 重置`;
+  if (at.toDateString() === today.toDateString()) return t("今天 {{hm}} 重置", { hm });
+  if (at.toDateString() === tomorrow.toDateString()) return t("明天 {{hm}} 重置", { hm });
+  return t("{{value}}月{{value2}}日 {{hm}} 重置", { value: at.getMonth() + 1, value2: at.getDate(), hm });
 }
 
 /** 额度：“5 小时 35% · 7 天 75%”，用到 75% 变黄、90% 变红，悬停看重置时间 */
 export function AgentQuotaLabel({ quota }: { quota: AgentQuota }) {
   const ago = Math.max(0, Math.round((Date.now() / 1000 - quota.at) / 60));
   const tip = [
-    ...quota.windows.map((w) => `${quotaWindowLabel(w.minutes)}额度已用 ${Math.round(w.used_percent)}%，${resetText(w.resets_at)}`),
-    ago < 1 ? "刚刚读到的" : `${ago} 分钟前的数据`,
+    ...quota.windows.map((w) => t("{{value}}额度已用 {{value2}}%，{{value3}}", { value: quotaWindowLabel(w.minutes), value2: Math.round(w.used_percent), value3: resetText(w.resets_at) })),
+    ago < 1 ? t("刚刚读到的") : t("{{ago}} 分钟前的数据", { ago }),
   ].join("\n");
   return (
     <span className="agent-quota" title={tip}>

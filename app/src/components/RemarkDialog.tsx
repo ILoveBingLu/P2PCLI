@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
+import { t } from "@/i18n";
 
 export function RemarkDialog({ open, title, description, initialValue, onOpenChange, onSave }: {
   open: boolean;
@@ -28,7 +29,7 @@ export function RemarkDialog({ open, title, description, initialValue, onOpenCha
       await onSave(value);
       onOpenChange(false);
     } catch (error) {
-      toast.error(`保存备注失败：${String(error)}`);
+      toast.error(t("保存备注失败：{{error}}", { error: String(error) }));
     } finally {
       pending.current = false;
       setSaving(false);
@@ -43,10 +44,10 @@ export function RemarkDialog({ open, title, description, initialValue, onOpenCha
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <Input
-          aria-label="备注"
+          aria-label={t("备注")}
           value={value}
           onChange={(event) => setValue(event.currentTarget.value)}
-          placeholder="留空则使用默认名称"
+          placeholder={t("留空则使用默认名称")}
           maxLength={80}
           autoFocus
           disabled={saving}
@@ -58,8 +59,8 @@ export function RemarkDialog({ open, title, description, initialValue, onOpenCha
           }}
         />
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>取消</Button>
-          <Button onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>{t("取消")}</Button>
+          <Button onClick={() => void save()} disabled={saving}>{saving ? t("保存中…") : t("保存")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
