@@ -36,7 +36,7 @@ export function ClearSessionDialog({ label, needsConnection = false, onConfirm, 
           会话内运行的程序将被结束，未保存的内容可能丢失，对应的终端标签也会关闭。此操作不会删除工作目录中的文件。
         </AlertDialogDescription>
       </AlertDialogHeader>
-      {error && <p role="alert" className="text-sm text-destructive break-words">{error}</p>}
+      {error && <p role="alert" className="text-sm text-destructive wrap-break-word">{error}</p>}
       <AlertDialogFooter>
         <Button variant="outline" disabled={busy} onPress={onCancel}>取消</Button>
         <Button variant="destructive" disabled={busy} onPress={() => void clear()}>

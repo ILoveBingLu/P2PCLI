@@ -107,7 +107,8 @@ function LinkDialog() {
             type: "member_set", device_id: destination.deviceId, role: "worker", revoked: false,
           }), "ack");
         }
-        return registrationDrafts(project.id, project.coordinator_id, owner, selectedTerminals);
+        return registrationDrafts(project.id, project.coordinator_id, owner, selectedTerminals)
+          .map((draft) => ({ ...draft, source: link.source }));
       });
       const text = registrationDraftText(drafts);
       setPrompt(text);

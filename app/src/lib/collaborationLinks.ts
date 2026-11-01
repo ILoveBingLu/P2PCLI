@@ -13,6 +13,7 @@ export interface CollaborationLink {
 }
 export interface CollaborationDraft {
   endpoint: CollaborationEndpoint;
+  source?: CollaborationEndpoint;
   prompt: string;
   projectId: string;
   coordinatorId: string;

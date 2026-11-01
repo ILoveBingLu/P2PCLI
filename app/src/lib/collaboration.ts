@@ -26,6 +26,9 @@ export interface CollaborationArtifact {
   id: string; task_id: string; attempt_id: string; provider_device: string; name: string;
   size: number; hash: string; received: boolean; local_path: string | null;
 }
+export interface CollaborationEvent {
+  seq: number; kind: string; entity_id: string; data: unknown; created_at: number;
+}
 export type CollaborationAction =
   | { type: "projects_list" | "project_get" | "members_list" | "sessions_list" | "tasks_list" }
   | { type: "project_create"; name: string }
@@ -33,7 +36,8 @@ export type CollaborationAction =
   | { type: "task_create"; spec: TaskSpec }
   | { type: "task_get" | "artifacts_list"; task_id: string }
   | { type: "task_accept" | "task_cancel" | "task_requeue"; task_id: string; expected_version: number }
-  | { type: "task_assign"; task_id: string; expected_version: number; assignee: SessionRef };
+  | { type: "task_assign"; task_id: string; expected_version: number; assignee: SessionRef }
+  | { type: "events_read"; after: number; limit: number };
 export interface CollaborationRequest { request_id: string; project_id: string | null; action: CollaborationAction }
 export type CollaborationResponse =
   | { type: "queued"; request_id: string; message: string }
@@ -45,6 +49,7 @@ export type CollaborationResponse =
   | { type: "task"; task: CollaborationTask }
   | { type: "tasks"; tasks: CollaborationTask[] }
   | { type: "artifacts"; artifacts: CollaborationArtifact[] }
+  | { type: "events"; events: CollaborationEvent[]; cursor: number }
   | { type: "ack" };
 export interface CollaborationReply { response?: CollaborationResponse; error?: { code: string; message: string } }
 export interface CollaborationDelivery {
