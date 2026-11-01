@@ -14,10 +14,12 @@ use iroh::address_lookup::{AddressLookup, EndpointData, EndpointInfo, Error as A
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, TransportAddr, endpoint::presets};
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use serde::Serialize;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::identity::DeviceInfo;
 use crate::ALPN_TERM;
+
+mod interfaces;
 
 /// mDNS 服务名，和别的 iroh 程序分开
 const SERVICE_NAME: &str = "p2pcli";
@@ -79,9 +81,12 @@ impl AddressLookup for LanLookup {
 impl Lan {
     /// 开始发现局域网里的设备；visible 为假时只看别人，不广播本机
     pub async fn start(endpoint: &Endpoint, me: &DeviceInfo, visible: bool) -> Result<Arc<Self>> {
+        let interfaces = interfaces::ipv4();
+        info!(?interfaces, "局域网发现使用的 IPv4 网卡");
         let mdns = MdnsAddressLookup::builder()
             .service_name(SERVICE_NAME)
             .advertise(visible)
+            .multicast_interfaces_v4(interfaces)
             .build(endpoint.id())
             .context("局域网发现启动失败")?;
         let shared = Arc::new(Shared::default());
@@ -127,9 +132,13 @@ impl Lan {
                 return Ok(self.devices());
             }
         };
+        let interfaces = interfaces::ipv4();
+        self.mdns.set_multicast_interfaces_v4(interfaces.iter().copied()).await
+            .context("更新局域网发现网卡失败")?;
         let probe = MdnsAddressLookup::builder()
             .service_name(SERVICE_NAME)
             .advertise(false)
+            .multicast_interfaces_v4(interfaces)
             .discovery_cadence(Duration::from_millis(200))
             .build(me)
             .context("局域网扫描启动失败")?;

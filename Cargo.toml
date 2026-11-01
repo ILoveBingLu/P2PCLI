@@ -1,10 +1,11 @@
 [workspace]
 resolver = "3"
 members = ["crates/core", "crates/cli", "crates/dev", "crates/server", "app/src-tauri"]
-exclude = ["vendor/tauri-plugin-window-controls"]
+exclude = ["vendor/tauri-plugin-window-controls", "vendor/iroh-mdns-address-lookup"]
 
 [patch.crates-io]
 tauri-plugin-window-controls = { path = "vendor/tauri-plugin-window-controls" }
+iroh-mdns-address-lookup = { path = "vendor/iroh-mdns-address-lookup" }
 
 [workspace.package]
 version = "0.1.0"
