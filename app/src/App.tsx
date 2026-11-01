@@ -66,6 +66,7 @@ import { CollaborationDrawer } from "./components/CollaborationDrawer";
 import { sessionTitles } from "./components/sessionText";
 import { connectCollaborationSession, endpointKey, type CollaborationDraft, type CollaborationEndpoint } from "./lib/collaborationLinks";
 import { expectCollaboration } from "./lib/collaboration";
+import { rememberRelation } from "./lib/collaborationWires";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -373,8 +374,15 @@ export default function App() {
     toast.notice(`正在接入 ${drafts.length} 个会话`, { description: "等待会话登记确认；需要授权时会在目标会话中提示。" });
     const requests = drafts.map((draft) => {
       const key = `${draft.endpoint.deviceId}:${draft.requestId}`;
+      const record = () => {
+        if (!draft.source || signal.aborted) return;
+        try {
+          rememberRelation({ ownerId: draft.ownerId, coordinatorId: draft.coordinatorId, projectId: draft.projectId },
+            { source: draft.source, destination: draft.endpoint });
+        } catch { toast.error("会话已接入，但连线记录未能保存"); }
+      };
       const existing = onboardingInFlight.current.get(key);
-      if (existing) return existing;
+      if (existing) return existing.then(record);
       const request = connectCollaborationSession(draft, {
         signal,
         read: async () => {
@@ -393,7 +401,7 @@ export default function App() {
           return api.sendAgentMessage(connId, draft.endpoint.terminalId!, draft.endpoint.agentKind, draft.requestId, draft.prompt);
         },
         wait: () => new Promise<void>((resolve) => window.setTimeout(resolve, 2000)),
-      }).finally(() => onboardingInFlight.current.delete(key));
+      }).then(record).finally(() => onboardingInFlight.current.delete(key));
       onboardingInFlight.current.set(key, request);
       return request;
     });
@@ -653,7 +661,7 @@ export default function App() {
 
   return (
     <RemarksProvider snapshot={ov?.remarks}>
-    <CollaborationProvider overview={ov} terminals={collaborationTerminals} open={showCollaboration}
+    <CollaborationProvider overview={ov} terminals={collaborationTerminals} transfers={transfers} open={showCollaboration}
       onOpenChange={setShowCollaboration} onPrepare={prepareCollaboration}>
     <CollaborationPorts>
     <div className="app-shell">
@@ -918,7 +926,7 @@ export default function App() {
                           </CardTitle>
                         </CardHeader>
                         <CardContent>
-                          <p className="text-muted-foreground break-words">
+                          <p className="text-muted-foreground wrap-break-word">
                             {t.note}
                             <span className="mt-2 block text-xs">关闭标签不会结束后台会话。会话列表中可恢复仍在运行的会话。</span>
                           </p>

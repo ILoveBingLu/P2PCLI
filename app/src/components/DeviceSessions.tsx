@@ -166,7 +166,7 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
           </CollaborationAnchor>
         ))}
         {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
-        {error && <p className="px-2 py-1 text-xs text-destructive break-words" role="alert">{error}</p>}
+        {error && <p className="px-2 py-1 text-xs text-destructive wrap-break-word" role="alert">{error}</p>}
         {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
       </div>
     </>

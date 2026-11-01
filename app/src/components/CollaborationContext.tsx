@@ -1,10 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type Overview } from "../api";
+import { api, type Overview, type Transfer } from "../api";
 import {
   collaborationErrorText, expectCollaboration,
   type CollaborationMember, type CollaborationProject, type CollaborationSession, type CollaborationTask,
 } from "../lib/collaboration";
 import type { CollaborationDraft, CollaborationEndpoint, CollaborationLink } from "../lib/collaborationLinks";
+import { useCollaborationWires } from "./useCollaborationWires";
+import type { CollaborationRelation, WireActivity } from "../lib/collaborationWires";
 
 interface Snapshot {
   projects: CollaborationProject[];
@@ -38,6 +40,11 @@ interface CollaborationContextValue extends Snapshot {
   setLinking: (linking: boolean) => void;
   onPrepare: (drafts: CollaborationDraft[]) => void;
   deviceName: (id: string) => string;
+  relations: CollaborationRelation[];
+  activities: WireActivity[];
+  wireError: string;
+  now: number;
+  forgetRelation: (id: string) => boolean;
 }
 const CollaborationContext = createContext<CollaborationContextValue | null>(null);
 export function useCollaboration() {
@@ -46,8 +53,9 @@ export function useCollaboration() {
   return value;
 }
 
-export function CollaborationProvider({ overview, terminals, open, onOpenChange, onPrepare, children }: {
+export function CollaborationProvider({ overview, terminals, transfers, open, onOpenChange, onPrepare, children }: {
   overview: Overview | null; terminals: CollaborationEndpoint[];
+  transfers: Transfer[];
   open: boolean; onOpenChange: (open: boolean) => void;
   onPrepare: (drafts: CollaborationDraft[]) => void;
   children: ReactNode;
@@ -66,6 +74,7 @@ export function CollaborationProvider({ overview, terminals, open, onOpenChange,
   const [advanced, setAdvanced] = useState(false);
   const identity = overview?.endpoint_id;
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  const wires = useCollaborationWires(overview, snapshot.project, snapshot.sessions, snapshot.tasks, transfers);
 
   useEffect(() => {
     if (!identity) return;
@@ -126,7 +135,7 @@ export function CollaborationProvider({ overview, terminals, open, onOpenChange,
     overview?.nearby.find((device) => device.endpoint_id === id)?.name ?? id.slice(0, 10));
 
   return <CollaborationContext value={{
-    ...snapshot, overview, terminals, target, loading, error, busy, run, refresh, ensureProject,
+    ...snapshot, ...wires, overview, terminals, target, loading, error, busy, run, refresh, ensureProject,
     open, setOpen: onOpenChange, advanced, setAdvanced, selected, selectTask,
     link, setLink, linking, setLinking, onPrepare, deviceName,
     setTarget: (value) => {

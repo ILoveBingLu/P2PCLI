@@ -4,7 +4,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { Overview, SettingsView, SystemPermission, TerminalSession, Transfer } from "./api";
 import type {
   CollaborationArtifact, CollaborationMember, CollaborationProject, CollaborationReply,
-  CollaborationSession, CollaborationTask, CollaborationAction, CollaborationDelivery, CollaborationRequest, SessionRef,
+  CollaborationSession, CollaborationTask, CollaborationAction, CollaborationDelivery, CollaborationRequest, CollaborationEvent, SessionRef,
 } from "./lib/collaboration";
 
 const s = new URLSearchParams(location.search).get("s") ?? "empty";
@@ -130,6 +130,18 @@ interface PreviewCollabProject {
   tasks: CollaborationTask[]; artifacts: CollaborationArtifact[];
 }
 const collabCoordinators = new Map<string, PreviewCollabProject[]>();
+const previewEventLogs = new Map<string, CollaborationEvent[]>();
+function eventLog(key: string, data: PreviewCollabProject) {
+  const id = JSON.stringify([key, data.project.id]);
+  if (!previewEventLogs.has(id)) previewEventLogs.set(id, data.tasks.map((task, index) => ({
+    seq: index + 1, kind: "task_created", entity_id: task.id, data: collabClone(task), created_at: task.created_at,
+  })));
+  return previewEventLogs.get(id)!;
+}
+function appendEvent(key: string, data: PreviewCollabProject, kind: string, entityId: string, payload: unknown) {
+  const events = eventLog(key, data);
+  events.push({ seq: (events.at(-1)?.seq ?? 0) + 1, kind, entity_id: entityId, data: collabClone(payload), created_at: Math.floor(Date.now() / 1000) });
+}
 const previewDeliveries: CollaborationDelivery[] = [];
 const collabReceipts = new Map<string, { request: string; reply: CollaborationReply }>();
 let previewConflict = s === "collab-conflict";
@@ -168,6 +180,10 @@ function collabAction(action: CollaborationAction, projectId: string | null, tar
   if (action.type === "tasks_list") return collabReply({ type: "tasks", tasks });
   if (action.type === "sessions_list") return collabReply({ type: "sessions", sessions: sessions.filter((session) => members.some((member) => member.device_id === session.device_id && !member.revoked)) });
   if (action.type === "members_list") return collabReply({ type: "members", members });
+  if (action.type === "events_read") {
+    const events = eventLog(key, data).filter((event) => event.seq > action.after).slice(0, action.limit);
+    return collabReply({ type: "events", events, cursor: events.at(-1)?.seq ?? action.after });
+  }
   if (action.type === "artifacts_list") return collabReply({ type: "artifacts", artifacts: artifacts.filter((artifact) => artifact.task_id === action.task_id) });
   if (action.type === "member_set") {
     if (own.role !== "admin") return collabReject("forbidden", "需要管理员角色");
@@ -184,6 +200,7 @@ function collabAction(action: CollaborationAction, projectId: string | null, tar
     if (!action.spec.title.trim() || !action.spec.goal.trim()) return collabReject("invalid_request", "标题和目标不能为空");
     const task: CollaborationTask = { id: crypto.randomUUID().replaceAll("-", ""), project_id: data.project.id, creator_device: collabDevice, creator_session: null, spec: collabClone(action.spec), state: "queued", version: 1, attempts: [], progress: null, created_at: Math.floor(Date.now() / 1000), updated_at: Math.floor(Date.now() / 1000) };
     tasks.push(task);
+    appendEvent(key, data, "task_created", task.id, task);
     return collabReply({ type: "task", task });
   }
   if (action.type === "task_get") {
@@ -411,6 +428,41 @@ if (s === "transfers") {
   );
 }
 const emitTransfers = () => void emit("transfers", transfers.map((t) => ({ ...t })));
+if (s === "collab-traffic") Object.assign(window, {
+  __wirePreview: {
+    event: (kind: string) => {
+      const data = collabCoordinators.get("local")?.[0];
+      if (!data) throw new Error("Preview project has not loaded");
+      const task = data.tasks[0];
+      if (kind.startsWith("message_")) {
+        appendEvent("local", data, kind, "preview-message", {
+          from: { device_id: "windows-device-01", session_id: "session-windows-cli" },
+          to: { device_id: collabDevice, session_id: "session-local" }, body: "Not exposed by the activity view",
+        });
+      } else {
+        if (kind === "task_result") {
+          task.state = "result_ready";
+          task.attempts.at(-1)!.result = { summary: "Preview result", completed: [], remaining: [], verification: [], artifact_ids: [], failed: false };
+        }
+        appendEvent("local", data, kind, task.id, task);
+      }
+    },
+    file: (direction: "send" | "receive", state: Transfer["state"], done: number) => {
+      const id = `wire-file-${direction}`;
+      const transfer = transfers.find((item) => item.id === id);
+      const next: Transfer = { ...transferBase, id, peer: "windows-device-01", peer_name: "办公室 Windows",
+        direction, state, done, total: 100, label: "report.pdf" };
+      if (transfer) Object.assign(transfer, next); else transfers.push(next);
+      emitTransfers();
+    },
+    offline: () => {
+      ov.devices[1].state = "offline";
+      for (const data of collabCoordinators.get("local") ?? []) {
+        for (const session of data.sessions) if (session.device_id === "windows-device-01") session.available = false;
+      }
+    },
+  },
+});
 function fakeSend(target: string, paths: string[]) {
   const id = `t${Date.now()}`;
   const name = paths[0]?.split("/").pop() ?? "文件";
