@@ -15,6 +15,7 @@
 
 - macOS 15 及以上，Apple 芯片：`P2PCLI_x.y.z_aarch64.dmg`；Intel 芯片：`P2PCLI_x.y.z_x64.dmg`（不知道是哪种：苹果菜单 → 关于本机，看芯片一栏）
 - Windows 10 及以上：大多数电脑 `P2PCLI_x.y.z_x64-setup.exe`，骁龙等 ARM 芯片 `P2PCLI_x.y.z_arm64-setup.exe`，32 位系统 `P2PCLI_x.y.z_x86-setup.exe`（不知道是哪种：设置 → 系统 → 系统信息，看系统类型一栏）
+- Linux：x64 / ARM64，各提供 `.AppImage`、`.deb`、`.rpm`。Linux 打包已接入下一次标签发布；首次 CI 构建和实机验收尚待执行，安装条件与验证清单见 [Linux 桌面支持](docs/linux-desktop.md)。
 
 装好以后软件会自己检查更新（启动后一次，之后每 6 小时一次，设置 → 关于 里也能手动查），有新版本在主界面点“更新并重启”就行。更新包用发布者的私钥签过名，软件只装签名对得上的包。设置里配了 HTTP 代理时，检查和下载更新也走代理。
 
@@ -52,7 +53,7 @@
 - 每个文件传完用 BLAKE3 核对；传到一半断了，再发同一批会从断点接着传
 - 两边都要是 0.1.3 以上的版本
 
-装好软件会带一个命令行工具 `p2pcli`（Mac 放在 `~/.local/bin`，Windows 自动加进 PATH；设置 → 文件传输 里能看状态、一键加 PATH），P2PCLI 开着就能用：
+装好软件会带一个命令行工具 `p2pcli`（Mac 放在 `~/.local/bin`，Windows 自动加进 PATH；Linux 将副本保存在应用数据目录的 `bin` 中，避免 AppImage 临时挂载路径失效。设置 → 文件传输 里能看状态、一键加 PATH），P2PCLI 开着就能用：
 
 ```sh
 p2pcli devices                       # 列出设备、在线和延迟
@@ -193,9 +194,12 @@ pnpm install                       # 安装应用依赖
 pnpm run dev                       # 启动桌面应用开发模式
 pnpm run build --bundles app,dmg    # macOS 正式包
 pnpm run build --bundles nsis       # Windows 正式包
+pnpm run build --bundles appimage,deb,rpm  # Linux 本机架构正式包
 ```
 
-发布软件：改好 `app/src-tauri/tauri.conf.json` 的版本号，推一个同版本的 `vX.Y.Z` 标签（标签附带的说明会成为更新说明），GitHub Actions 会同时编译 Mac（Apple 芯片、Intel）和 Windows（x64、ARM64、32 位）五个安装包，连同在线更新用的 `latest.json` 发到发布页并标成最新版本（`.github/workflows/app-release.yml`）。改了打包配置可以先推一个 `ci/` 开头的分支试编，只编不发，编出来的包在那次运行的 Artifacts 里。dmg 窗口背景和 Windows 安装界面的图在 `app/src-tauri/installer`，Mac 菜单栏图标是 `app/src-tauri/icons/tray.svg`，改了 SVG 在 Mac 上跑 `CHROME=<Chrome 可执行文件> node scripts/render-art.mjs` 重新出图。在线更新包要签名：仓库 Secrets 里放 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容，没有密码），公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥丢了，已经装上的软件就收不到更新了。本地打正式包不需要私钥，只有加上 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 才会生成更新包并要求签名。
+发布软件：改好 `app/src-tauri/tauri.conf.json` 的版本号，推一个同版本的 `vX.Y.Z` 标签（标签附带的说明会成为更新说明），GitHub Actions 会同时编译 Mac（Apple 芯片、Intel）、Windows（x64、ARM64、32 位）和 Linux（x64、ARM64）七个目标。Linux 各输出 AppImage、DEB、RPM，所有安装包、更新包、签名、`latest.json` 和 `SHA256SUMS` 汇总到发布页（`.github/workflows/app-release.yml`）。Linux 更新按架构及安装格式匹配，DEB/RPM 更新需要管理员授权。改了打包配置可以推 `ci/` 分支，或在 Actions 手动运行“安装包发布”，只编不发，产物在 Artifacts 中；只有推版本标签才发布。普通 `main` 推送不会打包。
+
+Linux 开发依赖、原生 runner 和验收步骤见 [Linux 桌面支持](docs/linux-desktop.md)。dmg 窗口背景和 Windows 安装界面的图在 `app/src-tauri/installer`，Mac 菜单栏图标是 `app/src-tauri/icons/tray.svg`，改了 SVG 在 Mac 上跑 `CHROME=<Chrome 可执行文件> node scripts/render-art.mjs` 重新出图。在线更新包要签名：仓库 Secrets 里放 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容，没有密码），公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥丢了，已经装上的软件就收不到更新了。本地打正式包不需要私钥，只有加上 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 才会生成更新包并要求签名。
 
 发布牵线服务器：改好根目录 `Cargo.toml` 的版本号，推一个同版本的 `server-vX.Y.Z` 标签，GitHub Actions 会编译 Linux x86_64、aarch64 两个版本连同校验和放到发布页（`.github/workflows/server-release.yml`），一键安装脚本就从那里下载。
 
@@ -276,8 +280,8 @@ MIT，见 [LICENSE](LICENSE)。
 
 桌面端终端由被连设备上的独立后台进程托管：macOS/Linux 使用 tmux，Windows 使用原生 ConPTY 的 [psmux](https://github.com/psmux/psmux)，不需要 WSL。
 
-- Windows 与 macOS 发行版内置会话管理器，用户无需安装 tmux、psmux、Homebrew 或 WSL，首次启动也不联网下载组件。
-- 按打包目标系统和 CPU 架构选择组件：Windows 只带对应架构的 psmux 3.4.0；Mac 只带对应架构的 tmux 3.7c。不会把另一系统的二进制放进安装包。Apple Silicon 和 Intel 分包；仅显式选择 universal 时使用已提交的双架构 Mac 文件。
+- Windows、macOS 与 Linux 发行配置均内置会话管理器，用户无需安装 tmux、psmux、Homebrew 或 WSL，首次启动也不联网下载组件。
+- 按打包目标系统和 CPU 架构选择组件：Windows 只带对应架构的 psmux 3.4.0；Mac、Linux 只带对应架构的 tmux 3.7c。Linux 文件名为 `p2pcli-tmux`，不占用系统 `/usr/bin/tmux`。不会把另一系统的二进制放进安装包。Apple Silicon 和 Intel 分包；仅显式选择 universal 时使用已提交的双架构 Mac 文件。
 - 桌面端通过应用目录中的绝对路径调用组件，不依赖用户 PATH。若安装内容损坏则提示重新安装，不会悄悄调用系统中其他版本。独立 core/CLI 仍可使用自行安装的工具。
 - 连接设备后显示后台会话列表，可新建、恢复或明确结束会话；终端工具栏的会话按钮可再次打开列表。
 - 断线、关闭标签和退出 P2PCLI 只断开附着客户端。再次连接同一设备，可恢复原进程、工作目录、变量和终端画面。
@@ -299,12 +303,13 @@ MIT，见 [LICENSE](LICENSE)。
 
 ### 仓库内置的预编译会话组件
 
-Windows 的 psmux 3.4.0 和 macOS 的 tmux 3.7c 已作为真实二进制文件纳入 Git，许可证一并提交。拉取完整仓库后即可使用，无需另装 tmux、psmux 或 Homebrew；开发启动、打包和应用首次启动都不会下载或编译这些组件。项目本身仍需正常安装 Node/Rust 开发依赖。
+Windows 的 psmux 3.4.0、macOS 和 Linux 的 tmux 3.7c 已作为真实二进制文件纳入 Git，许可证一并提交。拉取完整仓库后即可使用，无需另装 tmux、psmux 或 Homebrew；开发启动、打包和应用首次启动都不会下载或编译这些组件。项目本身仍需正常安装 Node/Rust 开发依赖。
 
 - Windows 提供官方 x64、ARM64、x86 便携包中的 `psmux.exe`。
 - Mac 提供官方 Apple Silicon、Intel 预编译版，最低支持 **macOS 15**。只依赖系统动态库，不需要额外安装 libevent 等库。
 - Mac 通用版也已提交；它是两份未修改的官方二进制切片组成的 FAT 文件，没有重新编译或修改最低系统版本。
-- `pnpm run dev` 启动前、`pnpm run build` 的前置步骤仅检查本地文件的大小、SHA-256、CPU 架构、Mac 最低系统版本和动态库路径。缺失或损坏时中止并提示恢复仓库文件。
+- Linux 提供官方 x86_64 / ARM64 静态 musl ELF，组件本身不依赖发行版的 tmux/libevent/ncurses 动态库；桌面程序仍依赖 GTK/WebKitGTK。
+- `pnpm run dev` 启动前、`pnpm run build` 的前置步骤检查组件文件的大小、SHA-256、CPU 架构、Mac 最低系统版本和动态库路径、Linux ELF 静态链接。缺失或损坏时中止并提示恢复仓库文件。
 - `app/src-tauri/binaries` 保存可执行文件；`app/src-tauri/resources/session-tools` 保存对应平台许可和来源记录；`scripts/session-tools.json` 锁定官方来源、归档及文件 SHA-256。
 - Tauri 的平台配置只引用该平台的 `externalBin` 和许可目录，再按目标架构选择单份二进制。仓库包含所有版本，安装包不会携带另一平台或无关架构的组件。Mac 通用包只在显式指定 `universal-apple-darwin` 时使用。
 - Tauri 在开发时将组件复制到可执行文件旁，Mac 发行包里的组件和 app 一起做 ad-hoc 签名（`tauri.macos.conf.json` 里 `signingIdentity` 是 `-`），没有公证。Git 已保留 Mac 文件的可执行权限。
