@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Circle, Network, X } from "lucide-react";
 import { createPortal } from "react-dom";
-import { canLink, endpointKey, endpointLabel, taskSource, type CollaborationEndpoint } from "../lib/collaborationLinks";
+import { canLink, endpointKey, endpointLabel, taskDestination, taskSource, type CollaborationEndpoint } from "../lib/collaborationLinks";
 import { taskStateLabels } from "../lib/collaboration";
 import { useCollaboration } from "./CollaborationContext";
 import { Button } from "./ui/button";
@@ -110,7 +110,8 @@ export function CollaborationPorts({ children }: { children: ReactNode }) {
     const update = () => {
       const session = collab.sessions.find((session) => session.id === task.spec.assignee.session_id && session.device_id === task.spec.assignee.device_id);
       const start = pointFor(taskSource(task));
-      const end = pointFor({ deviceId: task.spec.assignee.device_id, deviceName: "", terminalId: session?.terminal?.terminal_id });
+      const destination = taskDestination(task);
+      const end = pointFor({ ...destination, terminalId: destination.deviceId === task.spec.assignee.device_id ? session?.terminal?.terminal_id : undefined });
       setLine((current) => {
         if (!start || !end) return null;
         return current?.start.x === start.x && current.start.y === start.y && current.end.x === end.x && current.end.y === end.y

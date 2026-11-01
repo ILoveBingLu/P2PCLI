@@ -8,6 +8,7 @@ import {
 } from "../lib/collaboration";
 import { Button } from "./ui/button";
 import { CollaborationField, type CollaborationMutation } from "./CollaborationForms";
+import { taskTeam } from "../lib/collaborationLinks";
 
 export function CollaborationTaskDetail({ task, sessions, target, canDispatch, disabled, mutate, onBack, compact = false, deviceName = shortId }: {
   task: CollaborationTask; sessions: CollaborationSession[]; target: string | null;
@@ -30,6 +31,7 @@ export function CollaborationTaskDetail({ task, sessions, target, canDispatch, d
   }, [target, task.project_id, task.id, task.version, revision]);
   const name = (ref: { device_id: string; session_id: string }) => sessions.find((s) => s.id === ref.session_id && s.device_id === ref.device_id)?.name ?? shortId(ref.session_id);
   const selected = sessions.find((s) => sessionKey(sessionRef(s)) === assignee);
+  const team = taskTeam(task);
   const result = task.attempts.at(-1)?.result;
   const requiredArtifacts = result?.artifact_ids ?? [];
   const allReceived = requiredArtifacts.every((id) => artifacts.some((artifact) => artifact.id === id && artifact.received && artifact.local_path && artifact.task_id === task.id && artifact.attempt_id === task.attempts.at(-1)?.id));
@@ -42,7 +44,8 @@ export function CollaborationTaskDetail({ task, sessions, target, canDispatch, d
     <div className="collab-detail-scroll">
       <h2>{task.spec.title}</h2>
       <dl className="collab-metadata">
-        <dt>执行会话</dt><dd>{name(task.spec.assignee)}</dd>
+        <dt>{team ? "主会话" : "执行会话"}</dt><dd>{name(task.spec.assignee)}</dd>
+        {team && <><dt>参与会话</dt><dd>{team.participants.map(name).join("、")}</dd></>}
         <dt>设备</dt><dd title={task.spec.assignee.device_id}>{deviceName(task.spec.assignee.device_id)}</dd>
         {!compact && <><dt>任务 ID</dt><dd className="collab-code">{task.id}</dd></>}
         <dt>最近更新</dt><dd>{collaborationTime(task.updated_at)}</dd>
@@ -54,7 +57,7 @@ export function CollaborationTaskDetail({ task, sessions, target, canDispatch, d
       </div>}
       {task.state === "cancel_requested" && <p className="collab-notice">等待执行会话确认停止，当前不能重新分配。</p>}
       {task.state === "result_ready" && !artifactLoading && !artifactError && !allReceived && <p className="collab-notice">结果产物尚未全部接收，暂不能验收。</p>}
-      {canDispatch && task.state === "queued" && !compact && <form className="collab-assignment" onSubmit={(e) => {
+      {canDispatch && task.state === "queued" && !compact && !team && <form className="collab-assignment" onSubmit={(e) => {
         e.preventDefault();
         if (selected?.available && !disabled) void mutate({ type: "task_assign", task_id: task.id, expected_version: task.version, assignee: sessionRef(selected) });
       }}>

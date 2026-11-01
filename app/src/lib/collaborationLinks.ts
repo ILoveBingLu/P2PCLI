@@ -1,4 +1,4 @@
-import type { CollaborationMember, CollaborationSession, CollaborationTask } from "./collaboration";
+import type { CollaborationMember, CollaborationSession, CollaborationTask, SessionRef, TaskSpec } from "./collaboration";
 
 export interface CollaborationEndpoint {
   deviceId: string;
@@ -10,6 +10,14 @@ export interface CollaborationEndpoint {
 export interface CollaborationLink {
   source: CollaborationEndpoint;
   destination: CollaborationEndpoint;
+}
+export interface CollaborationDraft {
+  endpoint: CollaborationEndpoint;
+  prompt: string;
+  projectId: string;
+  coordinatorId: string;
+  ownerId: string;
+  requestId: string;
 }
 
 export const endpointKey = (endpoint: CollaborationEndpoint) =>
@@ -35,8 +43,97 @@ export function sessionReady(session: CollaborationSession, members: Collaborati
     members.some((member) => member.device_id === session.device_id && !member.revoked && member.role !== "viewer");
 }
 
-export function linkInputs(source: CollaborationEndpoint, ownerId: string) {
-  return { p2pcli_link: { version: 1, owner_device_id: ownerId, source } };
+export function linkInputs(source: CollaborationEndpoint, ownerId: string, destination?: CollaborationEndpoint) {
+  return { p2pcli_link: { version: 1, owner_device_id: ownerId, source, ...(destination ? { destination } : {}) } };
+}
+
+export function canCoordinate(session: CollaborationSession, members: CollaborationMember[], now = Date.now() / 1000) {
+  return sessionReady(session, members, now) &&
+    members.some((member) => member.device_id === session.device_id && !member.revoked &&
+      (member.role === "admin" || member.role === "dispatcher"));
+}
+
+export function teamParticipants(sessions: CollaborationSession[], lead: CollaborationSession | null) {
+  const seen = new Set<string>();
+  const key = (session: CollaborationSession) => JSON.stringify(session.terminal ?
+    [session.device_id, session.terminal.host_device_id, session.terminal.owner_device_id, session.terminal.terminal_id] :
+    [session.device_id, session.id]);
+  if (lead) seen.add(key(lead));
+  return sessions.filter((session) => {
+    const id = key(session);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+export function teamTaskSpec({
+  source, destination, ownerId, coordinatorId, goal, acceptance, lead, participants, members, now = Date.now() / 1000,
+}: {
+  source: CollaborationEndpoint; destination: CollaborationEndpoint; ownerId: string; coordinatorId: string; goal: string; acceptance: string;
+  lead: CollaborationSession; participants: CollaborationSession[]; members: CollaborationMember[]; now?: number;
+}): TaskSpec {
+  if (!goal.trim()) throw new Error("请填写任务目标");
+  if (!canCoordinate(lead, members, now)) throw new Error("主会话不可用或没有调度权限，请重新选择");
+  if (!participants.length || participants.some((session) => !sessionReady(session, members, now))) {
+    throw new Error("参与会话已不可用，请重新选择");
+  }
+  const workers = teamParticipants(participants, lead);
+  if (!workers.length) throw new Error("至少需要一个不同于主会话的参与会话");
+  const ref = (session: CollaborationSession) => ({ device_id: session.device_id, session_id: session.id });
+  return {
+    title: goal.trim().split("\n")[0].slice(0, 120), goal: goal.trim(), acceptance: acceptance.trim(),
+    assignee: ref(lead),
+    inputs: {
+      ...linkInputs(source, ownerId, destination),
+      p2pcli_team: {
+        version: 1, coordinator_id: coordinatorId, lead: ref(lead),
+        participants: workers.map((session) => ({ ...ref(session), name: session.name })),
+        strategy: "balanced_workload",
+        instructions: [
+          "你是此主任务的主会话。先确认并领取分配给自己的主任务，再拆分、调度和汇总，不把完整主任务重复广播给每个会话。",
+          "使用本机已有的 p2pcli collab 会话凭据；协调设备作用域必须与登记凭据一致。不要输出、复制或传送 token，不自动提权。",
+          "核对 task create/list/show/progress/result/cancel/stop/accept 和 session list 的 --help。所有调用使用参数数组和 JSON 文件，不将任务文本或会话名称拼接为 shell 命令。",
+          "将 goal 和 acceptance 拆成有唯一 requirement_id 的独立需求，记录依赖、验收条件、预计工作量、工作目录和文件所有权；有依赖的需求按顺序执行，共享目录的冲突写入必须串行。",
+          "每次分配前读取 session list 和 task list，限定在 participants 名单内且仍在线、可用、获授权的会话。按当前未完成任务的预计工作量优先分配给负载最低者，工作量相近时轮流分配；不得向未选中的会话扩大范围。",
+          "每个需求通过 task create --file 创建一个子任务，assignee 指定对应参与会话。inputs.p2pcli_parent 必须包含 version:1、task_id:当前主任务ID、requirement_id 和 estimated_work。保留必要输入资料，不复制 p2pcli_team，避免递归拆分。",
+          "将拆分计划、子任务ID和分配情况写入主任务 progress。创建前查询相同父任务ID和 requirement_id，重试使用原 request-id 和原参数；queued 或 committed_unverified 不是执行成功，不重复派发。",
+          "持续查询主任务和子任务状态并维持心跳。参与者需自行领取子任务；离线时报告 blocked，不假定超时已经停止。重新分配前先取消旧任务并确认执行已停止。",
+          "主任务收到取消请求时停止新增分配，取消属于本主任务的子任务，并确认它们已停止后才确认主任务停止。父子关系是 inputs 元数据，系统不会自动级联取消。",
+          "汇总每个需求的真实结果、验证证据与已接收产物，核对依赖及全部验收条件。子任务失败、未结束或产物未收到时不得宣称主任务完成；在主任务 result 中列出子任务ID、完成项、剩余项和验证结果，最终验收交给用户。",
+        ].join("\n"),
+      },
+    },
+  };
+}
+
+export function taskDestination(task: CollaborationTask): CollaborationEndpoint {
+  const inputs = task.spec.inputs;
+  if (inputs && typeof inputs === "object" && "p2pcli_link" in inputs) {
+    const link = inputs.p2pcli_link;
+    if (link && typeof link === "object" && "version" in link && link.version === 1 && "destination" in link) {
+      const destination = link.destination;
+      if (destination && typeof destination === "object" &&
+        "deviceId" in destination && typeof destination.deviceId === "string" &&
+        "deviceName" in destination && typeof destination.deviceName === "string") {
+        return { deviceId: destination.deviceId, deviceName: destination.deviceName };
+      }
+    }
+  }
+  return { deviceId: task.spec.assignee.device_id, deviceName: task.spec.assignee.device_id };
+}
+
+export function taskTeam(task: CollaborationTask): { lead: SessionRef; participants: SessionRef[] } | null {
+  const inputs = task.spec.inputs;
+  if (!inputs || typeof inputs !== "object" || !("p2pcli_team" in inputs)) return null;
+  const team = inputs.p2pcli_team;
+  const isRef = (value: unknown): value is SessionRef => !!value && typeof value === "object" &&
+    "device_id" in value && typeof value.device_id === "string" &&
+    "session_id" in value && typeof value.session_id === "string";
+  if (!team || typeof team !== "object" || !("version" in team) || team.version !== 1 ||
+    !("lead" in team) || !isRef(team.lead) ||
+    !("participants" in team) || !Array.isArray(team.participants) || !team.participants.every(isRef)) return null;
+  return { lead: team.lead, participants: team.participants };
 }
 
 export function taskSource(task: CollaborationTask): CollaborationEndpoint {
@@ -58,7 +155,61 @@ export function taskSource(task: CollaborationTask): CollaborationEndpoint {
   return { deviceId: task.creator_device, deviceName: task.creator_device };
 }
 
-// The receiving AI runs this itself: no credentials or terminal input are sent automatically.
+// Credentials stay with the receiving AI; the desktop only submits and verifies onboarding.
+export function registrationDrafts(projectId: string, coordinatorId: string, ownerId: string, endpoints: CollaborationEndpoint[]): CollaborationDraft[] {
+  if (!endpoints.length || endpoints.some((endpoint) => !endpoint.terminalId)) throw new Error("请先选择目标 AI 会话");
+  const seen = new Set<string>();
+  return endpoints.filter((endpoint) => {
+    const key = endpointKey(endpoint);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((endpoint) => ({
+    endpoint, prompt: registrationPrompt(projectId, coordinatorId, ownerId, endpoint),
+    projectId, coordinatorId, ownerId,
+    requestId: JSON.stringify(["onboard-v1", coordinatorId, projectId, ownerId, endpoint.terminalId]),
+  }));
+}
+
+export async function connectCollaborationSession(draft: CollaborationDraft, io: {
+  read: () => Promise<{ sessions: CollaborationSession[]; members: CollaborationMember[] }>;
+  send: () => Promise<void>;
+  wait: () => Promise<void>;
+  now?: () => number;
+  signal: AbortSignal;
+  timeoutMs?: number;
+}): Promise<void> {
+  const now = io.now ?? Date.now;
+  const deadline = now() + (io.timeoutMs ?? 120_000);
+  const registered = async () => {
+    io.signal.throwIfAborted();
+    const { sessions, members } = await io.read();
+    io.signal.throwIfAborted();
+    if (!members.some((member) => member.device_id === draft.endpoint.deviceId && !member.revoked && member.role !== "viewer")) {
+      throw new Error("目标设备的协作权限已失效，未继续接入");
+    }
+    return matchingSessions(sessions, draft.endpoint, draft.ownerId).some((session) => sessionReady(session, members, now() / 1000));
+  };
+  if (await registered()) return;
+  io.signal.throwIfAborted();
+  await io.send();
+  // A send receipt is not a registration receipt. Never retry terminal input in this loop.
+  while (now() < deadline) {
+    if (await registered()) return;
+    await io.wait();
+  }
+  io.signal.throwIfAborted();
+  throw new Error("接入请求已发送，但尚未确认登记。请查看会话中的授权或错误，不要重复发送。");
+}
+
+export function registrationDraftText(drafts: CollaborationDraft[]): string {
+  if (drafts.length === 1) return drafts[0].prompt;
+  return [
+    "以下为各会话独立的接入请求。只将对应段落交给该会话，不要在一个会话中登记全部身份。",
+    ...drafts.map(({ endpoint, prompt }) => `## ${endpointLabel(endpoint)}（终端 ${endpoint.terminalId}）\n\n${prompt}`),
+  ].join("\n\n");
+}
+
 export function registrationPrompt(projectId: string, coordinatorId: string, ownerId: string, endpoint: CollaborationEndpoint) {
   const scope = ["p2pcli", "--json", "collab", "--coordinator", coordinatorId, "--project", projectId];
   const terminal = endpoint.terminalId ? {
