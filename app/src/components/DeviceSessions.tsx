@@ -2,7 +2,6 @@ import { useState, type MouseEvent } from "react";
 import { LoaderCircle, Pencil, SquareArrowOutUpRight, Terminal, Trash2 } from "lucide-react";
 import { api, type DeviceStatus, type RemoteInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/components/ui/toast";
 import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
@@ -11,6 +10,7 @@ import { sessionTitles } from "./sessionText";
 import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
 import { CollaborationAnchor } from "./CollaborationPorts";
+import { ClearSessionDialog } from "./ClearSessionDialog";
 
 export interface SidebarTab {
   key: number;
@@ -21,7 +21,7 @@ export interface SidebarTab {
   state: "opening" | "open" | "exited" | "closed";
 }
 
-export function DeviceSessions({ endpointId, deviceName, target, status, tabs, snapshot, activeKey, busy, onChangeSessions, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
+export function DeviceSessions({ endpointId, deviceName, target, status, tabs, snapshot, activeKey, busy, onChangeSessions, onConnectOpen, onConnectClear, onOpen, onSelect, onEnded, openMenu }: {
   endpointId: string;
   deviceName: string;
   target?: SessionTarget;
@@ -35,6 +35,7 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
   /** 没连上时点会话：先连上，再打开这个会话；null 是新建 */
   onChangeSessions: (sessions: TerminalSession[]) => void;
   onConnectOpen: (sessionId: string | null) => void;
+  onConnectClear: (sessionId: string) => void;
   onOpen: (target: SessionTarget, sessionId?: string) => void;
   onSelect: (key: number) => void;
   onEnded: (sessionId: string) => void;
@@ -78,16 +79,15 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
 
   const end = async () => {
     const session = ending;
-    if (!session || connId == null) return;
-    setEnding(null);
-    // 先从列表里拿掉，失败了下次刷新会放回来
-    onChangeSessions(sessions.filter((s) => s.id !== session.id));
-    try {
-      await api.endTerminal(connId, session.id);
-      onEnded(session.id);
-    } catch (e) {
-      toast.error(`结束会话失败：${String(e)}`);
+    if (!session) return;
+    if (connId == null) {
+      if (busy || status?.state === "offline") throw new Error("设备暂不可连接，请稍后重试");
+      onConnectClear(session.id);
+      return;
     }
+    await api.endTerminal(connId, session.id);
+    onChangeSessions(sessions.filter((s) => s.id !== session.id));
+    onEnded(session.id);
   };
 
   // 会话行的右键菜单；设备本身的菜单在侧边栏那一层
@@ -99,13 +99,15 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
       { id: "open", label: row.tab ? "切换过去" : "打开", icon: <SquareArrowOutUpRight className="size-4" />, disabled: !row.tab && !target, onAction: () => openRow(row) },
       { id: "remark", label: row.remark.trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, disabled: !row.sessionId, onAction: () => setRemarkTarget({ id: row.sessionId, label: row.label, remark: row.remark }) },
       {
-        id: "end", label: "结束会话", icon: <Trash2 className="size-4" />, danger: true, separated: true,
+        id: "end", label: "清除会话", icon: <Trash2 className="size-4" />, danger: true, separated: true,
         disabled: !row.sessionId || !target || !listed.has(row.sessionId),
         onAction: () => setEnding({ id: row.sessionId, label: row.label }),
       },
     ]);
   };
 
+  const clearDialog = ending && <ClearSessionDialog key={ending.id} label={ending.label}
+    needsConnection={!target} onConfirm={end} onCancel={() => setEnding(null)} />;
   const remarkDialog = (
     <RemarkDialog
       open={!!remarkTarget}
@@ -124,6 +126,7 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
   if (!target) return (
     <>
       {remarkDialog}
+      {clearDialog}
       <OfflineSessions
         endpointId={endpointId}
         deviceName={deviceName}
@@ -133,6 +136,7 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
         openMenu={openMenu}
         remarkFor={sessionRemark}
         onRemark={(id, label) => setRemarkTarget({ id, label, remark: sessionRemark(id) })}
+        onClear={(id, label) => setEnding({ id, label })}
       />
     </>
   );
@@ -140,6 +144,7 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
   return (
     <>
       {remarkDialog}
+      {clearDialog}
       <div className="flex min-w-0 flex-col gap-1" onContextMenu={onContextMenu}>
         {rows.map((row) => (
           <CollaborationAnchor key={row.id} endpoint={{ deviceId: endpointId, deviceName, terminalId: row.sessionId, sessionName: row.label }}
@@ -163,27 +168,13 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
         {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
         {error && <p className="px-2 py-1 text-xs text-destructive break-words" role="alert">{error}</p>}
         {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
-        {ending && (
-          <AlertDialog open>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>结束{ending.label}？</AlertDialogTitle>
-                <AlertDialogDescription>会话里正在跑的程序会被结束，没保存的内容可能丢失。只是想暂时离开的话，关掉终端标签就行。</AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <Button variant="outline" onClick={() => setEnding(null)}>取消</Button>
-                <Button variant="destructive" onClick={end}>结束会话</Button>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
       </div>
     </>
   );
 }
 
 /** 没连上时：显示后台探测拿到的、或者上次记住的会话，点一下就连上并打开 */
-function OfflineSessions({ endpointId, deviceName, status, busy, onConnectOpen, openMenu, remarkFor, onRemark }: {
+function OfflineSessions({ endpointId, deviceName, status, busy, onConnectOpen, openMenu, remarkFor, onRemark, onClear }: {
   endpointId: string;
   deviceName: string;
   status?: DeviceStatus;
@@ -192,6 +183,7 @@ function OfflineSessions({ endpointId, deviceName, status, busy, onConnectOpen, 
   openMenu: (e: MouseEvent, actions: MenuAction[]) => void;
   remarkFor: (id: string) => string;
   onRemark: (id: string, label: string) => void;
+  onClear: (id: string, label: string) => void;
 }) {
   const sessions = [...(status?.sessions ?? [])].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id.localeCompare(b.id));
   const titles = sessionTitles(sessions);
@@ -205,6 +197,8 @@ function OfflineSessions({ endpointId, deviceName, status, busy, onConnectOpen, 
         openMenu(e, [
           { id: "open", label: "连接并打开", icon: <SquareArrowOutUpRight className="size-4" />, disabled: busy || offline, onAction: () => onConnectOpen(id) },
           { id: "remark", label: remarkFor(id).trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, onAction: () => onRemark(id, titles.get(id) ?? "会话") },
+          { id: "end", label: "清除会话", icon: <Trash2 className="size-4" />, danger: true, separated: true,
+            disabled: busy || offline, onAction: () => onClear(id, remarkFor(id).trim() || titles.get(id) || "会话") },
         ]);
       }}>
       {sessions.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}

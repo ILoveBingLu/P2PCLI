@@ -18,7 +18,7 @@ const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
 /** 本机那一行第一次出现时默认展开，之后听用户的 */
 const LOCAL_SEEDED_KEY = "p2pcli.sidebar.local-seeded";
 
-export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onSessionsLocalChange, onPendingOpen }: {
+export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onSessionsLocalChange, onPendingOpen, onPendingClear }: {
   ov: Overview | null;
   liveSessions: Record<number, TerminalSessionSnapshot>;
   busy: boolean;
@@ -44,6 +44,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   onSessionsLocalChange: (connId: number, sessions: TerminalSession[]) => void;
   /** 没连上的设备上点了会话：连上以后直接打开它（null 是新建） */
   onPendingOpen: (endpointId: string, sessionId: string | null) => void;
+  onPendingClear: (endpointId: string, sessionId: string) => void;
 }) {
   const menu = useContextMenu();
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -261,6 +262,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                           activeKey={sessionTarget ? null : activeKey} busy={busy}
                           onChangeSessions={(sessions) => onSessionsLocalChange(local.conn_id, sessions)}
                           onConnectOpen={() => onOpenSession(localTarget)}
+                          onConnectClear={() => {}}
                           onOpen={onOpenSession} onSelect={onSelectTab}
                           onEnded={(id) => onSessionEnded(localId, id)}
                           openMenu={menu.open} />}
@@ -371,6 +373,10 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                             activeKey={sessionTarget ? null : activeKey} busy={busy}
                             onChangeSessions={(sessions) => target && onSessionsLocalChange(target.connId, sessions)}
                             onConnectOpen={(id) => connectOpen(device, id)}
+                            onConnectClear={(id) => {
+                              onPendingClear(device.endpoint_id, id);
+                              connectDevice(device);
+                            }}
                             onOpen={onOpenSession} onSelect={onSelectTab}
                             onEnded={(id) => onSessionEnded(device.endpoint_id, id)}
                             openMenu={menu.open} />}

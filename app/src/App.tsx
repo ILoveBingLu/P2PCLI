@@ -35,6 +35,7 @@ import {
 } from "./api";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
 import { pollConnections } from "./lib/pollConnections";
+import { withoutClearedSessions } from "./lib/sessionCleanup";
 import { TerminalStatusbar } from "./components/TerminalStatusbar";
 import { selftestSawOverview } from "./selftest";
 import { ConnectionPopover } from "./components/ConnectionPopover";
@@ -93,6 +94,7 @@ type DropHint = { name: string } | { blocked: string };
 
 export default function App() {
   const tabSeq = useRef(1);
+  const clearedSessions = useRef(new Map<string, Set<string>>());
   const [ov, setOv] = useState<Overview | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeKey, setActiveKey] = useState<number | null>(null);
@@ -131,7 +133,8 @@ export default function App() {
     api
       .overview()
       .then((o) => {
-        setOv(o);
+        // 已确认结束的会话不能被晚到的探测缓存重新放回侧边栏。
+        setOv(withoutClearedSessions(o, clearedSessions.current));
         setOverviewError(null);
         selftestSawOverview(o);
       })
@@ -182,6 +185,9 @@ export default function App() {
   }, [refresh]);
 
   const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
+  useEffect(() => {
+    setActiveKey((key) => key !== null && !tabs.some((tab) => tab.key === key) ? tabs.at(-1)?.key ?? null : key);
+  }, [tabs]);
   // 远程会话里的 AI 等你确认、干完活时提醒；正看着的那个会话不打扰
   useAgentAlerts(
     ov,
@@ -358,8 +364,12 @@ export default function App() {
     setActiveKey(key);
   };
 
-  /** 在没连上的设备上点了会话：连上以后直接打开它（null 是新建），不停在会话页 */
-  const pendingOpen = useRef<{ endpointId: string; sessionId: string | null } | null>(null);
+  /** 连接后执行用户指定的会话操作；清除操作已在会话菜单中确认。 */
+  const pendingOpen = useRef<{
+    endpointId: string;
+    sessionId: string | null;
+    clear?: boolean;
+  } | null>(null);
 
   const onConnected = (
     connId: number,
@@ -371,12 +381,24 @@ export default function App() {
     const pending = pendingOpen.current;
     pendingOpen.current = null;
     if (window.__ptTest) addTab(connId, info, code);
-    else if (pending && pending.endpointId === info.endpoint_id) {
+    else if (pending && !pending.clear && pending.endpointId === info.endpoint_id) {
       addTab(connId, info, code, pending.sessionId ?? undefined);
     } else {
       if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((t) => t.connId === sessionTarget.connId))
         void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
       setSessionTarget({ connId, info, code });
+      if (pending?.clear) {
+        if (pending.endpointId !== info.endpoint_id || !pending.sessionId) {
+          toast.error("连接的设备与待清除会话不一致，未执行清除");
+        } else {
+          const sessionId = pending.sessionId;
+          void api.endTerminal(connId, sessionId).then(() => {
+            sessionEnded(info.endpoint_id, sessionId);
+            refresh();
+            toast.success("会话已清除");
+          }).catch((error) => toast.error(`清除会话失败：${String(error)}`));
+        }
+      }
     }
     setShowSettings(false);
     refresh();
@@ -407,10 +429,13 @@ export default function App() {
 
   /** 某台设备的会话被结束了：关掉对应的标签，各处会话列表重读 */
   const sessionEnded = (endpointId: string, id: string) => {
+    const cleared = clearedSessions.current.get(endpointId) ?? new Set<string>();
+    cleared.add(id);
+    clearedSessions.current.set(endpointId, cleared);
+    setOv((current) => current && withoutClearedSessions(current, clearedSessions.current));
     setSessionsRev((v) => v + 1);
-    const rest = tabs.filter((t) => t.info.endpoint_id !== endpointId || t.sessionId !== id);
-    setTabs(rest);
-    if (activeKey !== null && !rest.some((t) => t.key === activeKey)) setActiveKey(rest.at(-1)?.key ?? null);
+    setTabs((current) => current.filter((t) => t.info.endpoint_id !== endpointId || t.sessionId !== id));
+    void api.refreshDevices().catch(() => { /* 下轮常规探测会继续同步缓存。 */ });
   };
 
   const closeTab = (key: number) => {
@@ -624,6 +649,10 @@ export default function App() {
         onSessionsChanged={() => setSessionsRev((v) => v + 1)}
         onSessionsLocalChange={updateLiveSessions}
         onPendingOpen={(endpointId, sessionId) => { pendingOpen.current = { endpointId, sessionId }; }}
+        onPendingClear={(endpointId, sessionId) => {
+          pendingCollaborationDraft.current = null;
+          pendingOpen.current = { endpointId, sessionId, clear: true };
+        }}
         busy={connection.busy}
         open={sidebar.open}
         scanning={scanningNearby}

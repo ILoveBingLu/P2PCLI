@@ -468,7 +468,10 @@ mockIPC(
         );
       }
       case "list_terminals": {
-        if (s.startsWith("collab")) return collabClone([terminalSessions[Number(args.connId) === 2 ? 1 : 0]]);
+        if (s.startsWith("collab")) {
+          const id = (Number(args.connId) === 2 ? "b" : "a").repeat(32);
+          return collabClone(terminalSessions.filter((session) => session.id === id));
+        }
         if (s === "sessions-error") return Promise.reject("无法连接到会话服务，请检查被控端运行状态。");
         // s=status-live: change metadata, fail briefly, then recover without a reload.
         const elapsed = statusStartedAt ? Date.now() - statusStartedAt : 0;
@@ -527,8 +530,15 @@ mockIPC(
       }
       case "end_terminal": {
         await new Promise((r) => setTimeout(r, 500));
+        if (s === "collab-clear-error") throw new Error("模拟清除失败：设备连接已断开");
         const index = terminalSessions.findIndex((session) => session.id === args.sessionId);
         if (index >= 0) terminalSessions.splice(index, 1);
+        const endpointId = s.startsWith("collab")
+          ? Number(args.connId) === 2 ? "windows-device-01" : Number(args.connId) === 0 ? collabDevice : "studio-device-02"
+          : "x";
+        for (const device of ov.devices) {
+          if (device.endpoint_id === endpointId) device.sessions = device.sessions?.filter((session) => session.id !== args.sessionId);
+        }
         for (const [id, attachment] of attachments) {
           if (attachment.sessionId === args.sessionId) { attachment.status.onmessage({ type: "exited", code: 0 }); attachments.delete(id); }
         }
