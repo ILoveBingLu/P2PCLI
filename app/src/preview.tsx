@@ -2,6 +2,10 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { Overview, SettingsView, SystemPermission, TerminalSession, Transfer } from "./api";
+import type {
+  CollaborationArtifact, CollaborationMember, CollaborationProject, CollaborationReply,
+  CollaborationSession, CollaborationTask, CollaborationAction, CollaborationDelivery, CollaborationRequest, SessionRef,
+} from "./lib/collaboration";
 
 const s = new URLSearchParams(location.search).get("s") ?? "empty";
 
@@ -89,6 +93,160 @@ if (s === "latency") ov.devices[0].path!.rtt_ms = 99;
 let statusStartedAt = 0;
 const fakeTraffic = { sent: 120_000, recv: 2_400_000, packets: 4000, lost: 3 };
 const now = Math.floor(Date.now() / 1000);
+const collabDevice = "459a2c0a8c093ad76c1b00d7ecfd6dce576f219cdc3c2907cdfc49b3b9ac9ca9";
+const collabProject: CollaborationProject = { id: "project-p2pcli", name: "P2PCLI 跨设备验证", coordinator_id: collabDevice, created_at: now - 86_400 };
+const collabMembers: CollaborationMember[] = [
+  { device_id: collabDevice, role: "admin", revoked: false },
+  { device_id: "windows-device-01", role: "worker", revoked: false },
+  { device_id: "studio-device-02", role: "dispatcher", revoked: false },
+];
+const collabSessions: CollaborationSession[] = [
+  { id: "session-windows-cli", project_id: collabProject.id, device_id: "windows-device-01", name: "Windows 验证 · Codex", mode: "manual_pull", terminal: null, cwd: "C:\\work\\P2PCLI", available: true, last_seen: now - 8 },
+  { id: "session-studio-claude", project_id: collabProject.id, device_id: "studio-device-02", name: "工作室 Mac · Claude", mode: "manual_pull", terminal: null, cwd: "/Users/demo/Projects/P2PCLI", available: true, last_seen: now - 12 },
+  { id: "session-studio-old", project_id: collabProject.id, device_id: "studio-device-02", name: "旧验证会话", mode: "manual_pull", terminal: null, cwd: "/Users/demo/Projects/P2PCLI", available: false, last_seen: now - 3600 },
+];
+const collabTasks: CollaborationTask[] = [
+  {
+    id: "task-transfer-smoke", project_id: collabProject.id, creator_device: collabDevice, creator_session: null,
+    spec: { title: "验证 Windows 文件传输", goal: "在 Windows 上验证最新传输改动，覆盖断线重试和大文件校验。", acceptance: "回传测试命令、结果和日志文件；失败项需要明确说明。", inputs: { commit: "731d8ab", scope: ["send", "receive", "retry"] }, assignee: { device_id: "windows-device-01", session_id: "session-windows-cli" } },
+    state: "running", version: 4, attempts: [{ id: "attempt-win-1", assignee: { device_id: "windows-device-01", session_id: "session-windows-cli" }, started_at: now - 820, last_seen: now - 24, stopped: false, result: null }],
+    progress: "已完成基础发送测试，正在验证断线重试。", created_at: now - 1200, updated_at: now - 24,
+  },
+  {
+    id: "task-ui-review", project_id: collabProject.id, creator_device: collabDevice, creator_session: null,
+    spec: { title: "检查协作界面交接", goal: "检查任务详情、成员权限和离线状态在桌面界面中的表现。", acceptance: "给出截图或逐项检查结果。", inputs: { viewport: "desktop", cases: ["offline", "version_conflict"] }, assignee: { device_id: "studio-device-02", session_id: "session-studio-claude" } },
+    state: "result_ready", version: 7, attempts: [{ id: "attempt-ui-1", assignee: { device_id: "studio-device-02", session_id: "session-studio-claude" }, started_at: now - 4200, last_seen: now - 900, stopped: true, result: { summary: "桌面布局和离线提示已检查。", completed: ["任务详情可滚动", "离线状态会暂停写操作"], remaining: [], verification: ["浏览器预览：view=collab"], artifact_ids: ["artifact-ui-report"], failed: false } }],
+    progress: "结果已提交，等待协调方验收。", created_at: now - 4600, updated_at: now - 900,
+  },
+];
+const collabArtifacts: CollaborationArtifact[] = [{ id: "artifact-ui-report", task_id: "task-ui-review", attempt_id: "attempt-ui-1", provider_device: "studio-device-02", name: "collaboration-review.md", size: 18_420, hash: "sha256:preview-collaboration-review", received: true, local_path: "/Users/me/Downloads/P2PCLI/collaboration-review.md" }];
+const collabClone = <T,>(value: T): T => structuredClone(value);
+collabTasks.push({
+  ...collabClone(collabTasks[0]), id: "task-protocol-review", state: "queued", version: 1, attempts: [], progress: null, updated_at: now - 45,
+  spec: { ...collabClone(collabTasks[0].spec), title: "复核会话隔离和权限", goal: "核对成员撤销后，新请求和旧会话都无法继续访问。", inputs: { branch: "main" } },
+});
+interface PreviewCollabProject {
+  project: CollaborationProject; members: CollaborationMember[]; sessions: CollaborationSession[];
+  tasks: CollaborationTask[]; artifacts: CollaborationArtifact[];
+}
+const collabCoordinators = new Map<string, PreviewCollabProject[]>();
+const previewDeliveries: CollaborationDelivery[] = [];
+const collabReceipts = new Map<string, { request: string; reply: CollaborationReply }>();
+let previewConflict = s === "collab-conflict";
+let previewLostReply = s === "collab-lost-reply";
+function collabReply(response: CollaborationReply["response"]): CollaborationReply { return collabClone({ response }); }
+function collabReject(code: string, message: string): CollaborationReply { return { error: { code, message } }; }
+function collabAction(action: CollaborationAction, projectId: string | null, target: string | null): CollaborationReply {
+  const key = target ?? "local";
+  if (!collabCoordinators.has(key)) {
+    const data = collabClone({ project: collabProject, members: collabMembers, sessions: collabSessions, tasks: collabTasks, artifacts: collabArtifacts });
+    data.project.coordinator_id = target ?? collabDevice;
+    if (s === "collab-viewer") data.members[0].role = "viewer";
+    if (s === "collab-artifact-pending") data.artifacts[0].received = false;
+    collabCoordinators.set(key, s === "collab-empty" ? [] : [data]);
+  }
+  const projects = collabCoordinators.get(key)!;
+  if (action.type === "projects_list") return collabReply({ type: "projects", projects: projects.map((data) => data.project) });
+  if (action.type === "project_create") {
+    if (target) return collabReject("forbidden", "项目只能在协调设备本机创建");
+    if (!action.name.trim()) return collabReject("invalid_request", "项目名称不能为空");
+    const created = { ...collabProject, id: crypto.randomUUID().replaceAll("-", ""), name: action.name, created_at: Math.floor(Date.now() / 1000) };
+    projects.push({ project: created, members: [{ device_id: collabDevice, role: "admin", revoked: false }], sessions: [], tasks: [], artifacts: [] });
+    return collabReply({ type: "project", project: created });
+  }
+  const data = projects.find((entry) => entry.project.id === projectId);
+  if (!data) return collabReject("not_found", "项目不存在");
+  const { members, sessions, tasks, artifacts } = data;
+  if (action.type === "sessions_list" && s !== "collab-stale") {
+    for (const session of sessions) if (session.available) session.last_seen = Math.floor(Date.now() / 1000) - 8;
+  }
+  const own = members.find((member) => member.device_id === collabDevice && !member.revoked);
+  if (!own) return collabReject("forbidden", "当前设备无权访问项目");
+  const canDispatch = own.role === "admin" || own.role === "dispatcher";
+  const validAssignee = (ref: SessionRef) => sessions.some((session) => session.id === ref.session_id && session.device_id === ref.device_id && session.available) && members.some((member) => member.device_id === ref.device_id && !member.revoked && member.role !== "viewer");
+  if (action.type === "project_get") return collabReply({ type: "project", project: data.project });
+  if (action.type === "tasks_list") return collabReply({ type: "tasks", tasks });
+  if (action.type === "sessions_list") return collabReply({ type: "sessions", sessions: sessions.filter((session) => members.some((member) => member.device_id === session.device_id && !member.revoked)) });
+  if (action.type === "members_list") return collabReply({ type: "members", members });
+  if (action.type === "artifacts_list") return collabReply({ type: "artifacts", artifacts: artifacts.filter((artifact) => artifact.task_id === action.task_id) });
+  if (action.type === "member_set") {
+    if (own.role !== "admin") return collabReject("forbidden", "需要管理员角色");
+    const member = members.find((item) => item.device_id === action.device_id);
+    if (member?.role === "admin" && !member.revoked && (action.revoked || action.role !== "admin") && members.filter((item) => item.role === "admin" && !item.revoked).length <= 1) return collabReject("invalid_state", "不能撤销最后一位管理员");
+    if (member) Object.assign(member, { role: action.role, revoked: action.revoked });
+    else members.push({ device_id: action.device_id, role: action.role, revoked: action.revoked });
+    if (action.revoked) sessions.filter((session) => session.device_id === action.device_id).forEach((session) => { session.available = false; });
+    return collabReply({ type: "ack" });
+  }
+  if (action.type === "task_create") {
+    if (!canDispatch) return collabReject("forbidden", "需要调度者角色");
+    if (!validAssignee(action.spec.assignee)) return collabReject("session_unavailable", "执行会话不可用");
+    if (!action.spec.title.trim() || !action.spec.goal.trim()) return collabReject("invalid_request", "标题和目标不能为空");
+    const task: CollaborationTask = { id: crypto.randomUUID().replaceAll("-", ""), project_id: data.project.id, creator_device: collabDevice, creator_session: null, spec: collabClone(action.spec), state: "queued", version: 1, attempts: [], progress: null, created_at: Math.floor(Date.now() / 1000), updated_at: Math.floor(Date.now() / 1000) };
+    tasks.push(task);
+    return collabReply({ type: "task", task });
+  }
+  if (action.type === "task_get") {
+    const task = tasks.find((item) => item.id === action.task_id);
+    return task ? collabReply({ type: "task", task: collabClone(task) }) : { error: { code: "not_found", message: "任务不存在" } };
+  }
+  if (action.type === "task_assign" || action.type === "task_accept" || action.type === "task_cancel" || action.type === "task_requeue") {
+    const taskId = action.task_id;
+    if (!canDispatch) return collabReject("forbidden", "需要调度者角色");
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) return { error: { code: "not_found", message: "任务不存在" } };
+    if (previewConflict) { previewConflict = false; task.version++; task.progress = "另一会话刚刚更新了任务。"; }
+    if (task.version !== action.expected_version) return { error: { code: "version_conflict", message: "任务版本已变化" } };
+    if (action.type === "task_assign") {
+      if (task.state !== "queued") return collabReject("invalid_state", "只有待领取任务可以调整分配");
+      if (!validAssignee(action.assignee)) return collabReject("session_unavailable", "执行会话不可用");
+      task.spec.assignee = collabClone(action.assignee);
+    }
+    if (action.type === "task_accept") {
+      if (task.state !== "result_ready") return collabReject("invalid_state", "任务还未提交结果");
+      if (task.attempts.at(-1)?.result?.artifact_ids.some((id) => !artifacts.some((artifact) => artifact.id === id && artifact.received && artifact.local_path))) return collabReject("artifact_pending", "产物尚未全部接收");
+      task.state = "completed";
+    }
+    if (action.type === "task_cancel") {
+      if (!["queued", "running", "blocked"].includes(task.state)) return collabReject("invalid_state", "当前状态不能取消");
+      task.state = task.state === "queued" ? "cancelled" : "cancel_requested";
+    }
+    if (action.type === "task_requeue") {
+      if (!["result_ready", "failed", "cancelled"].includes(task.state) || (task.attempts.length > 0 && !task.attempts.at(-1)?.stopped)) return collabReject("invalid_state", "上一执行尚未停止或当前状态不能重新排队");
+      task.state = "queued"; task.progress = null;
+    }
+    task.version += 1; task.updated_at = Math.floor(Date.now() / 1000);
+    return collabReply({ type: "task", task: collabClone(task) });
+  }
+  return collabReject("unsupported", "预览不支持此操作");
+}
+async function previewCollabRequest(request: CollaborationRequest, target: string | null): Promise<CollaborationReply> {
+  await new Promise((resolve) => setTimeout(resolve, s === "collab-loading" ? 5000 : 180));
+  if (s === "collab-offline" || target === "offline") throw new Error("协调设备离线");
+  if (s === "collab-error") return collabReject("forbidden", "此设备尚未获授权");
+  const key = JSON.stringify([target, request.request_id]);
+  const previous = collabReceipts.get(key);
+  const serialized = JSON.stringify(request);
+  if (previous) return previous.request === serialized ? collabClone(previous.reply) : collabReject("idempotency_conflict", "相同请求编号包含不同内容");
+  if ((s === "collab-queued" || target === "queued") && request.action.type === "task_create") {
+    const reply = collabReply({ type: "queued", request_id: request.request_id, message: "请求已保存在本机，等待协调设备恢复连接。" });
+    previewDeliveries.unshift({ id: key, request_id: request.request_id, project_id: request.project_id, target, operation: request.action.type, state: "pending", attempts: 1, updated_at: Math.floor(Date.now() / 1000), last_error: "协调设备暂不可达" });
+    collabReceipts.set(key, { request: serialized, reply });
+    return reply;
+  }
+  if (s === "collab-unverified" && request.action.type === "task_create") {
+    const reply = collabReply({ type: "committed_unverified", request_id: request.request_id, message: "协调设备暂时不可达，本机保留了这次请求的提交记录。" });
+    collabReceipts.set(key, { request: serialized, reply });
+    return reply;
+  }
+  const reply = collabAction(request.action, request.project_id, target);
+  collabReceipts.set(key, { request: serialized, reply });
+  if (previewLostReply && request.action.type === "task_create" && reply.response?.type === "task") {
+    previewLostReply = false;
+    throw new Error("模拟提交成功后响应丢失");
+  }
+  return reply;
+}
 // Approval fixtures exercise display/submission without sending keys to a real AI.
 const approvalKind = ["codex", "gemini", "opencode"].find((kind) => s === `approval-${kind}`) ?? "claude";
 const approvalNames: Record<string, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode" };
@@ -121,6 +279,9 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
     settings: { model: "bigmodel/GLM-5.3-Flash", effort: "max", mode: "build", efforts: ["low", "high", "max"],
       models: [{ id: "bigmodel/GLM-5.3", name: "GLM-5.3" }, { id: "bigmodel/GLM-5.3-Flash", name: "GLM-5.3-Flash" }, { id: "zai/glm-5.2", name: "GLM-5.2" }] } } },
   { id: "d".repeat(32), created_at: now - 90, attached: false },
+] : s.startsWith("collab") ? [
+  { id: "a".repeat(32), created_at: now - 3600, attached: false, agent: { kind: "claude", name: "Claude Code", state: "idle" } },
+  { id: "b".repeat(32), created_at: now - 1800, attached: false, agent: { kind: "codex", name: "Codex", state: "idle" } },
 ] : s.startsWith("opencode") ? [
   { id: "e".repeat(32), created_at: now - 1200, attached: false, agent: {
     kind: "opencode", name: "OpenCode",
@@ -138,6 +299,27 @@ const terminalSessions: TerminalSession[] = s === "sessions" ? [
 ] : [];
 // 工作室 Mac mini 的后台探测结果用同一份会话，连上前后编号对得上
 ov.devices[0].sessions = terminalSessions.map((session) => ({ ...session }));
+if (s.startsWith("collab")) {
+  ov.local = { conn_id: 0, info: { endpoint_id: collabDevice, name: ov.name, platform: "macos", user: "me" } };
+  ov.recent = [
+    { code: "123456789", endpoint_id: "studio-device-02", name: "工作室 Mac mini", platform: "macos", last_used: now },
+    { code: "987654321", endpoint_id: "windows-device-01", name: "办公室 Windows", platform: "windows", last_used: now },
+  ];
+  ov.nearby = [];
+  ov.devices = ov.recent.map((device, index) => ({
+    endpoint_id: device.endpoint_id, state: s === "collab-device-offline" && index === 1 ? "offline" : "online",
+    paired: true, probing: false, path: { kind: "ipv6", rtt_ms: index ? 28 : 12, remote: null },
+    sessions: [terminalSessions[index]], sessions_live: s !== "collab-device-offline" || index !== 1, sessions_at: now,
+  }));
+  collabSessions[0].terminal = { host_device_id: "windows-device-01", owner_device_id: collabDevice, terminal_id: "b".repeat(32) };
+  collabSessions[1].terminal = { host_device_id: "studio-device-02", owner_device_id: collabDevice, terminal_id: "a".repeat(32) };
+  collabSessions.push({ id: "session-local", project_id: collabProject.id, device_id: collabDevice, name: "本机 Claude Code", mode: "manual_pull",
+    terminal: { host_device_id: collabDevice, owner_device_id: collabDevice, terminal_id: "a".repeat(32) },
+    cwd: "/Users/me/Projects/P2PCLI", available: true, last_seen: now - 5 });
+  if (s === "collab-unregistered" || s === "collab-empty") collabSessions.length = 0;
+  if (s === "collab-stale") for (const session of collabSessions) session.last_seen = now - 3600;
+  if (s === "collab-multiple") collabSessions.push({ ...collabSessions[0], id: "second-windows-session", name: "Windows 复核", terminal: null });
+}
 // s=agents：Claude Code 过一会儿停下来等确认，再过一会儿干完，看提醒
 if (s === "agents") {
   const claude = terminalSessions[0];
@@ -247,6 +429,10 @@ mockIPC(
       case "overview":
         // 跟真实接口一样每次给新对象：s=agents 会改设备状态、断开会改 sessions，同一个对象界面不会重画
         return { ...ov, devices: ov.devices.map((d) => ({ ...d })) };
+      case "collab_request":
+        return previewCollabRequest(args.request, args.target ?? null);
+      case "collab_deliveries":
+        return collabClone(previewDeliveries);
       case "notify":
         console.info("系统通知", args.title, args.body);
         return null;
@@ -263,15 +449,16 @@ mockIPC(
       case "connect": {
         if (s === "error") return Promise.reject({ reject: "bad_password", message: "配对密码不正确，请向对方获取最新密码。" });
         const lan = ov.nearby.find((d) => d.endpoint_id === args.target);
+        const collabRemote = s.startsWith("collab") ? ov.recent.find((device) => device.code === args.target || device.endpoint_id === args.target) : null;
         if (lan && lan.endpoint_id !== "x" && !args.password)
           return Promise.reject({ reject: "need_password", message: "需要输入配对密码" });
         return new Promise((r) =>
           setTimeout(
             () =>
               r({
-                conn_id: 1,
+                conn_id: collabRemote?.endpoint_id === "windows-device-01" ? 2 : 1,
                 code: lan ? null : "123456789",
-                info: { endpoint_id: lan?.endpoint_id ?? "x", name: lan?.name ?? "工作室 Mac mini", platform: lan?.platform ?? "macos", user: "me",
+                info: { endpoint_id: collabRemote?.endpoint_id ?? lan?.endpoint_id ?? "x", name: collabRemote?.name ?? lan?.name ?? "工作室 Mac mini", platform: collabRemote?.platform ?? lan?.platform ?? "macos", user: "me",
                   // s=old-peer：对方是不交换版本的旧版本
                   ...(s === "old-peer" ? {} : { version: "0.1.4", os: "macOS 26.1 Tahoe · arm64", multiplexer: "tmux 3.7c" }) },
                 path: { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" },
@@ -281,6 +468,7 @@ mockIPC(
         );
       }
       case "list_terminals": {
+        if (s.startsWith("collab")) return collabClone([terminalSessions[Number(args.connId) === 2 ? 1 : 0]]);
         if (s === "sessions-error") return Promise.reject("无法连接到会话服务，请检查被控端运行状态。");
         // s=status-live: change metadata, fail briefly, then recover without a reload.
         const elapsed = statusStartedAt ? Date.now() - statusStartedAt : 0;

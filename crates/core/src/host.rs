@@ -16,9 +16,10 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::PROTO_VERSION;
+use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::Files;
 use crate::identity::DeviceInfo;
-use crate::proto::{Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
+use crate::proto::{COLLABORATION_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
@@ -193,6 +194,7 @@ pub(crate) fn clean_name(s: &str) -> String {
 pub struct Host {
     me: RwLock<DeviceInfo>,
     pub terminals: SessionManager,
+    pub collaboration: Arc<Store>,
     password: RwLock<String>,
     /// 固定了的配对密码存在这里，重启也不变；没固定就不存，每次启动换新的
     password_file: PathBuf,
@@ -213,7 +215,7 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(me: DeviceInfo, data_dir: &Path, local_key: &str, session_program: Option<PathBuf>, delegate: Arc<dyn HostDelegate>) -> Self {
+    pub fn new(me: DeviceInfo, data_dir: &Path, local_key: &str, session_program: Option<PathBuf>, delegate: Arc<dyn HostDelegate>, collaboration: Arc<Store>) -> Self {
         let password_file = data_dir.join("pairing_password.txt");
         let fixed = std::fs::read_to_string(&password_file)
             .ok()
@@ -222,6 +224,7 @@ impl Host {
         Self {
             me: RwLock::new(me),
             terminals: SessionManager::new(local_key, session_program),
+            collaboration,
             password_fixed: AtomicBool::new(fixed.is_some()),
             password: RwLock::new(fixed.unwrap_or_else(generate_password)),
             password_file,
@@ -235,6 +238,13 @@ impl Host {
             delegate,
             files: OnceLock::new(),
         }
+    }
+
+    pub(crate) async fn collaborate(&self, actor: String, request: Request) -> Result<Reply> {
+        let store = self.collaboration.clone();
+        tokio::task::spawn_blocking(move || store.process(&actor, &request))
+            .await
+            .map_err(|e| anyhow::anyhow!("协作存储任务失败：{e}"))
     }
 
     /// 传文件那一头挂上来，只挂一次
@@ -417,6 +427,7 @@ impl Host {
             name,
             platform,
             password,
+            capabilities,
             ..
         } = timeout(Duration::from_secs(10), read_msg(&mut recv)).await??
         else {
@@ -427,6 +438,7 @@ impl Host {
         if v != PROTO_VERSION {
             return reject(conn, &mut send, RejectCode::Version).await;
         }
+        let collaboration = capabilities.iter().any(|c| c == COLLABORATION_V1);
 
         let trusted = self.trust.contains(&remote);
         // 本机连过的设备反过来连本机：不要求配对密码（密码是给陌生人用的），但一定要主人点同意
@@ -496,6 +508,7 @@ impl Host {
                 version: me.version,
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
+                capabilities: if collaboration { vec![COLLABORATION_V1.into()] } else { Vec::new() },
             },
         )
         .await?;
@@ -533,7 +546,7 @@ impl Host {
                 bi = conn.accept_bi() => match bi {
                     Ok((s, r)) => {
                         let me = self.clone();
-                        tokio::spawn(async move { me.terminal(session, remote.to_string(), s, r).await });
+                        tokio::spawn(async move { me.terminal(session, remote.to_string(), collaboration, s, r).await });
                     }
                     Err(_) => break,
                 },
@@ -548,13 +561,20 @@ impl Host {
         Ok(())
     }
 
-    async fn terminal(self: Arc<Self>, session: u64, owner: String, mut send: SendStream, mut recv: RecvStream) {
+    async fn terminal(self: Arc<Self>, session: u64, owner: String, collaboration: bool, mut send: SendStream, mut recv: RecvStream) {
         let request = match timeout(Duration::from_secs(10), read_msg(&mut recv)).await {
             Ok(Ok(msg)) => msg,
             _ => return,
         };
         let result: Result<()> = async {
             match request {
+                Msg::CollabRequest { request } => {
+                    if !collaboration {
+                        bail!("unsupported_capability: 未协商 collaboration_v1");
+                    }
+                    let reply = self.collaborate(owner.clone(), request).await?;
+                    write_msg(&mut send, &Msg::CollabReply { reply }).await?;
+                }
                 Msg::ChooseAgentOption { session_id, approval_id, option_id } => {
                     self.terminals.choose_agent_option(&owner, &session_id, &approval_id, option_id).await?;
                     write_msg(&mut send, &Msg::AgentOptionChosen).await?;

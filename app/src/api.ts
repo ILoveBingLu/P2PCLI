@@ -1,5 +1,6 @@
 // 和 Rust 端对应的类型与调用
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { unwrapCollaboration, type CollaborationAction, type CollaborationReply, type CollaborationDelivery } from "./lib/collaboration";
 
 export type PathKind = "ipv6" | "ipv4" | "relay" | "local" | "unknown";
 export interface PathInfo {
@@ -337,6 +338,12 @@ export interface Diagnosis {
 }
 
 export const api = {
+  collabDeliveries: () => invoke<CollaborationDelivery[]>("collab_deliveries"),
+  collabRequest: async (target: string | null, projectId: string | null, action: CollaborationAction, requestId = crypto.randomUUID().replaceAll("-", "")) =>
+    unwrapCollaboration(await invoke<CollaborationReply>("collab_request", {
+      target,
+      request: { request_id: requestId, project_id: projectId, action },
+    })),
   overview: () => invoke<Overview>("overview"),
   scanNearby: () => invoke<NearbyDevice[]>("scan_nearby"),
   diagnose: () => invoke<Diagnosis>("diagnose"),

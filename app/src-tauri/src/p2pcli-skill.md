@@ -58,6 +58,53 @@ p2pcli inbox                               # 本机最近收到的文件
 - 设备离线、或版本太旧需要更新：照实告诉用户。
 - 找不到设备：用 `p2pcli devices` 看真实的名字，别凭印象猜。
 
+## 跨设备、跨会话协作
+
+协作项目把任务、消息和结果绑定到协调设备上的一个项目。协作会话必须先登记，凭据文件只保存本机的 `coordinator`、`project_id` 和 `auth.session_id`/`auth.token`，文件由 P2PCLI 创建并限制为本人可读。不要打印 token，也不要把一个项目的凭据用于另一个项目。
+
+先在协调设备创建项目，再给参与设备授权。`--coordinator` 不写表示本机，跨设备时使用设备公钥或 `p2pcli devices` 得到的设备标识；所有需要会话身份的命令都使用同一项目的 `--session-file`。
+
+```sh
+p2pcli collab project create --name "Windows 验证"
+p2pcli collab project list
+p2pcli collab member set <设备公钥> --role worker --project <项目 ID>
+p2pcli collab session register --project <项目 ID> --name "Windows worker" --mode managed-adapter --session-file ~/.config/p2pcli/windows-session.json
+p2pcli collab session list --project <项目 ID> --session-file ~/.config/p2pcli/windows-session.json
+```
+
+`managed-adapter` 只登记接入模式，不代表任意 AI 已经自动接手。适配器或会话必须明确领取任务并提交结果。会话登记成功时，命令只输出会话信息和凭据路径，token 留在受限凭据文件中。
+
+创建任务可以使用完整 `TaskSpec` JSON，也可以使用参数。任务版本省略时，CLI 先读取当前任务，再用读取到的版本发送条件更新；领取、进度、结果、停止、取消、验收和重新排队的请求发生传输不确定时，不由后台自动重发。使用同一个 `--request-id` 或本地 request 文件重试，避免重复执行。
+
+```sh
+p2pcli collab task create --project <项目 ID> --file task-spec.json --request-id create-task-1
+p2pcli collab task list --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+p2pcli collab task claim <任务 ID> --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+p2pcli collab task progress <任务 ID> --attempt <attempt ID> --file progress.txt --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+p2pcli collab task result <任务 ID> --attempt <attempt ID> --file result.json --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+p2pcli collab task accept <任务 ID> --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+```
+
+`task wait --timeout 60` 只结束等待，不取消任务。`--file` 可用于进度和结果文本，结果 JSON 应包含 `summary`、`completed`、`remaining`、`verification`、`artifact_ids` 和 `failed`。
+
+消息和收件箱也需要明确的会话凭据：
+
+```sh
+p2pcli collab inbox --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+p2pcli collab message send --device <设备公钥> --session <会话 ID> --file message.txt --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+p2pcli collab message consume <消息 ID> --project <项目 ID> --session-file ~/.config/p2pcli/session.json
+```
+
+读取 `inbox` 后，P2PCLI 会先把消息快照持久化到本机，再回送 `MessageDelivered`。这只表示消息已写入本机收件箱，不表示 AI 会话已消费；只有显式 `message consume` 才会标记为 `consumed`。后台同步会重新拉取已订阅收件箱并补发交付确认，不会自动消费消息。
+
+写请求断线时可能输出 `delivery: queued_local`。它只表示请求已安全写入本机发件队列，远端业务操作尚未得到确认；不要把它当作任务已创建、消息已送达或任务已开始。可用下面的命令检查本机投递记录；该命令不需要项目或会话凭据，输出不包含请求体、auth 或 token：
+
+```sh
+p2pcli --json collab deliveries
+```
+
+`transport_error` 表示没有收到可判断的远端业务回复；协作回复里的 `error.code` 表示远端已经处理并拒绝。先查看投递记录或使用同一个 request ID 重试，不能为领取、进度、结果等执行操作生成新的 request ID。
+
 ## 注意
 
 这些命令能在对方电脑上做任何事，也能改它的文件。只做用户要求的事，删除、覆盖、重启这类不好撤回的操作先问用户。

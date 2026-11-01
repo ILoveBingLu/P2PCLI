@@ -10,6 +10,7 @@ import { AgentIcon, AgentStateLabel, agentStateText } from "./Agent";
 import { sessionTitles } from "./sessionText";
 import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
+import { CollaborationAnchor } from "./CollaborationPorts";
 
 export interface SidebarTab {
   key: number;
@@ -20,8 +21,9 @@ export interface SidebarTab {
   state: "opening" | "open" | "exited" | "closed";
 }
 
-export function DeviceSessions({ endpointId, target, status, tabs, snapshot, activeKey, busy, onChangeSessions, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
+export function DeviceSessions({ endpointId, deviceName, target, status, tabs, snapshot, activeKey, busy, onChangeSessions, onConnectOpen, onOpen, onSelect, onEnded, openMenu }: {
   endpointId: string;
+  deviceName: string;
   target?: SessionTarget;
   /** 后台探测的结果：没连上时拿它显示会话列表 */
   status?: DeviceStatus;
@@ -123,6 +125,8 @@ export function DeviceSessions({ endpointId, target, status, tabs, snapshot, act
     <>
       {remarkDialog}
       <OfflineSessions
+        endpointId={endpointId}
+        deviceName={deviceName}
         status={status}
         busy={busy}
         onConnectOpen={onConnectOpen}
@@ -138,7 +142,9 @@ export function DeviceSessions({ endpointId, target, status, tabs, snapshot, act
       {remarkDialog}
       <div className="flex min-w-0 flex-col gap-1" onContextMenu={onContextMenu}>
         {rows.map((row) => (
-          <Button key={row.id} variant={row.tab?.key === activeKey ? "secondary" : "ghost"}
+          <CollaborationAnchor key={row.id} endpoint={{ deviceId: endpointId, deviceName, terminalId: row.sessionId, sessionName: row.label }}
+            disabled={!row.sessionId || !live || !listed.has(row.sessionId)}>
+          <Button variant={row.tab?.key === activeKey ? "secondary" : "ghost"}
             data-session-row={row.id}
             className="h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
             aria-current={row.tab?.key === activeKey ? "true" : undefined}
@@ -152,6 +158,7 @@ export function DeviceSessions({ endpointId, target, status, tabs, snapshot, act
                 ? <span className="shrink-0 text-[10px] text-muted-foreground">{row.status}</span>
                 : null}
           </Button>
+          </CollaborationAnchor>
         ))}
         {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
         {error && <p className="px-2 py-1 text-xs text-destructive break-words" role="alert">{error}</p>}
@@ -176,7 +183,9 @@ export function DeviceSessions({ endpointId, target, status, tabs, snapshot, act
 }
 
 /** 没连上时：显示后台探测拿到的、或者上次记住的会话，点一下就连上并打开 */
-function OfflineSessions({ status, busy, onConnectOpen, openMenu, remarkFor, onRemark }: {
+function OfflineSessions({ endpointId, deviceName, status, busy, onConnectOpen, openMenu, remarkFor, onRemark }: {
+  endpointId: string;
+  deviceName: string;
   status?: DeviceStatus;
   busy: boolean;
   onConnectOpen: (sessionId: string | null) => void;
@@ -201,6 +210,8 @@ function OfflineSessions({ status, busy, onConnectOpen, openMenu, remarkFor, onR
       {sessions.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
       {sessions.map((s) => (
         <div key={s.id} data-offline-session={s.id}>
+        <CollaborationAnchor endpoint={{ deviceId: endpointId, deviceName, terminalId: s.id, sessionName: remarkFor(s.id).trim() || titles.get(s.id) || "会话" }}
+          disabled={offline || stale}>
         <Button variant="ghost"
           className="offline-session h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
           disabled={busy || offline}
@@ -210,6 +221,7 @@ function OfflineSessions({ status, busy, onConnectOpen, openMenu, remarkFor, onR
           <span className="min-w-0 flex-1 truncate text-left">{remarkFor(s.id).trim() || titles.get(s.id) || "会话"}</span>
           {s.agent && !stale && !offline && <AgentStateLabel agent={s.agent} className="shrink-0 text-[10px]" />}
         </Button>
+        </CollaborationAnchor>
         </div>
       ))}
     </div>

@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::client::{self, ConnectError, RemoteHost};
+use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::{Files, Transfer, default_inbox_dir};
 use crate::host::{Host, HostDelegate};
 use crate::identity::{DeviceInfo, load_or_create_key};
@@ -122,16 +123,18 @@ impl Node {
         Self::prepare(cfg, delegate, Some(self.host.clone()), endpoint, lan, Some(self.recent.clone()), Some(self.files.clone())).await
     }
 
-    pub fn activate(&self) {
+    pub fn activate(self: &Arc<Self>) {
         self.host.set_info(self.me.clone());
         // 配置写盘成功后才 activate；复用 Host 时也能立即应用，无需重连或重启。
         self.host.terminals.set_agent_commands(self.config.agent_commands.clone());
         if let Some(rdv) = &self.rdv { rdv.activate(); }
         if !self.config.offline { self.prober.start(); }
+        crate::collaboration::delivery::start(self);
     }
 
     /// 停掉后台任务：牵线、在线探测。换配置时旧的那份要先停
     pub async fn stop_rendezvous(&self) {
+        crate::collaboration::inbox::advance_epoch(&self.host.collaboration.delivery_epoch);
         self.prober.stop();
         if let Some(rdv) = &self.rdv { rdv.stop().await; }
     }
@@ -142,6 +145,7 @@ impl Node {
             .with_context(|| format!("建数据目录失败：{}", cfg.data_dir.display()))?;
         let server = cfg.server.as_deref().filter(|s| !s.trim().is_empty()).map(parse_rdv_server).transpose()?;
         let key = load_or_create_key(&cfg.data_dir)?;
+        let local_device = key.public().to_string();
         let proxy = cfg.proxy.as_deref().map(crate::proxy::parse_proxy).transpose()?;
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(key)
@@ -175,6 +179,15 @@ impl Node {
                 .bind_addr(std::net::SocketAddr::new(ip, 0))
                 .map_err(|e| anyhow!("绑定地址不对：{e}"))?;
         }
+        let collaboration = match &shared_host {
+            Some(host) => host.collaboration.clone(),
+            None => {
+                let data_dir = cfg.data_dir.clone();
+                Arc::new(tokio::task::spawn_blocking(move || Store::open(&data_dir, &local_device))
+                    .await.context("协作存储初始化任务失败")?
+                    .context("打开协作存储失败")?)
+            }
+        };
         let start_accept = existing_endpoint.is_none();
         let endpoint = match existing_endpoint {
             Some(endpoint) => endpoint,
@@ -197,7 +210,7 @@ impl Node {
             None => None,
         };
         let host = shared_host.unwrap_or_else(|| {
-            let host = Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate));
+            let host = Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate, collaboration));
             let weak = Arc::downgrade(&host);
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
@@ -524,6 +537,16 @@ impl Node {
     /// 本机自己当作一条“连接”：不走网络，终端、会话、AI 识别都用本机的会话管理器，和连远程设备的行为一样
     pub async fn local_remote(&self) -> RemoteHost {
         RemoteHost::local(self.host.clone(), &self.me, self.id().to_string()).await
+    }
+
+    pub async fn collaborate(&self, target: Option<&str>, request: Request) -> Result<Reply> {
+        let target = target.unwrap_or_default().trim();
+        let local_device = self.id().to_string();
+        if target.is_empty() || target.eq_ignore_ascii_case("local") || target == local_device {
+            return self.host.collaborate(local_device, request).await;
+        }
+        let device = self.find_device(target)?;
+        self.remote_for(&device).await?.collaborate(request).await
     }
 
     /// 命令行要对一台设备办事（跑命令、拉文件、推到指定目录）：用现成的认证连接，没有就连一个。

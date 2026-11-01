@@ -14,10 +14,11 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::time::timeout;
 
+use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{COLLABORATION_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -68,6 +69,7 @@ enum Link {
         conn: Connection,
         /// 控制流一直开着；关掉它对面就当我们走了
         _control: SendStream,
+        capabilities: Vec<String>,
     },
     /// 本机自己：不走网络，直接用本机的会话管理器，终端和会话的行为和远程设备完全一样
     Local {
@@ -112,6 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
+            capabilities: vec![COLLABORATION_V1.into()],
         },
     )
     .await?;
@@ -127,6 +130,7 @@ pub async fn handshake(
             version,
             os,
             multiplexer,
+            capabilities,
         } => Ok(RemoteHost {
             info: RemoteInfo {
                 endpoint_id,
@@ -137,7 +141,7 @@ pub async fn handshake(
                 os,
                 multiplexer,
             },
-            link: Link::Net { conn, _control: send },
+            link: Link::Net { conn, _control: send, capabilities },
         }),
         Msg::Reject { code } => {
             conn.close(0u32.into(), b"rejected");
@@ -283,8 +287,42 @@ impl RemoteHost {
         .map_err(|_| anyhow!("会话请求超时"))?
     }
 
+    /// 协作有独立的请求预算，给事件长轮询留出时间；旧设备不会收到新增消息。
+    pub async fn collaborate(&self, request: Request) -> Result<Reply> {
+        self.require_collaboration()?;
+        match &self.link {
+            Link::Local { host, owner } => host.collaborate(owner.clone(), request).await,
+            Link::Net { conn, .. } => {
+                timeout(Duration::from_secs(35), async {
+                    let (mut send, mut recv) = conn.open_bi().await?;
+                    write_msg(&mut send, &Msg::CollabRequest { request }).await?;
+                    send.finish()?;
+                    match read_msg(&mut recv).await? {
+                        Msg::CollabReply { reply } => Ok(reply),
+                        Msg::Error { message } => bail!("{message}"),
+                        _ => bail!("意外的协作回复类型"),
+                    }
+                })
+                .await
+                .map_err(|_| anyhow!("协作请求超时；操作可能已提交，重试时请使用同一操作 ID"))?
+            }
+        }
+    }
+
+    fn require_collaboration(&self) -> Result<()> {
+        if let Link::Net { capabilities, .. } = &self.link
+            && !capabilities.iter().any(|c| c == COLLABORATION_V1)
+        {
+            bail!("unsupported_capability: 对方不支持 collaboration_v1，请更新对方的 P2PCLI");
+        }
+        Ok(())
+    }
+
     /// 开一条新流并先发一条控制消息，后面怎么走由这条消息决定（跑命令、拉文件、推文件）
     pub async fn open_stream(&self, first: &Msg) -> Result<(SendStream, RecvStream)> {
+        if matches!(first, Msg::CollabRequest { .. } | Msg::CollabReply { .. }) {
+            self.require_collaboration()?;
+        }
         let conn = self.conn()?;
         timeout(Duration::from_secs(20), async {
             let (mut send, recv) = conn.open_bi().await?;
@@ -563,5 +601,203 @@ impl Drop for ExecStream {
     fn drop(&mut self) {
         // 明确重置发送端：对方在这条流上读到错误就知道要取消命令
         let _ = self._send.reset(0u32.into());
+    }
+}
+
+#[cfg(test)]
+mod collaboration_tests {
+    use super::*;
+    use crate::collaboration::model::{Action, Response, Role};
+    use crate::host::{BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest};
+    use crate::node::{Node, NodeConfig};
+
+    struct Allow;
+
+    impl HostDelegate for Allow {
+        fn approve(&self, _: IncomingRequest) -> BoxFuture<Decision> {
+            Box::pin(async { Decision::Allow { trust: false } })
+        }
+        fn event(&self, _: HostEvent) {}
+    }
+
+    fn config() -> NodeConfig {
+        NodeConfig {
+            data_dir: std::env::temp_dir().join(format!("p2pcli-collab-net-{:032x}", rand::random::<u128>())),
+            offline: true,
+            bind_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            ..Default::default()
+        }
+    }
+
+    fn address(endpoint: &Endpoint) -> EndpointAddr {
+        EndpointAddr::from_parts(
+            endpoint.id(),
+            endpoint.bound_sockets().into_iter().map(iroh::TransportAddr::Ip),
+        )
+    }
+
+    fn response(reply: Reply) -> Response {
+        assert!(reply.error.is_none(), "{:?}", reply.error);
+        reply.response.expect("successful reply has a response")
+    }
+
+    #[tokio::test]
+    async fn legacy_peer_receives_no_collaboration_stream() {
+        let server = Endpoint::builder(iroh::endpoint::presets::N0)
+            .alpns(vec![ALPN_TERM.to_vec()])
+            .clear_address_lookup()
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap()
+            .bind().await.unwrap();
+        let client = Endpoint::builder(iroh::endpoint::presets::N0)
+            .clear_address_lookup()
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap()
+            .bind().await.unwrap();
+        let server_endpoint = server.clone();
+        let peer = tokio::spawn(async move {
+            let conn = server_endpoint.accept().await.unwrap().await.unwrap();
+            let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+            assert!(matches!(read_msg(&mut recv).await.unwrap(), Msg::Hello { .. }));
+            crate::proto::write_json(&mut send, &serde_json::json!({
+                "t": "welcome", "name": "legacy", "platform": "macos", "user": "test"
+            })).await.unwrap();
+            // The first subsequent stream must still be an existing operation.
+            let (mut response, mut request) = conn.accept_bi().await.unwrap();
+            assert_eq!(read_msg(&mut request).await.unwrap(), Msg::ListTerminals);
+            write_msg(&mut response, &Msg::Terminals { sessions: vec![] }).await.unwrap();
+            response.finish().unwrap();
+            (conn, send, recv)
+        });
+        let remote = connect(&client, address(&server), &DeviceInfo::local(None), None).await.unwrap();
+        let request = Request::new(None, Action::ProjectsList);
+        let error = remote.collaborate(request.clone()).await.unwrap_err();
+        assert!(error.to_string().contains("unsupported_capability"));
+        assert!(remote.open_stream(&Msg::CollabRequest { request }).await.is_err());
+        assert!(timeout(Duration::from_secs(5), remote.list_terminals()).await.unwrap().unwrap().is_empty());
+        let _control = peer.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_collaboration_and_local_routing() {
+        let host_config = config();
+        let guest_config = config();
+        let host = Node::start(host_config.clone(), Arc::new(Allow)).await.unwrap();
+        let guest = Node::start(guest_config.clone(), Arc::new(Allow)).await.unwrap();
+        let create = Request::new(None, Action::ProjectCreate { name: "network test".into() });
+        let created = host.collaborate(None, create.clone()).await.unwrap();
+        let project = match response(created.clone()) {
+            Response::Project { project } => project,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert_eq!(project.coordinator_id, host.id().to_string());
+        for target in ["", "  ", "local", &host.id().to_string()] {
+            assert_eq!(host.collaborate(Some(target), create.clone()).await.unwrap(), created);
+        }
+        let local = host.local_remote().await;
+        let read = Request::new(Some(project.id.clone()), Action::ProjectGet);
+        assert_eq!(local.collaborate(read.clone()).await.unwrap(), created);
+
+        let remote = Arc::new(guest.connect_addr(
+            address(&host.endpoint), Some(host.host.password()),
+        ).await.unwrap());
+        let denied = remote.collaborate(read.clone()).await.unwrap();
+        assert_eq!(denied.error.unwrap().code, "forbidden");
+        response(host.collaborate(None, Request::new(Some(project.id.clone()), Action::MemberSet {
+            device_id: guest.id().to_string(), role: Role::Viewer, revoked: false,
+        })).await.unwrap());
+        let read = Request::new(Some(project.id.clone()), Action::ProjectGet);
+        assert_eq!(remote.collaborate(read.clone()).await.unwrap(), created);
+        // Adopting a connection does not add a device-directory entry.
+        guest.recent.upsert(crate::store::RecentDevice {
+            code: "123456789".into(),
+            endpoint_id: host.id().to_string(),
+            name: remote.info.name.clone(),
+            platform: remote.info.platform.clone(),
+            sort_at: 0,
+            last_used: crate::store::now_secs(),
+        }).unwrap();
+        guest.adopt_remote(remote.clone());
+        assert_eq!(guest.collaborate(Some(&host.id().to_string()), read.clone()).await.unwrap(), created);
+
+        // Revocation must apply to an already authenticated, reused connection.
+        response(host.collaborate(None, Request::new(Some(project.id.clone()), Action::MemberSet {
+            device_id: guest.id().to_string(), role: Role::Viewer, revoked: true,
+        })).await.unwrap());
+        let denied = remote.collaborate(read).await.unwrap();
+        assert_eq!(denied.error.unwrap().code, "forbidden");
+        assert!(!remote.is_closed());
+
+        let updated = host.prepare_update(host_config.clone(), Arc::new(Allow)).await.unwrap();
+        assert!(Arc::ptr_eq(&host.host.collaboration, &updated.host.collaboration));
+        let epoch = host.host.collaboration.delivery_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        host.stop_rendezvous().await;
+        assert_eq!(host.host.collaboration.delivery_epoch.load(std::sync::atomic::Ordering::SeqCst), epoch + 1);
+        updated.activate();
+        assert_eq!(updated.host.collaboration.delivery_epoch.load(std::sync::atomic::Ordering::SeqCst), epoch + 2);
+        assert_eq!(updated.collaborate(None, create).await.unwrap(), created);
+        guest.shutdown().await;
+        updated.shutdown().await;
+        let _ = std::fs::remove_dir_all(host_config.data_dir);
+        let _ = std::fs::remove_dir_all(guest_config.data_dir);
+    }
+
+    #[tokio::test]
+    async fn host_rejects_collaboration_without_negotiation() {
+        let host_config = config();
+        let host = Node::start(host_config.clone(), Arc::new(Allow)).await.unwrap();
+        let client = Endpoint::builder(iroh::endpoint::presets::N0)
+            .clear_address_lookup()
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap()
+            .bind().await.unwrap();
+        let conn = dial(&client, address(&host.endpoint)).await.unwrap();
+        let (mut control_send, mut control_recv) = conn.open_bi().await.unwrap();
+        write_msg(&mut control_send, &Msg::Hello {
+            v: PROTO_VERSION, name: "legacy".into(), platform: "test".into(),
+            password: Some(host.host.password()), version: None, os: None,
+            capabilities: vec![],
+        }).await.unwrap();
+        let Msg::Welcome { capabilities, .. } = read_msg(&mut control_recv).await.unwrap() else {
+            panic!("expected welcome");
+        };
+        assert!(capabilities.is_empty());
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        write_msg(&mut send, &Msg::CollabRequest {
+            request: Request::new(None, Action::ProjectsList),
+        }).await.unwrap();
+        assert!(matches!(
+            read_msg(&mut recv).await.unwrap(),
+            Msg::Error { message } if message.contains("unsupported_capability")
+        ));
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        write_msg(&mut send, &Msg::Exec {
+            command: "exit 0".into(), cwd: None, timeout_secs: Some(5),
+        }).await.unwrap();
+        assert!(matches!(
+            timeout(Duration::from_secs(10), read_msg(&mut recv)).await.unwrap().unwrap(),
+            Msg::ExecExit { code: Some(0), timed_out: false, .. }
+        ));
+        client.close().await;
+        host.shutdown().await;
+        let _ = std::fs::remove_dir_all(host_config.data_dir);
+    }
+
+    #[tokio::test]
+    async fn storage_initialization_failure_is_returned() {
+        let config = config();
+        std::fs::create_dir_all(config.data_dir.join("collaboration.sqlite")).unwrap();
+        let result = Node::start(config.clone(), Arc::new(Allow)).await;
+        let error = match result {
+            Err(error) => error,
+            Ok(node) => {
+                node.shutdown().await;
+                panic!("invalid database path must prevent startup");
+            }
+        };
+        assert!(format!("{error:#}").contains("打开协作存储失败"));
+        let _ = std::fs::remove_dir_all(config.data_dir);
     }
 }

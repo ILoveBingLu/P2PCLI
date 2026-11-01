@@ -7,6 +7,7 @@ pub mod agents;
 pub mod approval;
 pub mod launchers;
 pub mod client;
+pub mod collaboration;
 pub mod control;
 pub mod diag;
 pub mod exec;

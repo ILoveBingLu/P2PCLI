@@ -3948,6 +3948,7 @@ dependencies = [
  "noq-udp",
  "portable-pty",
  "rand 0.10.3",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",
