@@ -4,7 +4,7 @@ import {
   collaborationErrorText, expectCollaboration,
   type CollaborationMember, type CollaborationProject, type CollaborationSession, type CollaborationTask,
 } from "../lib/collaboration";
-import type { CollaborationEndpoint, CollaborationLink } from "../lib/collaborationLinks";
+import type { CollaborationDraft, CollaborationEndpoint, CollaborationLink } from "../lib/collaborationLinks";
 
 interface Snapshot {
   projects: CollaborationProject[];
@@ -36,7 +36,7 @@ interface CollaborationContextValue extends Snapshot {
   setLink: (link: CollaborationLink | null) => void;
   linking: boolean;
   setLinking: (linking: boolean) => void;
-  onPrepare: (endpoint: CollaborationEndpoint, prompt: string) => void;
+  onPrepare: (drafts: CollaborationDraft[]) => void;
   deviceName: (id: string) => string;
 }
 const CollaborationContext = createContext<CollaborationContextValue | null>(null);
@@ -49,7 +49,7 @@ export function useCollaboration() {
 export function CollaborationProvider({ overview, terminals, open, onOpenChange, onPrepare, children }: {
   overview: Overview | null; terminals: CollaborationEndpoint[];
   open: boolean; onOpenChange: (open: boolean) => void;
-  onPrepare: (endpoint: CollaborationEndpoint, prompt: string) => void;
+  onPrepare: (drafts: CollaborationDraft[]) => void;
   children: ReactNode;
 }) {
   const [target, changeTarget] = useState<string | null>(null);

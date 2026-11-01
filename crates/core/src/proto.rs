@@ -10,6 +10,7 @@ use crate::collaboration::model::{Reply, Request};
 
 pub const KIND_MSG: u8 = 1;
 pub const COLLABORATION_V1: &str = crate::collaboration::model::CAPABILITY;
+pub const AGENT_MESSAGE_V1: &str = "agent_message_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -100,6 +101,8 @@ pub enum Msg {
     AgentLaunched,
     ChooseAgentOption { session_id: String, approval_id: String, option_id: usize },
     AgentOptionChosen,
+    SendAgentMessage { session_id: String, kind: String, request_id: String, text: String },
+    AgentMessageSent,
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,
@@ -255,6 +258,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn agent_message_round_trips_without_changing_legacy_handshakes() {
+        let message = Msg::SendAgentMessage {
+            session_id: "1".repeat(32), kind: "codebuddy".into(), request_id: "onboarding".into(),
+            text: "register\nliteral $(text)".into(),
+        };
+        let json = serde_json::to_string(&message).unwrap();
+        assert_eq!(serde_json::from_str::<Msg>(&json).unwrap(), message);
+        assert!(json.contains("\"t\":\"send_agent_message\""));
+    }
+
+    #[test]
     fn legacy_handshakes_have_no_capabilities() {
         for json in [
             r#"{"t":"hello","v":2,"name":"old","platform":"macos","password":null}"#,
@@ -286,7 +300,7 @@ mod tests {
             password: None,
             version: None,
             os: None,
-            capabilities: vec![COLLABORATION_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into()],
         };
         let welcome = Msg::Welcome {
             name: "new".into(),
@@ -295,7 +309,7 @@ mod tests {
             version: None,
             os: None,
             multiplexer: None,
-            capabilities: vec![COLLABORATION_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into()],
         };
         for msg in [hello, welcome] {
             let json = serde_json::to_string(&msg).unwrap();

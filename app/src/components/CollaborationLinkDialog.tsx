@@ -1,22 +1,24 @@
 import { useId, useRef, useState } from "react";
 import {
-  Accordion, Alert, Button, Checkbox, Description, Fieldset, Form, Label,
+  Accordion, Alert, Avatar, AvatarGroup, Button, Checkbox, Description, Fieldset, Form, Label,
   ListBox, Modal, Select, Spinner, TextArea, TextField, Tooltip,
 } from "@heroui/react";
 import { Copy, Monitor, Send, Terminal } from "lucide-react";
 import { api } from "../api";
 import {
   CollaborationError, collaborationErrorText, expectCollaboration, sessionRef,
-  type TaskSpec,
+  type CollaborationSession, type TaskSpec,
 } from "../lib/collaboration";
 import {
-  endpointKey, linkInputs, matchingSessions, registrationPrompt, sessionReady,
+  canCoordinate, endpointKey, linkInputs, matchingSessions, registrationDrafts, registrationDraftText, sessionReady, teamParticipants, teamTaskSpec,
   type CollaborationEndpoint,
 } from "../lib/collaborationLinks";
 import { useCollaboration } from "./CollaborationContext";
 import { AgentIcon } from "./Agent";
 import { PlatformIcon } from "./PlatformIcon";
 import { toast } from "./ui/toast";
+
+const ALL_SESSIONS = "all-sessions";
 
 export function CollaborationLinkDialog() {
   const collab = useCollaboration();
@@ -31,6 +33,7 @@ function LinkDialog() {
   const [goal, setGoal] = useState("");
   const [acceptance, setAcceptance] = useState("");
   const [sessionId, setSessionId] = useState("");
+  const [leadId, setLeadId] = useState("");
   const [terminalId, setTerminalId] = useState(link.destination.terminalId ?? "");
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState("");
@@ -43,10 +46,18 @@ function LinkDialog() {
   const owner = collab.overview?.endpoint_id ?? "";
   const matches = matchingSessions(collab.sessions, link.destination, owner);
   const ready = matches.filter((session) => sessionReady(session, collab.members));
-  const selected = ready.find((session) => session.id === sessionId) ?? (ready.length === 1 ? ready[0] : null);
+  const allSessions = sessionId === ALL_SESSIONS && !link.destination.terminalId;
+  const selected = allSessions ? null : ready.find((session) => session.id === sessionId) ?? (ready.length === 1 ? ready[0] : null);
+  const leads = matchingSessions(collab.sessions, link.source, owner).filter((session) => canCoordinate(session, collab.members));
+  const lead = leads.find((session) => session.id === leadId) ?? (!leadId && leads.length === 1 ? leads[0] : null);
+  const participants = teamParticipants(ready, lead);
+  const hasAssignee = allSessions ? !!lead && participants.length > 0 : !!selected;
   const terminals = collab.terminals.filter((terminal) => terminal.deviceId === link.destination.deviceId &&
     (!link.destination.terminalId || terminal.terminalId === link.destination.terminalId));
-  const terminal = terminals.find((terminal) => terminal.terminalId === terminalId) ?? (terminals.length === 1 ? terminals[0] : null);
+  const allTerminals = terminalId === ALL_SESSIONS && !link.destination.terminalId;
+  const terminal = allTerminals ? null : terminals.find((terminal) => terminal.terminalId === terminalId) ??
+    (!terminalId && terminals.length === 1 ? terminals[0] : null);
+  const selectedTerminals = allTerminals ? terminals : terminal ? [terminal] : [];
   const destination: CollaborationEndpoint = terminal ?? link.destination;
   const member = collab.members.find((member) => member.device_id === destination.deviceId);
   const own = collab.members.find((member) => member.device_id === owner && !member.revoked);
@@ -60,6 +71,16 @@ function LinkDialog() {
     const kind = collab.terminals.find((item) => item.deviceId === deviceId && item.terminalId === terminalId)?.agentKind;
     return kind ? <AgentIcon kind={kind} className="size-4" /> : <Terminal size={16} aria-hidden="true" />;
   };
+  const sessionAvatars = (sessions: CollaborationSession[]) => <AvatarGroup max={5} size="sm" aria-label={`${sessions.length} 个参与会话`}>
+    {sessions.map((session) => <Avatar key={session.id} aria-label={session.name} title={session.name}>
+      <Avatar.Fallback>{agentIcon(session.device_id, session.terminal?.terminal_id)}</Avatar.Fallback>
+    </Avatar>)}
+  </AvatarGroup>;
+  const terminalAvatars = <AvatarGroup max={5} size="sm" aria-label={`${terminals.length} 个接入会话`}>
+    {terminals.map((item) => <Avatar key={endpointKey(item)} aria-label={item.sessionName} title={item.sessionName}>
+      <Avatar.Fallback>{agentIcon(item.deviceId, item.terminalId)}</Avatar.Fallback>
+    </Avatar>)}
+  </AvatarGroup>;
   const endpointContent = (endpoint: CollaborationEndpoint) => {
     const platform = endpoint.deviceId === owner ? collab.overview?.platform :
       collab.overview?.nearby.find((device) => device.endpoint_id === endpoint.deviceId)?.platform ??
@@ -72,10 +93,10 @@ function LinkDialog() {
   };
 
   const prepare = async (copyOnly: boolean) => {
-    if (blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))) return;
+    if (blocked || preparing || denied || !selectedTerminals.length || (needsGrant && (!consent || !canGrant))) return;
     setError(""); setNotice(""); setPreparing(true);
     try {
-      const text = await collab.run(async () => {
+      const drafts = await collab.run(async () => {
         const project = await collab.ensureProject();
         const members = expectCollaboration(await api.collabRequest(collab.target, project.id, { type: "members_list" }), "members").members;
         const existing = members.find((item) => item.device_id === destination.deviceId);
@@ -86,23 +107,23 @@ function LinkDialog() {
             type: "member_set", device_id: destination.deviceId, role: "worker", revoked: false,
           }), "ack");
         }
-        return registrationPrompt(project.id, project.coordinator_id, owner, destination);
+        return registrationDrafts(project.id, project.coordinator_id, owner, selectedTerminals);
       });
+      const text = registrationDraftText(drafts);
       setPrompt(text);
       if (copyOnly) {
         await navigator.clipboard.writeText(text);
         toast.success("已复制接入请求");
       } else {
-        collab.onPrepare(destination, text);
+        collab.onPrepare(drafts);
         collab.setLink(null);
-        toast.notice("接入请求已准备", { description: "打开目标会话后确认输入草稿；完成登记后再分配任务。" });
       }
     } catch (e) { setError(collaborationErrorText(e)); }
     finally { setPreparing(false); }
   };
 
   const submit = async () => {
-    if (blocked || submitted || (!submission.current && (!selected || !goal.trim()))) return;
+    if (blocked || submitted || (!submission.current && (!hasAssignee || !goal.trim()))) return;
     setError("");
     try {
       const response = await collab.run(async () => {
@@ -114,14 +135,31 @@ function LinkDialog() {
           ]);
           const sessions = expectCollaboration(sessionsResult, "sessions").sessions;
           const members = expectCollaboration(membersResult, "members").members;
-          const session = matchingSessions(sessions, link.destination, owner).find((session) => session.id === selected?.id);
-          if (!session || !sessionReady(session, members)) throw new Error("执行会话已不可用，请重新选择或接入");
-          submission.current = {
-            projectId: project.id, requestId: crypto.randomUUID().replaceAll("-", ""),
-            spec: {
+          const freshTargets = matchingSessions(sessions, link.destination, owner);
+          let spec: TaskSpec;
+          if (allSessions) {
+            const freshLead = matchingSessions(sessions, link.source, owner).find((session) => session.id === lead?.id);
+            if (!freshLead) throw new Error("主会话已不可用，请重新选择或接入");
+            const freshParticipants = participants.map((participant) => {
+              const session = freshTargets.find((session) => session.id === participant.id);
+              if (!session) throw new Error("参与会话已变更，请重新选择");
+              return session;
+            });
+            spec = teamTaskSpec({
+              source: link.source, destination: link.destination, ownerId: owner, coordinatorId: project.coordinator_id, goal, acceptance,
+              lead: freshLead, participants: freshParticipants, members,
+            });
+          } else {
+            const session = freshTargets.find((session) => session.id === selected?.id);
+            if (!session || !sessionReady(session, members)) throw new Error("执行会话已不可用，请重新选择或接入");
+            spec = {
               title: goal.trim().split("\n")[0].slice(0, 120), goal: goal.trim(), acceptance: acceptance.trim(),
               inputs: linkInputs(link.source, owner), assignee: sessionRef(session),
-            },
+            };
+          }
+          submission.current = {
+            projectId: project.id, requestId: crypto.randomUUID().replaceAll("-", ""),
+            spec,
           };
         }
         const request = submission.current;
@@ -134,7 +172,7 @@ function LinkDialog() {
       }
       const task = expectCollaboration(response, "task").task;
       collab.selectTask(task.id); collab.setOpen(true); collab.setLink(null);
-      toast.success("任务已创建，等待执行会话领取");
+      toast.success(allSessions ? "主任务已创建，等待主会话领取并分配" : "任务已创建，等待执行会话领取");
     } catch (e) {
       if (e instanceof CollaborationError) { submission.current = null; setUncertain(false); }
       else setUncertain(!!submission.current);
@@ -162,19 +200,47 @@ function LinkDialog() {
           </Alert> : submitted ? <Alert status="warning" role="status">
             <Alert.Indicator />
             <Alert.Content><Alert.Description>{notice}</Alert.Description></Alert.Content>
-          </Alert> : ready.length > 0 ? <Form id={formId} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          </Alert> : (ready.length > 0 || frozen) ? <Form id={formId} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
             <Fieldset.Group>
-              {ready.length > 1 && <Select placeholder="选择会话" selectedKey={sessionId || null}
+              {(!link.destination.terminalId || ready.length > 1) && <Select placeholder="选择会话" selectedKey={sessionId || selected?.id || null}
                 isDisabled={blocked || frozen} onSelectionChange={(key) => setSessionId(key == null ? "" : String(key))}>
                 <Label>执行会话</Label>
                 <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
                 <Select.Popover><ListBox>
+                  {!link.destination.terminalId && <ListBox.Item id={ALL_SESSIONS} textValue="全部会话" aria-label="全部会话">
+                    {sessionAvatars(participants)}{" "}<Label>全部会话</Label><ListBox.ItemIndicator />
+                  </ListBox.Item>}
                   {ready.map((session) => <ListBox.Item key={session.id} id={session.id} textValue={session.name}>
                     {agentIcon(session.device_id, session.terminal?.terminal_id)}{" "}
                     <Label>{session.name}</Label><ListBox.ItemIndicator />
                   </ListBox.Item>)}
                 </ListBox></Select.Popover>
               </Select>}
+              {allSessions && <>
+                {(leads.length > 1 || !!leadId) && <Select placeholder="选择主会话" selectedKey={leadId || null}
+                  isDisabled={blocked || frozen} onSelectionChange={(key) => setLeadId(key == null ? "" : String(key))}>
+                  <Label>主会话</Label>
+                  <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
+                  <Select.Popover><ListBox>
+                    {leads.map((session) => <ListBox.Item key={session.id} id={session.id} textValue={session.name}>
+                      {agentIcon(session.device_id, session.terminal?.terminal_id)}{" "}
+                      <Label>{session.name}</Label><ListBox.ItemIndicator />
+                    </ListBox.Item>)}
+                  </ListBox></Select.Popover>
+                </Select>}
+                {lead && participants.length > 0 ? <Alert status="success">
+                  <Alert.Indicator>{agentIcon(lead.device_id, lead.terminal?.terminal_id)}</Alert.Indicator>
+                  <Alert.Content>
+                    <Alert.Title>主会话：{lead.name}</Alert.Title>
+                    <Alert.Description>{participants.length} 个参与会话 · 等待主会话领取并拆分分配</Alert.Description>
+                  </Alert.Content>
+                </Alert> : <Alert status="warning" role="status">
+                  <Alert.Indicator />
+                  <Alert.Content><Alert.Description>{!leads.length ?
+                    "起点没有可用且具备调度权限的主会话，请先接入主会话并由管理员确认权限。" :
+                    !lead ? "请选择主会话。" : "没有不同于主会话的可用参与会话。"}</Alert.Description></Alert.Content>
+                </Alert>}
+              </>}
               {selected && <Alert status="success">
                 <Alert.Indicator>{agentIcon(selected.device_id, selected.terminal?.terminal_id)}</Alert.Indicator>
                 <Alert.Content>
@@ -212,11 +278,14 @@ function LinkDialog() {
               <Alert.Content><Alert.Title>{denied ? "此设备的协作访问受限" : matches.length ? "会话已失联或不可用" : "待接入"}</Alert.Title></Alert.Content>
             </Alert>
             {!link.destination.terminalId && terminals.length > 0 && <Select placeholder="选择 AI 会话"
-              selectedKey={terminal?.terminalId ?? null} isDisabled={blocked || preparing}
+              selectedKey={allTerminals ? ALL_SESSIONS : terminal?.terminalId ?? null} isDisabled={blocked || preparing}
               onSelectionChange={(key) => setTerminalId(key == null ? "" : String(key))}>
               <Label>接入会话</Label>
               <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
               <Select.Popover><ListBox>
+                <ListBox.Item id={ALL_SESSIONS} textValue="全部会话" aria-label="全部会话">
+                  {terminalAvatars}{" "}<Label>全部会话</Label><ListBox.ItemIndicator />
+                </ListBox.Item>
                 {terminals.map((terminal) => <ListBox.Item key={terminal.terminalId} id={terminal.terminalId} textValue={terminal.sessionName}>
                   {agentIcon(terminal.deviceId, terminal.terminalId)}{" "}
                   <Label>{terminal.sessionName}</Label><ListBox.ItemIndicator />
@@ -249,20 +318,20 @@ function LinkDialog() {
         {!collab.loading && <Modal.Footer>
           {collab.error || noAccess || submitted ?
             <Button variant="secondary" onPress={() => { collab.setLink(null); collab.setOpen(true); }}>查看协作</Button> :
-            ready.length > 0 ? <>
+            (ready.length > 0 || frozen) ? <>
               <Button variant="ghost" onPress={() => collab.setLink(null)} isDisabled={collab.busy}>取消</Button>
-              <Button type="submit" form={formId} isDisabled={blocked || (!frozen && (!goal.trim() || !selected))}>
+              <Button type="submit" form={formId} isDisabled={blocked || (!frozen && (!goal.trim() || !hasAssignee))}>
                 {collab.busy ? <Spinner size="sm" color="current" /> : <Send />}{uncertain ? "重试原请求" : "确认协作"}
               </Button>
             </> : <>
               <Tooltip>
                 <Button variant="ghost" isIconOnly aria-label="复制接入请求"
-                  isDisabled={blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))}
+                  isDisabled={blocked || preparing || denied || !selectedTerminals.length || (needsGrant && (!consent || !canGrant))}
                   onPress={() => void prepare(true)}><Copy /></Button>
                 <Tooltip.Content>复制接入请求</Tooltip.Content>
               </Tooltip>
-              <Button isDisabled={blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))}
-                onPress={() => void prepare(false)}>{preparing ? <Spinner size="sm" color="current" /> : <Terminal />}准备接入请求</Button>
+              <Button isDisabled={blocked || preparing || denied || !selectedTerminals.length || (needsGrant && (!consent || !canGrant))}
+                onPress={() => void prepare(false)}>{preparing ? <Spinner size="sm" color="current" /> : <Terminal />}连接协作</Button>
             </>}
         </Modal.Footer>}
       </Modal.Dialog>

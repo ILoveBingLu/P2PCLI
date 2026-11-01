@@ -10,7 +10,7 @@ import { CollaborationLinkDialog } from "./CollaborationLinkDialog";
 import { Button } from "./ui/button";
 import { toast } from "./ui/toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
-import { taskSource } from "../lib/collaborationLinks";
+import { taskDestination, taskSource } from "../lib/collaborationLinks";
 import "../collaboration.css";
 import "../collaboration-links.css";
 
@@ -65,7 +65,7 @@ export function CollaborationDrawer() {
           tasks.length === 0 ? <div className="collab-empty"><Network />{collab.error ? "协作暂不可用" : "暂无协作任务"}</div> :
           tasks.map((task) => <Button key={task.id} variant="ghost" className="collab-link-task" onPress={() => collab.selectTask(task.id)}>
             <div><span className="collab-state" data-state={task.state}>{taskStateLabels[task.state]}</span><strong>{task.spec.title}</strong></div>
-            <p>{collab.deviceName(taskSource(task).deviceId)}<ArrowRight />{collab.deviceName(task.spec.assignee.device_id)}</p>
+            <p>{collab.deviceName(taskSource(task).deviceId)}<ArrowRight />{collab.deviceName(taskDestination(task).deviceId)}</p>
             {task.progress && <small>{task.progress}</small>}
           </Button>)}
         <details className="collab-drawer-scope">
