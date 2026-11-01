@@ -4,7 +4,6 @@ import { api, pathLabel, platformLabel, type PathInfo, type RemoteInfo, type Ter
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { toast } from "@/components/ui/toast";
 import { PlatformIcon } from "./PlatformIcon";
@@ -13,6 +12,7 @@ import { AgentIcon, AgentStateLabel } from "./Agent";
 import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
 import { relativeTime, sessionTitles } from "./sessionText";
+import { ClearSessionDialog } from "./ClearSessionDialog";
 
 export interface SessionTarget { connId: number; info: RemoteInfo; code: string | null }
 
@@ -24,7 +24,7 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
   openSessions: Set<string>;
   /** 马上重读一次会话 */
   onRefresh: () => void;
-  /** 先在本地改掉（比如结束的会话先拿掉），不等下一轮刷新 */
+  /** 清除成功后同步本地列表，不等下一轮刷新 */
   onChangeSessions: (sessions: TerminalSession[]) => void;
   onOpen: (id?: string) => void;
   onBack: () => void;
@@ -57,15 +57,9 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
   const end = async () => {
     const session = ending;
     if (!session || !sessions) return;
-    setEnding(null);
-    // 先从列表里拿掉，不等对方回话；失败了刷新会把它放回来
+    await api.endTerminal(target.connId, session.id);
     onChangeSessions(sessions.filter((s) => s.id !== session.id));
-    try {
-      await api.endTerminal(target.connId, session.id);
-      onEnded(session.id);
-    } catch (e) {
-      toast.error(`结束会话失败：${String(e)}`);
-    }
+    onEnded(session.id);
     onRefresh();
   };
 
@@ -159,7 +153,7 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
                       onContextMenu={(e) => menu.open(e, [
                         { id: "open", label: open ? "切换过去" : "打开", icon: <SquareArrowOutUpRight className="size-4" />, onAction: () => onOpen(s.id) },
                         { id: "remark", label: remarkFor(s.id).trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ id: s.id, label, remark: remarkFor(s.id) }) },
-                        { id: "end", label: "结束会话", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => setEnding(s) },
+                        { id: "end", label: "清除会话", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => setEnding(s) },
                       ])}
                     >
                       <span className="session-row-icon">{s.agent ? <AgentIcon kind={s.agent.kind} className="size-4" /> : <SquareTerminal />}</span>
@@ -186,20 +180,9 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
             </ul>
           )}
         </div>
-      {ending && (
-        <AlertDialog open>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>结束{remarkFor(ending.id) || titles.get(ending.id) || "这个会话"}？</AlertDialogTitle>
-              <AlertDialogDescription>会话里正在跑的程序会被结束，没保存的内容可能丢失。只是想暂时离开的话，关掉终端标签就行。</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <Button variant="outline" onClick={() => setEnding(null)}>取消</Button>
-              <Button variant="destructive" onClick={end}>结束会话</Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
+      {ending && <ClearSessionDialog key={ending.id}
+        label={remarkFor(ending.id) || titles.get(ending.id) || "这个会话"}
+        onConfirm={end} onCancel={() => setEnding(null)} />}
     </section>
   );
 }
