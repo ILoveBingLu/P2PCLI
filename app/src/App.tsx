@@ -573,6 +573,7 @@ export default function App() {
       collaborationTerminals.push({
         deviceId, deviceName: ov?.remarks[deviceId]?.device || (deviceId === ov?.endpoint_id ? ov.name : ov?.recent.find((device) => device.endpoint_id === deviceId)?.name ?? deviceId.slice(0, 8)),
         terminalId: session.id, sessionName: ov?.remarks[deviceId]?.sessions[session.id] || titles.get(session.id) || session.agent.name,
+        agentKind: session.agent.kind,
       });
     }
   }
