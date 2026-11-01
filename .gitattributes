@@ -1,3 +1,4 @@
 /app/src-tauri/binaries/psmux-*.exe binary
 /app/src-tauri/binaries/tmux-* binary
+/app/src-tauri/binaries/p2pcli-tmux-* binary
 /app/src-tauri/resources/session-tools/** text eol=lf

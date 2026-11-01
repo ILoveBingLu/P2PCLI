@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { selectTarget, validatePE, validateMachO, verifyHash, validateUniversal } from "./check-session-tools.mjs";
+import { selectTarget, validatePE, validateMachO, verifyHash, validateUniversal, validateELF } from "./check-session-tools.mjs";
 
 test("all committed binaries validate offline without compilers or download tools on PATH", () => {
   const script = new URL("check-session-tools.mjs", import.meta.url);
@@ -34,7 +34,31 @@ test("select only the requested OS and CPU, including cross-packaging targets", 
   for (const arch of ["x86_64", "aarch64", "universal"])
     assert.equal(selectTarget(`${arch}-apple-darwin`).tool, "tmux");
   assert.throws(() => selectTarget("unknown"), /不支持/);
-  assert.throws(() => selectTarget("x86_64-unknown-linux-gnu"), /不支持/);
+  for (const arch of ["x86_64", "aarch64"])
+    assert.deepEqual(selectTarget(`${arch}-unknown-linux-gnu`), {
+      triple: `${arch}-unknown-linux-gnu`, platform: "linux", arch, tool: "p2pcli-tmux", suffix: "",
+    });
+  assert.throws(() => selectTarget("i686-unknown-linux-gnu"), /不支持/);
+  assert.throws(() => selectTarget("x86_64-unknown-linux-musl"), /不支持/);
+});
+
+test("Linux sidecars must be static ELF files of the requested architecture", () => {
+  const elf = Buffer.alloc(120);
+  Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]).copy(elf);
+  elf.writeUInt16LE(2, 16); elf.writeUInt16LE(62, 18);
+  elf.writeBigUInt64LE(64n, 32); elf.writeUInt16LE(56, 54); elf.writeUInt16LE(1, 56);
+  elf.writeUInt32LE(1, 64);
+  validateELF(elf, "x86_64");
+  assert.throws(() => validateELF(elf, "aarch64"), /CPU/);
+  elf.writeUInt16LE(183, 18);
+  validateELF(elf, "aarch64");
+  for (const type of [2, 3]) {
+    elf.writeUInt32LE(type, 64);
+    assert.throws(() => validateELF(elf, "aarch64"), /静态 ELF/);
+  }
+  elf.writeBigUInt64LE(999999n, 32);
+  assert.throws(() => validateELF(elf, "aarch64"), /越界/);
+  assert.throws(() => validateELF(Buffer.from("bad"), "x86_64"), /ELF/);
 });
 
 test("repository binary corruption fails closed", () => {
@@ -77,9 +101,9 @@ test("Tauri selects one platform's sidecar and license directory", async () => {
   assert.equal(base.build.beforeDevCommand, "pnpm run dev:web");
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(pkg.scripts.dev, "node scripts/dev-desktop.mjs");
-  for (const [platform, name] of [["windows", "psmux"], ["macos", "tmux"]]) {
+  for (const [platform, name] of [["windows", "psmux"], ["macos", "tmux"], ["linux", "p2pcli-tmux"]]) {
     const config = await read(`tauri.${platform}.conf.json`);
-    assert.deepEqual(config.bundle.externalBin, [`binaries/${name}`]);
+    assert.deepEqual(config.bundle.externalBin, [`binaries/${name}`, "binaries/p2pcli"]);
     assert.deepEqual(config.bundle.resources, { [`resources/session-tools/${platform}/`]: "session-tools/" });
   }
 });

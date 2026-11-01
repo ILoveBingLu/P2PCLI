@@ -8,12 +8,13 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const windows = process.platform === "win32";
-assert(windows || process.platform === "darwin");
+assert(windows || process.platform === "darwin" || process.platform === "linux");
 const arch = { x64: "x86_64", arm64: "aarch64", ia32: "i686" }[process.arch];
-const triple = `${arch}-${windows ? "pc-windows-msvc" : "apple-darwin"}`;
+const triple = `${arch}-${windows ? "pc-windows-msvc" : process.platform === "linux" ? "unknown-linux-gnu" : "apple-darwin"}`;
+const tool = windows ? "psmux" : process.platform === "linux" ? "p2pcli-tmux" : "tmux";
 const scratch = mkdtempSync(path.join(os.tmpdir(), "p2pcli-agent-input-"));
 const program = path.join(scratch, windows ? "psmux.exe" : "tmux");
-copyFileSync(path.join(root, "app/src-tauri/binaries", `${windows ? "psmux" : "tmux"}-${triple}${windows ? ".exe" : ""}`), program);
+copyFileSync(path.join(root, "app/src-tauri/binaries", `${tool}-${triple}${windows ? ".exe" : ""}`), program);
 if (!windows) chmodSync(program, 0o755);
 const config = path.join(scratch, "empty.conf");
 const capture = path.join(scratch, "received.json");

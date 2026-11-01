@@ -7,7 +7,7 @@ inputs:
     description: Rust 目标，例如 aarch64-apple-darwin
     required: true
   bundles:
-    description: 要打的包，Mac 是 app,dmg，Windows 是 nsis
+    description: 要打的包，Mac 是 app,dmg，Windows 是 nsis，Linux 是 appimage,deb,rpm
     required: true
   arch:
     description: 文件名里的架构，aarch64 或 x64
@@ -38,6 +38,18 @@ runs:
         node-version: 24
         cache: pnpm
 
+    - name: 装 Linux 桌面和打包依赖
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential curl wget file libwebkit2gtk-4.1-dev libxdo-dev \
+          libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+          libfuse2 patchelf rpm xdg-utils
+        # AppImage 必须原生打包，不能把 x64 会话组件带进 ARM 包。
+        test "$(rustc --print host-tuple)" = "${{ inputs.target }}"
+
     - name: 装 Rust 目标
       shell: bash
       run: rustup target add ${{ inputs.target }}
@@ -50,6 +62,15 @@ runs:
       shell: bash
       run: pnpm install --frozen-lockfile
 
+    - name: 校验组件与发布映射
+      shell: bash
+      run: node --test scripts/check-session-tools.test.mjs scripts/check-app-release.test.mjs
+
+    - name: 验证 Linux 会话输入
+      if: runner.os == 'Linux'
+      shell: bash
+      run: node scripts/check-agent-input.mjs
+
     - name: 打包
       shell: bash
       env:
@@ -57,6 +78,7 @@ runs:
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         # Tauri 发现在 CI 里就跳过 dmg 窗口的排版（背景图、图标位置），GitHub 的 Mac 机器能排，让它照常排
         TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        APPIMAGE_EXTRACT_AND_RUN: "1"
       run: |
         if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
           echo "仓库 Secrets 里没有 TAURI_SIGNING_PRIVATE_KEY，在线更新包签不了名"
@@ -64,6 +86,11 @@ runs:
         fi
         pnpm tauri build --target ${{ inputs.target }} --bundles ${{ inputs.bundles }} \
           --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+    - name: 验证 Linux CLI 安装
+      if: runner.os == 'Linux'
+      shell: bash
+      run: cargo test --locked --release -p p2pcli-app --lib cli::tests --target ${{ inputs.target }}
 
     - name: 收集安装包
       shell: bash
@@ -78,6 +105,20 @@ runs:
           cp "$b/dmg/P2PCLI_${ver}_${{ inputs.arch }}.dmg" dist/
           cp "$b/macos/P2PCLI.app.tar.gz" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz"
           cp "$b/macos/P2PCLI.app.tar.gz.sig" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz.sig"
+        elif [ "$RUNNER_OS" = "Linux" ]; then
+          shopt -s nullglob
+          for kind in appimage deb rpm; do
+            ext="$kind"
+            [ "$kind" != "appimage" ] || ext="AppImage"
+            files=("$b/$kind/"*."$ext")
+            if [ "${#files[@]}" -ne 1 ]; then
+              echo "期望一个 $kind 安装包，实际找到 ${#files[@]} 个"
+              exit 1
+            fi
+            out="dist/P2PCLI_${ver}_${{ inputs.arch }}.$ext"
+            cp "${files[0]}" "$out"
+            cp "${files[0]}.sig" "$out.sig"
+          done
         else
           cp "$b/nsis/P2PCLI_${ver}_${{ inputs.arch }}-setup.exe" dist/
           cp "$b/nsis/P2PCLI_${ver}_${{ inputs.arch }}-setup.exe.sig" dist/
@@ -88,3 +129,4 @@ runs:
       with:
         name: ${{ inputs.target }}
         path: dist/*
+        if-no-files-found: error
