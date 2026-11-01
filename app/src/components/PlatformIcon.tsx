@@ -1,5 +1,6 @@
 import appleIcon from "@/assets/platforms/apple.svg";
 import windowsIcon from "@/assets/platforms/windows.svg";
+import linuxIcon from "@/assets/platforms/linux.svg";
 import { platformLabel } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -9,7 +10,9 @@ export function PlatformIcon({ platform, decorative = false }: { platform: strin
       ? appleIcon
       : platform === "windows"
         ? windowsIcon
-        : undefined;
+        : platform === "linux"
+          ? linuxIcon
+          : undefined;
   const label = platformLabel(platform);
 
   if (!icon) return <span className="platform-label shrink-0">{label}</span>;
