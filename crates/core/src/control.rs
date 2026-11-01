@@ -15,6 +15,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 
 use crate::client::ExecEvent;
+use crate::collaboration::{delivery, model::Request as CollaborationRequest};
 use crate::files::{InboxItem, Transfer};
 use crate::node::{KnownDevice, Node};
 
@@ -49,6 +50,12 @@ pub enum Request {
     },
     Inbox { limit: usize },
     Transfers,
+    /// Run a collaboration request through the durable local delivery layer.
+    Collab {
+        target: Option<String>,
+        request: CollaborationRequest,
+    },
+    CollabDeliveries,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +77,8 @@ pub enum Reply {
         signal: Option<i32>,
         timed_out: bool,
     },
+    Collab { reply: crate::collaboration::model::Reply },
+    CollabDeliveries { deliveries: Vec<delivery::Delivery> },
     Error { message: String },
 }
 
@@ -197,6 +206,16 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, node: NodeSource) 
             send(&mut w, &Reply::Inbox { items: node.files.inbox(limit), dir }).await?
         }
         Request::Transfers => send(&mut w, &Reply::Transfers { transfers: node.files.transfers() }).await?,
+        Request::Collab { target, request } => {
+            match delivery::dispatch(&node, target.as_deref(), request).await {
+                Ok(reply) => send(&mut w, &Reply::Collab { reply }).await?,
+                Err(error) => return send(&mut w, &Reply::Error { message: format!("transport: {error:#}") }).await,
+            }
+        }
+        Request::CollabDeliveries => {
+            let deliveries = delivery::list(node.host.collaboration.data_dir())?;
+            send(&mut w, &Reply::CollabDeliveries { deliveries }).await?;
+        }
         Request::Send { target, paths, to } => {
             let started = node.find_device(&target).and_then(|d| match to {
                 Some(dest) => node.start_put(&d, paths, dest),

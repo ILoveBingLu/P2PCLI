@@ -12,6 +12,7 @@ import {
   LoaderCircle,
   History,
   House,
+  Network,
   Plus,
   X,
 } from "lucide-react";
@@ -58,6 +59,11 @@ import { RemoteSessions, type SessionTarget } from "./components/RemoteSessions"
 import { SettingsPage } from "./components/SettingsPage";
 import { Welcome } from "./components/Welcome";
 import { Titlebar } from "./components/Titlebar";
+import { CollaborationProvider } from "./components/CollaborationContext";
+import { CollaborationPorts } from "./components/CollaborationPorts";
+import { CollaborationDrawer } from "./components/CollaborationDrawer";
+import { sessionTitles } from "./components/sessionText";
+import type { CollaborationEndpoint } from "./lib/collaborationLinks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -101,9 +107,14 @@ export default function App() {
   });
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingCollaborationDraft = useRef<{ endpoint: CollaborationEndpoint; prompt: string } | null>(null);
   const termHandles = useRef(new Map<number, TerminalHandle>());
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCollaboration, setShowCollaboration] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("view") === "collab" || (import.meta.env.DEV && (params.get("s") ?? "").startsWith("collab"));
+  });
   const [showDiag, setShowDiag] = useState(false);
   /** 会话页里结束了会话就加一，各处共享的会话快照跟着在后台刷新 */
   const [sessionsRev, setSessionsRev] = useState(0);
@@ -178,7 +189,7 @@ export default function App() {
       activeTab?.info.endpoint_id === endpointId && activeTab.sessionId === sessionId,
     (endpointId, sessionId) => {
       const tab = tabs.find((t) => t.info.endpoint_id === endpointId && t.sessionId === sessionId && t.state !== "closed");
-      return tab ? () => { setShowSettings(false); setSessionTarget(null); setActiveKey(tab.key); } : null;
+      return tab ? () => { setShowSettings(false); setShowCollaboration(false); setSessionTarget(null); setActiveKey(tab.key); } : null;
     },
   );
   /** 标签、底部栏和侧边栏使用同一份实时快照，不再各自猜测当前状态。 */
@@ -318,10 +329,19 @@ export default function App() {
   }, [liveConnectionKey]);
 
   const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string) => {
+    const prepareDraft = (key: number) => {
+      const pending = pendingCollaborationDraft.current;
+      if (!pending || pending.endpoint.deviceId !== info.endpoint_id || pending.endpoint.terminalId !== sessionId) return;
+      pendingCollaborationDraft.current = null;
+      setDrafts((current) => ({ ...current, [key]: current[key]?.trim() ? `${current[key]}\n\n${pending.prompt}` : pending.prompt }));
+      hideComposer(false);
+      setShowCollaboration(false);
+    };
     if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
       void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
     const existing = sessionId ? tabs.find((t) => t.info.endpoint_id === info.endpoint_id && t.sessionId === sessionId && (t.state === "open" || t.state === "opening")) : null;
     if (existing) {
+      prepareDraft(existing.key);
       if (existing.connId !== connId && !tabs.some((t) => t.connId === connId))
         void api.disconnect(connId).catch((e) => toast.error(String(e)));
       setActiveKey(existing.key); setSessionTarget(null); setShowSettings(false); return;
@@ -330,6 +350,7 @@ export default function App() {
     setSessionTarget(null);
     setShowSettings(false);
     const key = tabSeq.current++;
+    prepareDraft(key);
     setTabs((ts) => [
       ...ts.filter((t) => !sessionId || t.info.endpoint_id !== info.endpoint_id || t.sessionId !== sessionId),
       { key, connId, info, code, state: "opening", note: null, sessionId },
@@ -423,6 +444,8 @@ export default function App() {
    *  拖到 AI 输入框上的填进输入框 */
   const dropTarget = (at?: { x: number; y: number }): { info: RemoteInfo; termId?: number; draftKey?: number } | { blocked: string } => {
     if (showSettings) return { blocked: "先回到终端，再把文件拖进来" };
+    if (at && document.elementFromPoint(at.x, at.y)?.closest(".collab-drawer, .collab-management-dialog, .collab-link-dialog"))
+      return { blocked: "请把文件拖到目标终端" };
     if (sessionTarget) return { info: sessionTarget.info };
     if (activeTab && (activeTab.state === "open" || activeTab.state === "opening")) {
       const box = composerRef.current?.closest(".agent-composer")?.getBoundingClientRect();
@@ -506,8 +529,52 @@ export default function App() {
   );
   if (window.__ptTest) window.__ptTest.respond = respond;
 
+  const collaborationTerminals: CollaborationEndpoint[] = [];
+  const deviceIds = new Set([
+    ...(ov?.devices.map((device) => device.endpoint_id) ?? []), ...(ov?.endpoint_id ? [ov.endpoint_id] : []),
+    ...tabs.map((tab) => tab.info.endpoint_id), ...(sessionTarget ? [sessionTarget.info.endpoint_id] : []),
+  ]);
+  for (const deviceId of deviceIds) {
+    const target = deviceId === ov?.endpoint_id && ov.local ? { connId: ov.local.conn_id } :
+      sessionTarget?.info.endpoint_id === deviceId ? sessionTarget :
+      tabs.find((tab) => tab.info.endpoint_id === deviceId && tab.state !== "closed");
+    const snapshot = target ? liveSessions[target.connId] : undefined;
+    const device = ov?.devices.find((device) => device.endpoint_id === deviceId);
+    const sessions = snapshot?.sessions && !snapshot.error ? snapshot.sessions :
+      !target && device?.sessions_live && device.state === "online" ? device.sessions : [];
+    const titles = sessionTitles(sessions);
+    for (const session of sessions) {
+      if (!session.agent) continue;
+      collaborationTerminals.push({
+        deviceId, deviceName: ov?.remarks[deviceId]?.device || (deviceId === ov?.endpoint_id ? ov.name : ov?.recent.find((device) => device.endpoint_id === deviceId)?.name ?? deviceId.slice(0, 8)),
+        terminalId: session.id, sessionName: ov?.remarks[deviceId]?.sessions[session.id] || titles.get(session.id) || session.agent.name,
+      });
+    }
+  }
+  const prepareCollaboration = (endpoint: CollaborationEndpoint, prompt: string) => {
+    if (!endpoint.terminalId) throw new Error("请先选择目标 AI 会话");
+    if (connection.busy) throw new Error("设备正在连接，请稍后重试");
+    const local = ov?.local;
+    const target = endpoint.deviceId === ov?.endpoint_id && local ? { connId: local.conn_id, info: local.info, code: null } :
+      sessionTarget?.info.endpoint_id === endpoint.deviceId ? sessionTarget :
+      tabs.find((tab) => tab.info.endpoint_id === endpoint.deviceId && tab.state !== "closed");
+    const nearby = ov?.nearby.find((device) => device.endpoint_id === endpoint.deviceId && device.online);
+    const recent = ov?.recent.find((device) => device.endpoint_id === endpoint.deviceId);
+    if (!target && !nearby && !recent) throw new Error("此设备还未连接，请先连接设备");
+    pendingCollaborationDraft.current = { endpoint, prompt };
+    if (target) addTab(target.connId, target.info, target.code, endpoint.terminalId);
+    else {
+      pendingOpen.current = { endpointId: endpoint.deviceId, sessionId: endpoint.terminalId };
+      if (nearby) void connection.connectLan(nearby);
+      else if (recent) void connection.doConnect(recent.code, "");
+    }
+  };
+
   return (
     <RemarksProvider snapshot={ov?.remarks}>
+    <CollaborationProvider overview={ov} terminals={collaborationTerminals} open={showCollaboration}
+      onOpenChange={setShowCollaboration} onPrepare={prepareCollaboration}>
+    <CollaborationPorts>
     <div className="app-shell">
       <UpdateIsland updater={updater} />
       <Titlebar
@@ -518,25 +585,36 @@ export default function App() {
         onLocalDeviceOpenChange={setShowLocalDevice}
         terminalCount={tabs.length}
         onDiag={() => setShowDiag(true)}
-        onSettings={() => setShowSettings(true)}
+        onSettings={() => { setShowCollaboration(false); setShowSettings(true); }}
         settingsEnabled={!!ov}
         sidebarOpen={sidebar.open}
         onBack={showSettings ? () => setShowSettings(false) : undefined}
         onToggleSidebar={sidebar.toggle}
         connectionAction={
-          <ConnectionPopover
-            connection={connection}
-            open={showConnect}
-            onOpenChange={(open) => {
-              setShowConnect(open);
-              // 关掉面板就回到输设备码，下次从加号打开不会还停在局域网设备上
-              if (!open) {
-                connection.setLanTarget(null);
-                // 没连上就关了面板：之前点的会话不再自动打开
-                if (!connection.busy) pendingOpen.current = null;
-              }
-            }}
-          />
+          <>
+            <Button
+              variant={showCollaboration ? "secondary" : "ghost"}
+              size="icon-sm"
+              aria-label="协作"
+              title="跨设备协作"
+              onPress={() => { setShowSettings(false); setShowCollaboration((value) => !value); }}
+            >
+              <Network />
+            </Button>
+            <ConnectionPopover
+              connection={connection}
+              open={showConnect}
+              onOpenChange={(open) => {
+                setShowConnect(open);
+                // 关掉面板就回到输设备码，下次从加号打开不会还停在局域网设备上
+                if (!open) {
+                  connection.setLanTarget(null);
+                  // 没连上就关了面板：之前点的会话不再自动打开
+                  if (!connection.busy) { pendingOpen.current = null; pendingCollaborationDraft.current = null; }
+                }
+              }}
+            />
+          </>
         }
       />
       {!showSettings && <ConnectionSidebar
@@ -571,7 +649,7 @@ export default function App() {
         onConnectLan={(device) => void connection.connectLan(device)}
         onRefresh={refresh}
       />}
-      <main className={cn("workspace", showSettings && "workspace-full-width")}>
+      <main className={cn("workspace", showSettings && "workspace-full-width", showCollaboration && !showSettings && "has-collaboration-details")}>
         {overviewError && (
           <div className="workspace-notice">
             <Alert variant="destructive">
@@ -588,6 +666,7 @@ export default function App() {
         {showSettings && ov && (
           <SettingsPage ov={ov} onChanged={refresh} updater={updater} />
         )}
+        {!showSettings && <CollaborationDrawer />}
         {!showSettings && sessionTarget && (
           <RemoteSessions
             key={sessionTarget.connId}
@@ -883,6 +962,8 @@ export default function App() {
       <Toaster />
       <GlobalContextMenu />
     </div>
+    </CollaborationPorts>
+    </CollaborationProvider>
     </RemarksProvider>
   );
 }

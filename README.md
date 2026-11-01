@@ -179,6 +179,8 @@ iroh-relay --config-path relay.toml   # 用 Let's Encrypt 自动签证书
 
 ## 开发
 
+跨设备、跨会话协作已接入核心存储、网络协议、`collab` CLI 和桌面入口，目前作为实验性功能使用。两设备手动创建、领取、回报和验收流程见 [协作手动闭环](docs/collaboration-manual.md)，设计边界和验收条件见 [协作设计文档](docs/cross-device-collaboration.md)。managed worker 目前仅有 mock 子进程/JSON 测试，尚未完成真实 AI 长任务或物理两设备协作 E2E 验收。
+
 需要 Rust 1.88 以上、Node 24、pnpm。
 
 以下命令都在项目根目录执行，不需要进入 `app`：
@@ -254,6 +256,8 @@ p2pcli-dev --server "" connect <公钥> --password abc234 --run 'echo hi'
 `--relay-only` 强制走中继，`--bind-ip` 只绑某个网卡，`--no-lan` 关掉局域网发现，`--lan-hidden` 只看别人不广播本机。
 
 ## 已验证
+
+以下是既有连接和终端功能的验证记录，不代表新增协作协议、managed worker 或两设备任务闭环已完成实机验收。
 
 - macOS ↔ macOS 局域网直连；macOS ↔ Windows 隔两层 NAT 的 IPv4 打洞直连；强制中继
 - 桌面软件三个方向（macOS→macOS、macOS→Windows、Windows→macOS）真界面走通：输设备码、弹窗同意、标签页里跑命令、中文显示

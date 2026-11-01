@@ -13,6 +13,9 @@ use p2pcli_core::files::{InboxItem, Transfer, TransferState};
 use p2pcli_core::node::KnownDevice;
 use p2pcli_core::presence::PresenceState;
 
+mod collab;
+mod worker;
+
 /// 等对方同意超过这么久才提示，配对过的设备一般马上就收
 const WAITING_HINT_AFTER: Duration = Duration::from_millis(1500);
 
@@ -31,6 +34,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 项目、会话、任务、消息和产物协作
+    Collab(collab::Cli),
     /// 列出知道的设备：在不在线、延迟、发文件要不要对方同意
     Devices,
     /// 把文件或文件夹发给另一台设备，对方收好后打印文件在对方电脑上的路径
@@ -101,6 +106,7 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<ExitCode> {
     let dir = cli.data_dir.or_else(control::data_dir).ok_or_else(|| anyhow!("找不到 P2PCLI 的数据目录"))?;
     match cli.cmd {
+        Cmd::Collab(options) => return collab::run(options, &dir, cli.json).await,
         Cmd::Devices => {
             let devices = ask(&dir, Request::Devices, |r| match r {
                 Reply::Devices { devices } => Some(devices),

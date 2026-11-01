@@ -12,6 +12,7 @@ import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
+import { CollaborationAnchor, CollaborationSidebarStatus } from "./CollaborationPorts";
 
 const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
 /** 本机那一行第一次出现时默认展开，之后听用户的 */
@@ -215,6 +216,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         }}
       />
       <div className="connection-sidebar-inner">
+        <CollaborationSidebarStatus />
         <Accordion allowsMultipleExpanded expandedKeys={expandedSections}
           onExpandedChange={(keys) => setExpandedSections(new Set([...keys].map(String)))}>
         {local && localTarget && localId && (
@@ -231,6 +233,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                 onExpandedChange={(keys) => setExpanded(new Set([...keys].map(String)))}>
                 <Accordion.Item id={localId} className="py-1">
                   <Accordion.Heading className="flex items-stretch" data-menu={`local:${localId}`}>
+                    <CollaborationAnchor endpoint={{ deviceId: localId, deviceName: local.info.name }}>
                     <Button slot={null} variant="ghost"
                       className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-lg px-2 py-2 text-xs"
                       aria-label={`查看本机的会话 ${local.info.name}`}
@@ -244,12 +247,14 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                       aria-label={`${expanded.has(localId) ? "收起" : "展开"}本机的会话`}>
                       <Accordion.Indicator className="size-3.5" />
                     </Accordion.Trigger>
+                    </CollaborationAnchor>
                   </Accordion.Heading>
                   <Accordion.Panel>
                     <div className="pb-2">
                       <div className="ml-4 min-w-0 border-l border-border pl-2">
                         {open && expandedSections.has("local") && expanded.has(localId) && <DeviceSessions
                           key="local" target={localTarget}
+                          deviceName={local.info.name}
                           tabs={tabs.filter((tab) => tab.info.endpoint_id === localId)}
                           endpointId={localId}
                           snapshot={liveSessions[local.conn_id]}
@@ -289,6 +294,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
             <div className="flex flex-col">
               {nearby.map((device) => (
                 <div key={device.endpoint_id} data-menu={`nearby:${device.endpoint_id}`}>
+                <CollaborationAnchor endpoint={{ deviceId: device.endpoint_id, deviceName: deviceLabel(device) }} disabled={!device.online}>
                 <Button variant="ghost" disabled={busy || !device.online}
                   className="h-auto w-full min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
                   aria-label={`${deviceLabel(device)}${connected.has(device.endpoint_id) ? "（已连接）" : device.online ? "" : "（离线）"}`}
@@ -296,6 +302,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                   {deviceIcon(device.endpoint_id, device.platform)}
                   <span className="min-w-0 flex-1 truncate text-left">{deviceLabel(device)}</span>
                 </Button>
+                </CollaborationAnchor>
                 </div>
               ))}
             </div>
@@ -329,6 +336,8 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                 return (
                   <Accordion.Item id={device.endpoint_id} key={device.endpoint_id} className="py-1">
                     <Accordion.Heading className="flex items-stretch" data-menu={`device:${device.endpoint_id}`}>
+                      <CollaborationAnchor endpoint={{ deviceId: device.endpoint_id, deviceName: label }}
+                        disabled={!target && status?.state === "offline"}>
                       <Button slot={null} variant="ghost"
                         className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-lg px-2 py-2 text-xs"
                         aria-label={`${target ? "查看会话" : "连接"} ${label}`}
@@ -348,6 +357,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                         aria-label={`${expanded.has(device.endpoint_id) ? "收起" : "展开"} ${label}的会话`}>
                         <Accordion.Indicator className="size-3.5" />
                       </Accordion.Trigger>
+                      </CollaborationAnchor>
                     </Accordion.Heading>
                     <Accordion.Panel>
                       {/* Padding participates in the panel's measured height; bottom margins can be clipped. */}
@@ -355,6 +365,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                         <div className="ml-4 min-w-0 border-l border-border pl-2">
                           {open && expandedSections.has("history") && expanded.has(device.endpoint_id) && <DeviceSessions
                             key={target?.connId ?? "disconnected"} target={target} status={status} tabs={deviceTabs}
+                            deviceName={label}
                             endpointId={device.endpoint_id}
                             snapshot={target ? liveSessions[target.connId] : undefined}
                             activeKey={sessionTarget ? null : activeKey} busy={busy}

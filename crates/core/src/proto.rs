@@ -6,7 +6,10 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use crate::collaboration::model::{Reply, Request};
+
 pub const KIND_MSG: u8 = 1;
+pub const COLLABORATION_V1: &str = crate::collaboration::model::CAPABILITY;
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -53,6 +56,8 @@ pub enum Msg {
         version: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         os: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     /// 被连方同意
     Welcome {
@@ -66,10 +71,14 @@ pub enum Msg {
         /// 会话放在什么里面，比如 tmux 3.7c、psmux
         #[serde(default, skip_serializing_if = "Option::is_none")]
         multiplexer: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     Reject {
         code: RejectCode,
     },
+    CollabRequest { request: Request },
+    CollabReply { reply: Reply },
     /// 开一个终端
     Open {
         persistent: bool,
@@ -246,6 +255,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_handshakes_have_no_capabilities() {
+        for json in [
+            r#"{"t":"hello","v":2,"name":"old","platform":"macos","password":null}"#,
+            r#"{"t":"welcome","name":"old","platform":"macos","user":"user"}"#,
+        ] {
+            let msg: Msg = serde_json::from_str(json).unwrap();
+            let capabilities = match &msg {
+                Msg::Hello { capabilities, .. } | Msg::Welcome { capabilities, .. } => capabilities,
+                _ => unreachable!(),
+            };
+            assert!(capabilities.is_empty());
+            assert!(serde_json::to_value(msg).unwrap().get("capabilities").is_none());
+        }
+        assert_eq!(crate::PROTO_VERSION, 2);
+    }
+
+    #[test]
+    fn capable_handshakes_remain_readable_by_legacy_peers() {
+        #[derive(Deserialize)]
+        #[serde(tag = "t", rename_all = "snake_case")]
+        enum LegacyHandshake {
+            Hello { v: u32, name: String, platform: String, password: Option<String> },
+            Welcome { name: String, platform: String, user: String },
+        }
+        let hello = Msg::Hello {
+            v: crate::PROTO_VERSION,
+            name: "new".into(),
+            platform: "macos".into(),
+            password: None,
+            version: None,
+            os: None,
+            capabilities: vec![COLLABORATION_V1.into()],
+        };
+        let welcome = Msg::Welcome {
+            name: "new".into(),
+            platform: "macos".into(),
+            user: "user".into(),
+            version: None,
+            os: None,
+            multiplexer: None,
+            capabilities: vec![COLLABORATION_V1.into()],
+        };
+        for msg in [hello, welcome] {
+            let json = serde_json::to_string(&msg).unwrap();
+            assert_eq!(serde_json::from_str::<Msg>(&json).unwrap(), msg);
+            match serde_json::from_str::<LegacyHandshake>(&json).unwrap() {
+                LegacyHandshake::Hello { v, name, platform, password } => {
+                    assert_eq!(v, 2);
+                    assert_eq!(name, "new");
+                    assert_eq!(platform, "macos");
+                    assert!(password.is_none());
+                }
+                LegacyHandshake::Welcome { name, platform, user } => {
+                    assert_eq!(name, "new");
+                    assert_eq!(platform, "macos");
+                    assert_eq!(user, "user");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn legacy_terminal_session_has_no_details() {
         let session: TerminalSession = serde_json::from_str(
             r#"{"id":"old-session","created_at":123,"attached":true}"#,
@@ -264,6 +335,7 @@ mod tests {
             password: Some("abc123".into()),
             version: Some("0.1.4".into()),
             os: None,
+            capabilities: vec![COLLABORATION_V1.into()],
         };
         write_msg(&mut a, &hello).await.unwrap();
         write_data(&mut a, "你好\r\n".as_bytes()).await.unwrap();

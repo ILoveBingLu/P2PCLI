@@ -33,6 +33,7 @@ sysinfo = { version = "0.39.6", default-features = false, features = ["system"] 
 noq-proto = "=1.4.0"
 # 控制口里命令输出的原始字节用 base64 装进 JSON
 base64 = "0.22"
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 [target.'cfg(unix)'.dependencies]
 # 远程执行的命令超时或被取消时，按进程组结束它和它的子进程

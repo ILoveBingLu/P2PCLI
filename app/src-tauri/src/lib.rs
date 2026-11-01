@@ -278,6 +278,29 @@ struct TrustedView {
     device: TrustedDevice,
 }
 
+#[tauri::command]
+async fn collab_request(
+    state: State<'_, AppState>,
+    target: Option<String>,
+    request: p2pcli_core::collaboration::Request,
+) -> Result<p2pcli_core::collaboration::Reply, String> {
+    let node = state.node();
+    p2pcli_core::collaboration::delivery::dispatch(&node, target.as_deref(), request)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn collab_deliveries(
+    state: State<'_, AppState>,
+) -> Result<Vec<p2pcli_core::collaboration::delivery::Delivery>, String> {
+    let data_dir = state.data_dir.clone();
+    tokio::task::spawn_blocking(move || p2pcli_core::collaboration::delivery::list(&data_dir))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("{error:#}"))
+}
+
 /// 侧边栏里的“本机”：常驻连接的编号和本机的信息
 #[derive(Serialize)]
 struct LocalView {
@@ -1281,6 +1304,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             overview,
+            collab_request,
+            collab_deliveries,
             system_permissions,
             request_system_permission,
             open_system_settings,
