@@ -6,6 +6,7 @@ import { AgentIcon } from "./Agent";
 import { Button } from "./ui/button";
 import { toast } from "./ui/toast";
 import { useContextMenu } from "./ContextMenu";
+import { t } from "@/i18n";
 
 // 同一条连接的多个终端共享检测请求，被控端还有五分钟缓存。
 const scans = new Map<number, Promise<InstalledAgent[]>>();
@@ -45,7 +46,7 @@ export function AgentLauncher({ connId, sessionId, active, visible, canLaunch, o
     menu.close();
     setScanning(true);
     try { const items = await scan(connId, true); if (alive.current) { setAgents(items); setError(null); } }
-    catch (e) { if (alive.current) { setError(String(e)); toast.error(`检测 AI 失败：${String(e)}`); } }
+    catch (e) { if (alive.current) { setError(String(e)); toast.error(t("检测 AI 失败：{{e}}", { e: String(e) })); } }
     finally { if (alive.current) setScanning(false); }
   };
   const launch = async (agent: InstalledAgent, allowBypass = false) => {
@@ -55,16 +56,16 @@ export function AgentLauncher({ connId, sessionId, active, visible, canLaunch, o
     try {
       await api.launchAgent(connId, sessionId, agent.kind, allowBypass);
       if (alive.current) { current.current.onLaunched(); current.current.onFocus(); }
-    } catch (e) { if (alive.current) toast.error(`启动失败：${String(e)}`); }
+    } catch (e) { if (alive.current) toast.error(t("启动失败：{{e}}", { e: String(e) })); }
     finally { lock.current = false; if (alive.current) setLaunching(null); }
   };
   if (!active || (!visible && !scanning && !error)) return null;
   return <>
-    <div className="agent-launcher" aria-label="启动已安装的 AI" aria-busy={scanning}>
+    <div className="agent-launcher" aria-label={t("启动已安装的 AI")} aria-busy={scanning}>
       {scanning ? <>
         <div className="agent-launcher-loading" role="status">
           <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
-          <span>正在检测 AI</span>
+          <span>{t("正在检测 AI")}</span>
         </div>
         <div className="agent-launcher-skeletons" aria-hidden="true">
           <Skeleton animationType="shimmer" className="agent-launcher-skeleton" />
@@ -72,26 +73,26 @@ export function AgentLauncher({ connId, sessionId, active, visible, canLaunch, o
         </div>
       </> : <>
         {error && <Button variant="secondary" size="sm" className="agent-launcher-pill"
-          title={`${error}。请确认双方均已更新到支持 AI 检测的版本。`}
-          aria-label="AI 检测失败，重试" onPress={() => void refresh()}>
+          title={t("{{error}}。请确认双方均已更新到支持 AI 检测的版本。", { error })}
+          aria-label={t("AI 检测失败，重试")} onPress={() => void refresh()}>
           <RefreshCw className="size-3.5" aria-hidden="true" />
-          检测失败 · 重试
+          {t("检测失败 · 重试")}
         </Button>}
-        {!error && agents.length === 0 && <div className="agent-launcher-loading" role="status">未检测到 AI</div>}
+        {!error && agents.length === 0 && <div className="agent-launcher-loading" role="status">{t("未检测到 AI")}</div>}
         {visible && agents.map((agent) => (
         <Button key={agent.kind} variant="secondary" size="sm" className="agent-launcher-pill"
-          aria-label={`启动 ${agent.name}`} isDisabled={launching !== null}
+          aria-label={t("启动 {{name}}", { name: agent.name })} isDisabled={launching !== null}
           onPress={() => void launch(agent)}
           onContextMenu={agent.kind === "claude" ? (e) => menu.open(e, [
-            { id: "normal", label: "正常启动", onAction: () => void launch(agent) },
-            { id: "allow-bypass", label: "启动并允许之后切换全部放行", onAction: () => void launch(agent, true) },
+            { id: "normal", label: t("正常启动"), onAction: () => void launch(agent) },
+            { id: "allow-bypass", label: t("启动并允许之后切换全部放行"), onAction: () => void launch(agent, true) },
           ]) : (e) => e.preventDefault()}>
           {launching === agent.kind ? <LoaderCircle className="size-4 animate-spin" /> : <AgentIcon kind={agent.kind} className="size-4" />}
           {agent.name}
         </Button>
       ))}</>}
-      {!scanning && !error && <Button variant="ghost" size="icon-sm" aria-label="刷新已安装的 AI" isDisabled={launching !== null}
-        title={agents.length ? "刷新已安装的 AI" : "未检测到 AI，点击重新检测"}
+      {!scanning && !error && <Button variant="ghost" size="icon-sm" aria-label={t("刷新已安装的 AI")} isDisabled={launching !== null}
+        title={agents.length ? t("刷新已安装的 AI") : t("未检测到 AI，点击重新检测")}
         onPress={() => void refresh()}>
         <RefreshCw className="size-4" />
       </Button>}

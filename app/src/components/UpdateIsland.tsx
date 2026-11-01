@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CircleAlert, Download, LoaderCircle, X } from "lucide-react";
 import { formatSize } from "../api";
 import type { useUpdater } from "./useUpdater";
+import { t } from "@/i18n";
 
 /** 鼠标移开后等这么久再收起，免得在边上来回晃时一闪一闪 */
 const COLLAPSE_DELAY_MS = 160;
@@ -66,36 +67,36 @@ export function UpdateIsland({ updater }: { updater: ReturnType<typeof useUpdate
     >
       {/* 读屏只播报阶段变化，不念一直在变的百分比 */}
       <span className="sr-only" role="status">
-        {{ available: `发现新版本 ${update.version}`, downloading: "正在下载更新", installing: "正在安装更新，马上重启", failed: "更新失败" }[phase]}
+        {{ available: t("发现新版本 {{version}}", { version: update.version }), downloading: t("正在下载更新"), installing: t("正在安装更新，马上重启"), failed: t("更新失败") }[phase]}
       </span>
       {/* 收起时的一小条 */}
       <div ref={compact} className="island-layer island-compact" aria-hidden={open}>
         {phase === "available" && (
           <>
             <Download className="island-icon text-accent" />
-            <span title={update.notes ? `更新内容：\n${update.notes}` : undefined}>新版本 v{update.version}</span>
-            <button type="button" className="island-pill-button" title="下载并安装，完成后自动重启" onClick={updater.install}>更新</button>
-            <button type="button" className="island-close" aria-label="稍后再说" title="稍后再说" onClick={updater.dismiss}><X /></button>
+            <span title={update.notes ? t("更新内容：\n{{notes}}", { notes: update.notes }) : undefined}>{t("新版本 v")}{update.version}</span>
+            <button type="button" className="island-pill-button" title={t("下载并安装，完成后自动重启")} onClick={updater.install}>{t("更新")}</button>
+            <button type="button" className="island-close" aria-label={t("稍后再说")} title={t("稍后再说")} onClick={updater.dismiss}><X /></button>
           </>
         )}
         {phase === "downloading" && (
           <>
             {percent == null ? <LoaderCircle className="island-icon animate-spin" /> : <ProgressRing value={percent} />}
-            <span className="island-percent">{percent == null ? "下载中" : `${percent}%`}</span>
+            <span className="island-percent">{percent == null ? t("下载中") : `${percent}%`}</span>
           </>
         )}
         {phase === "installing" && (
           <>
             <LoaderCircle className="island-icon animate-spin" />
-            <span>正在安装，马上重启</span>
+            <span>{t("正在安装，马上重启")}</span>
           </>
         )}
         {phase === "failed" && (
           <>
             <CircleAlert className="island-icon text-danger" />
-            <span title={updater.installError ?? undefined}>更新失败</span>
-            <button type="button" className="island-pill-button" onClick={updater.install}>重试</button>
-            <button type="button" className="island-close" aria-label="稍后再说" title="稍后再说" onClick={updater.dismiss}><X /></button>
+            <span title={updater.installError ?? undefined}>{t("更新失败")}</span>
+            <button type="button" className="island-pill-button" onClick={updater.install}>{t("重试")}</button>
+            <button type="button" className="island-close" aria-label={t("稍后再说")} title={t("稍后再说")} onClick={updater.dismiss}><X /></button>
           </>
         )}
       </div>
@@ -105,7 +106,7 @@ export function UpdateIsland({ updater }: { updater: ReturnType<typeof useUpdate
         {phase === "downloading" && (
           <>
             <div className="island-title">
-              <span>正在下载 v{update.version}</span>
+              <span>{t("正在下载 v")}{update.version}</span>
               <span className="ml-auto tabular-nums">{percent == null ? "" : `${percent}%`}</span>
             </div>
             <div className="island-bar" data-indeterminate={percent == null || undefined}>
@@ -113,12 +114,12 @@ export function UpdateIsland({ updater }: { updater: ReturnType<typeof useUpdate
             </div>
             <div className="island-muted flex tabular-nums">
               <span>
-                {p ? (p.total ? `${formatSize(p.downloaded)} / ${formatSize(p.total)}` : formatSize(p.downloaded)) : "正在连接…"}
+                {p ? (p.total ? `${formatSize(p.downloaded)} / ${formatSize(p.total)}` : formatSize(p.downloaded)) : t("正在连接…")}
                 {speed ? ` · ${formatSize(speed)}/s` : ""}
               </span>
-              {left != null && <span className="ml-auto">还剩 {formatLeft(left)}</span>}
+              {left != null && <span className="ml-auto">{t("还剩")} {formatLeft(left)}</span>}
             </div>
-            <p className="island-muted">下载完会自动安装并重启，正在进行的远程连接需要重新连。</p>
+            <p className="island-muted">{t("下载完会自动安装并重启，正在进行的远程连接需要重新连。")}</p>
           </>
         )}
       </div>
@@ -159,6 +160,6 @@ function useDownloadSpeed(progress: ReturnType<typeof useUpdater>["progress"]) {
 }
 
 function formatLeft(seconds: number) {
-  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} 秒`;
-  return `${Math.round(seconds / 60)} 分钟`;
+  if (seconds < 60) return t("{{value}} 秒", { value: Math.max(1, Math.round(seconds)) });
+  return t("{{value}} 分钟", { value: Math.round(seconds / 60) });
 }

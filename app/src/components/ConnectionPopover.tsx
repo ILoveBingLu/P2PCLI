@@ -7,6 +7,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { PlatformIcon } from "./PlatformIcon";
 import type { useConnection } from "./useConnection";
+import { t } from "@/i18n";
 
 // Let the popover paint before OTP focus/selection initialization runs.
 function focusDeviceCodeAfterPaint(input: HTMLInputElement | null) {
@@ -36,7 +37,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
 
   return (
     <Popover isOpen={open} onOpenChange={onOpenChange}>
-      <Button variant="ghost" size="icon-sm" aria-label="新建连接" title="新建连接">
+      <Button variant="ghost" size="icon-sm" aria-label={t("新建连接")} title={t("新建连接")}>
         <Link />
       </Button>
       <Popover.Content
@@ -45,10 +46,10 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
         className="w-[26rem] max-w-[calc(100vw-24px)]"
       >
         <Popover.Arrow />
-        <Popover.Dialog aria-label="连接远程设备" className="max-h-[calc(100dvh-72px)] overflow-y-auto">
+        <Popover.Dialog aria-label={t("连接远程设备")} className="max-h-[calc(100dvh-72px)] overflow-y-auto">
           <section className="connect-section" aria-labelledby="connect-title">
             <div className="section-title">
-              <Popover.Heading id="connect-title">连接远程设备</Popover.Heading>
+              <Popover.Heading id="connect-title">{t("连接远程设备")}</Popover.Heading>
               <ArrowUpRight />
             </div>
             <form
@@ -63,7 +64,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
               <FieldGroup className="gap-3">
                 {lanTarget ? (
                   <Field data-disabled={busy}>
-                    <FieldLabel>局域网设备</FieldLabel>
+                    <FieldLabel>{t("局域网设备")}</FieldLabel>
                     <div className="lan-target">
                       <PlatformIcon platform={lanTarget.platform} />
                       <span className="truncate">{lanTarget.name}</span>
@@ -74,20 +75,20 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                         disabled={busy}
                         onPress={() => { setLanTarget(null); setError(null); }}
                       >
-                        改用设备码
+                        {t("改用设备码")}
                       </Button>
                     </div>
                   </Field>
                 ) : (
                   <Field data-disabled={busy}>
-                    <FieldLabel htmlFor="remote-code">设备码</FieldLabel>
+                    <FieldLabel htmlFor="remote-code">{t("设备码")}</FieldLabel>
                     <InputOTP
                       id="remote-code"
                       className="gap-2"
                       variant="secondary"
                       ref={focusDeviceCodeAfterPaint}
                       pushPasswordManagerStrategy="none"
-                      aria-label="设备码，9 位数字"
+                      aria-label={t("设备码，9 位数字")}
                       maxLength={9}
                       minLength={9}
                       required
@@ -116,13 +117,13 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                 </Field>
                 )}
                 <Field data-disabled={busy}>
-                  <FieldLabel htmlFor="remote-password">配对密码</FieldLabel>
+                  <FieldLabel htmlFor="remote-password">{t("配对密码")}</FieldLabel>
                   <Input
                     id="remote-password"
                     variant="secondary"
                     ref={pwRef}
                     type="password"
-                    placeholder="输入对方的配对密码"
+                    placeholder={t("输入对方的配对密码")}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     disabled={busy}
@@ -133,10 +134,10 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                 <Checkbox isSelected={mutual} onChange={setMutual} isDisabled={busy}>
                   <Checkbox.Content className="gap-3 text-sm">
                     <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
-                    互相信任
+                    {t("互相信任")}
                   </Checkbox.Content>
                   <Description className="pl-7 text-xs text-muted-foreground">
-                    同时允许这台设备以后直接控制我，不再要密码和确认，它上面的 AI 就能直接操作我这台电脑。不勾的话，它再来连我时我这边会弹窗问我。仅建议用于自己的设备。
+                    {t("同时允许这台设备以后直接控制我，不再要密码和确认，它上面的 AI 就能直接操作我这台电脑。不勾的话，它再来连我时我这边会弹窗问我。仅建议用于自己的设备。")}
                   </Description>
                 </Checkbox>
                 {error && (
@@ -157,13 +158,13 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                   ) : (
                     <ArrowUpRight data-icon="inline-start" />
                   )}
-                  {busy ? "等待对方同意…" : "连接设备"}
+                  {busy ? t("等待对方同意…") : t("连接设备")}
                 </Button>
               </FieldGroup>
             </form>
             <div className="connect-note">
               <LockKeyhole />
-              连接前需要对方授权
+              {t("连接前需要对方授权")}
             </div>
           </section>
 

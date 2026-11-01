@@ -11,6 +11,7 @@ import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
 import { CollaborationAnchor } from "./CollaborationPorts";
 import { ClearSessionDialog } from "./ClearSessionDialog";
+import { t } from "@/i18n";
 
 export interface SidebarTab {
   key: number;
@@ -58,18 +59,18 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
     id: session.id,
     sessionId: session.id,
     tab: tabs.find((tab) => tab.sessionId === session.id && (tab.state === "open" || tab.state === "opening")),
-    label: sessionRemark(session.id).trim() || titles.get(session.id) || "会话",
+    label: sessionRemark(session.id).trim() || titles.get(session.id) || t("会话"),
     remark: sessionRemark(session.id),
-    status: session.attached ? "已连接" : "后台运行",
+    status: session.attached ? t("已连接") : t("后台运行"),
     agent: live ? session.agent ?? null : null,
   }));
   for (const tab of tabs) {
     if (tab.sessionId && listed.has(tab.sessionId)) continue;
-    const label = tab.sessionId ? sessionRemark(tab.sessionId) || `会话 ${tab.sessionId.slice(0, 8)}` : `终端 ${tab.key}`;
+    const label = tab.sessionId ? sessionRemark(tab.sessionId) || t("会话 {{value}}", { value: tab.sessionId.slice(0, 8) }) : t("终端 {{key}}", { key: tab.key });
     rows.push({
       id: `tab-${tab.key}`, sessionId: tab.sessionId ?? "", tab, label,
       remark: tab.sessionId ? sessionRemark(tab.sessionId) : "",
-      status: { opening: "打开中", open: "已连接", exited: "已脱离", closed: "已断开" }[tab.state],
+      status: { opening: t("打开中"), open: t("已连接"), exited: t("已脱离"), closed: t("已断开") }[tab.state],
       agent: null,
     });
   }
@@ -81,7 +82,7 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
     const session = ending;
     if (!session) return;
     if (connId == null) {
-      if (busy || status?.state === "offline") throw new Error("设备暂不可连接，请稍后重试");
+      if (busy || status?.state === "offline") throw new Error(t("设备暂不可连接，请稍后重试"));
       onConnectClear(session.id);
       return;
     }
@@ -96,10 +97,10 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
     const row = rows.find((r) => r.id === id);
     if (!row) return;
     openMenu(e, [
-      { id: "open", label: row.tab ? "切换过去" : "打开", icon: <SquareArrowOutUpRight className="size-4" />, disabled: !row.tab && !target, onAction: () => openRow(row) },
-      { id: "remark", label: row.remark.trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, disabled: !row.sessionId, onAction: () => setRemarkTarget({ id: row.sessionId, label: row.label, remark: row.remark }) },
+      { id: "open", label: row.tab ? t("切换过去") : t("打开"), icon: <SquareArrowOutUpRight className="size-4" />, disabled: !row.tab && !target, onAction: () => openRow(row) },
+      { id: "remark", label: row.remark.trim() ? t("修改备注") : t("添加备注"), icon: <Pencil className="size-4" />, disabled: !row.sessionId, onAction: () => setRemarkTarget({ id: row.sessionId, label: row.label, remark: row.remark }) },
       {
-        id: "end", label: "清除会话", icon: <Trash2 className="size-4" />, danger: true, separated: true,
+        id: "end", label: t("清除会话"), icon: <Trash2 className="size-4" />, danger: true, separated: true,
         disabled: !row.sessionId || !target || !listed.has(row.sessionId),
         onAction: () => setEnding({ id: row.sessionId, label: row.label }),
       },
@@ -111,14 +112,14 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
   const remarkDialog = (
     <RemarkDialog
       open={!!remarkTarget}
-      title="会话备注"
+      title={t("会话备注")}
       description={remarkTarget?.label ?? ""}
       initialValue={remarkTarget?.remark ?? ""}
       onOpenChange={(next) => !next && setRemarkTarget(null)}
       onSave={async (remark) => {
         if (!remarkTarget || !endpointId) return;
         await remarks.saveSession(endpointId, remarkTarget.id, remark);
-        toast.success("会话备注已保存");
+        toast.success(t("会话备注已保存"));
       }}
     />
   );
@@ -165,9 +166,9 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
           </Button>
           </CollaborationAnchor>
         ))}
-        {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />读取会话…</p>}
+        {loading && <p className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground" role="status"><LoaderCircle className="size-3 animate-spin" />{t("读取会话…")}</p>}
         {error && <p className="px-2 py-1 text-xs text-destructive wrap-break-word" role="alert">{error}</p>}
-        {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
+        {!loading && !error && target && rows.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">{t("暂无会话")}</p>}
       </div>
     </>
   );
@@ -195,24 +196,24 @@ function OfflineSessions({ endpointId, deviceName, status, busy, onConnectOpen, 
         const id = (e.target as HTMLElement).closest<HTMLElement>("[data-offline-session]")?.dataset.offlineSession;
         if (!id) return;
         openMenu(e, [
-          { id: "open", label: "连接并打开", icon: <SquareArrowOutUpRight className="size-4" />, disabled: busy || offline, onAction: () => onConnectOpen(id) },
-          { id: "remark", label: remarkFor(id).trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, onAction: () => onRemark(id, titles.get(id) ?? "会话") },
-          { id: "end", label: "清除会话", icon: <Trash2 className="size-4" />, danger: true, separated: true,
-            disabled: busy || offline, onAction: () => onClear(id, remarkFor(id).trim() || titles.get(id) || "会话") },
+          { id: "open", label: t("连接并打开"), icon: <SquareArrowOutUpRight className="size-4" />, disabled: busy || offline, onAction: () => onConnectOpen(id) },
+          { id: "remark", label: remarkFor(id).trim() ? t("修改备注") : t("添加备注"), icon: <Pencil className="size-4" />, onAction: () => onRemark(id, titles.get(id) ?? t("会话")) },
+          { id: "end", label: t("清除会话"), icon: <Trash2 className="size-4" />, danger: true, separated: true,
+            disabled: busy || offline, onAction: () => onClear(id, remarkFor(id).trim() || titles.get(id) || t("会话")) },
         ]);
       }}>
-      {sessions.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">暂无会话</p>}
+      {sessions.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">{t("暂无会话")}</p>}
       {sessions.map((s) => (
         <div key={s.id} data-offline-session={s.id}>
-        <CollaborationAnchor endpoint={{ deviceId: endpointId, deviceName, terminalId: s.id, sessionName: remarkFor(s.id).trim() || titles.get(s.id) || "会话" }}
+        <CollaborationAnchor endpoint={{ deviceId: endpointId, deviceName, terminalId: s.id, sessionName: remarkFor(s.id).trim() || titles.get(s.id) || t("会话") }}
           disabled={offline || stale}>
         <Button variant="ghost"
           className="offline-session h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
           disabled={busy || offline}
-          title={offline ? "设备离线" : "连接并打开这个会话"}
+          title={offline ? t("设备离线") : t("连接并打开这个会话")}
           onClick={() => onConnectOpen(s.id)}>
           {s.agent ? <AgentIcon kind={s.agent.kind} className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
-          <span className="min-w-0 flex-1 truncate text-left">{remarkFor(s.id).trim() || titles.get(s.id) || "会话"}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{remarkFor(s.id).trim() || titles.get(s.id) || t("会话")}</span>
           {s.agent && !stale && !offline && <AgentStateLabel agent={s.agent} className="shrink-0 text-[10px]" />}
         </Button>
         </CollaborationAnchor>

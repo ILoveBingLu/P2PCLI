@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { Button } from "./ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
+import { t } from "@/i18n";
 
 export function ClearSessionDialog({ label, needsConnection = false, onConfirm, onCancel }: {
   label: string;
@@ -21,7 +22,7 @@ export function ClearSessionDialog({ label, needsConnection = false, onConfirm, 
       await onConfirm();
       onCancel();
     } catch (error) {
-      setError(`清除会话失败：${String(error)}`);
+      setError(t("清除会话失败：{{error}}", { error: String(error) }));
     } finally {
       pending.current = false;
       setBusy(false);
@@ -30,18 +31,18 @@ export function ClearSessionDialog({ label, needsConnection = false, onConfirm, 
   return <AlertDialog open>
     <AlertDialogContent>
       <AlertDialogHeader>
-        <AlertDialogTitle>清除「{label}」？</AlertDialogTitle>
+        <AlertDialogTitle>{t("清除「{{label}}」？", { label })}</AlertDialogTitle>
         <AlertDialogDescription>
-          {needsConnection && "将先连接这台设备，再清除指定会话。"}
-          会话内运行的程序将被结束，未保存的内容可能丢失，对应的终端标签也会关闭。此操作不会删除工作目录中的文件。
+          {needsConnection && t("将先连接这台设备，再清除指定会话。")}
+          {t("会话内运行的程序将被结束，未保存的内容可能丢失，对应的终端标签也会关闭。此操作不会删除工作目录中的文件。")}
         </AlertDialogDescription>
       </AlertDialogHeader>
       {error && <p role="alert" className="text-sm text-destructive wrap-break-word">{error}</p>}
       <AlertDialogFooter>
-        <Button variant="outline" disabled={busy} onPress={onCancel}>取消</Button>
+        <Button variant="outline" disabled={busy} onPress={onCancel}>{t("取消")}</Button>
         <Button variant="destructive" disabled={busy} onPress={() => void clear()}>
           {busy && <LoaderCircle className="size-4 animate-spin" />}
-          {busy ? "正在清除" : "清除会话"}
+          {busy ? t("正在清除") : t("清除会话")}
         </Button>
       </AlertDialogFooter>
     </AlertDialogContent>

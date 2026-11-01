@@ -3,6 +3,7 @@ import { ArrowUp, ChevronDown, LoaderCircle, Paperclip } from "lucide-react";
 import type { AgentInfo } from "../api";
 import { Button } from "@/components/ui/button";
 import { AgentApproval } from "./AgentApproval";
+import { t } from "@/i18n";
 
 const HISTORY_KEY = "p2pcli.composer.history";
 const HISTORY_MAX = 50;
@@ -54,7 +55,7 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
   /** 正在翻第几条历史；没在翻是 null */
   const [browsing, setBrowsing] = useState<number | null>(null);
   const approval = agent.state === "waiting" ? agent.approval : null;
-  const blocked = agent.state === "waiting" ? `${agent.name} 在等你确认，${approval ? "请在上方选择" : "先在终端里选"}` : null;
+  const blocked = agent.state === "waiting" ? t("{{name}} 在等你确认，{{value}}", { name: agent.name, value: approval ? t("请在上方选择") : t("先在终端里选") }) : null;
 
   useLayoutEffect(() => {
     const el = inputRef.current;
@@ -118,15 +119,15 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
     <div className="agent-composer-dock" data-expanded={expanded}>
       {approval && <AgentApproval key={approval.id} approval={approval} name={agent.name} onChoose={onChoose} onTerminal={onTerminal} />}
       <Button variant="ghost" size="icon-sm" className="agent-composer-toggle"
-        aria-label={expanded ? "收起输入框" : "展开输入框"}
+        aria-label={expanded ? t("收起输入框") : t("展开输入框")}
         aria-expanded={expanded} aria-controls={panelId}
-        title={`${expanded ? "收起" : "展开"}输入框（${COMPOSER_SHORTCUT}）`} onPress={onToggle}>
+        title={t("{{value}}输入框（{{COMPOSER_SHORTCUT}}）", { value: expanded ? t("收起") : t("展开"), COMPOSER_SHORTCUT })} onPress={onToggle}>
         <ChevronDown />
       </Button>
       <div className="agent-composer-reveal">
         <div id={panelId} className="agent-composer-clip" inert={!expanded} aria-hidden={!expanded}>
           <div className="agent-composer" data-blocked={blocked ? "" : undefined}>
-            <Button variant="ghost" size="icon-sm" aria-label="上传文件" title="上传文件"
+            <Button variant="ghost" size="icon-sm" aria-label={t("上传文件")} title={t("上传文件")}
               isDisabled={picking} onPress={() => void upload()}>
               {picking ? <LoaderCircle className="animate-spin" /> : <Paperclip />}
             </Button>
@@ -134,8 +135,8 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
               ref={inputRef}
               rows={1}
               value={draft}
-              placeholder={blocked ?? `给 ${agent.name} 发消息，回车发送，Shift+回车换行，${COMPOSER_SHORTCUT} 切回终端`}
-              aria-label={`给 ${agent.name} 发消息`}
+              placeholder={blocked ?? t("给 {{name}} 发消息，回车发送，Shift+回车换行，{{COMPOSER_SHORTCUT}} 切回终端", { name: agent.name, COMPOSER_SHORTCUT })}
+              aria-label={t("给 {{name}} 发消息", { name: agent.name })}
               spellCheck={false}
               onChange={(e) => {
                 onDraft(e.target.value);
@@ -144,9 +145,9 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
               onKeyDown={onKeyDown}
             />
             {/* 已经写了字就看不到占位符，单独说一声为什么发不出去；写好的字留着，确认完再发 */}
-            {blocked && draft.trim() && <span className="agent-composer-hint">{approval ? "先在上方确认" : "先在终端里确认"}</span>}
+            {blocked && draft.trim() && <span className="agent-composer-hint">{approval ? t("先在上方确认") : t("先在终端里确认")}</span>}
             {tools}
-            <Button size="icon-sm" aria-label="发送" title="发送（回车）" isDisabled={!draft.trim() || !!blocked} onPress={submit}>
+            <Button size="icon-sm" aria-label={t("发送")} title={t("发送（回车）")} isDisabled={!draft.trim() || !!blocked} onPress={submit}>
               <ArrowUp />
             </Button>
           </div>

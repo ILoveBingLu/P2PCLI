@@ -18,14 +18,15 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { PlatformIcon } from "./PlatformIcon";
+import { t } from "@/i18n";
 
 function ServerStatus({ ov }: { ov: Overview | null }) {
   const state = ov?.server.state;
   const label = {
-    none: "未配置服务器",
-    connecting: "连接中",
-    online: "在线",
-    offline: "离线",
+    none: t("未配置服务器"),
+    connecting: t("连接中"),
+    online: t("在线"),
+    offline: t("离线"),
   };
   const status = (
     <span
@@ -33,14 +34,14 @@ function ServerStatus({ ov }: { ov: Overview | null }) {
       data-state={state ?? "loading"}
     >
       <span className="status-dot" />
-      {state ? label[state] : "加载中"}
+      {state ? label[state] : t("加载中")}
     </span>
   );
   if (ov?.server.state !== "offline" || !ov.server.error) return status;
 
   return (
     <Tooltip content={ov.server.error}>
-      <TooltipTrigger role="group" aria-label="服务器离线原因">{status}</TooltipTrigger>
+      <TooltipTrigger role="group" aria-label={t("服务器离线原因")}>{status}</TooltipTrigger>
     </Tooltip>
   );
 }
@@ -60,19 +61,19 @@ export function LocalDevicePopover({
   const [locking, setLocking] = useState(false);
   const fixed = !!ov?.password_fixed;
   const [showPassword, setShowPassword] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copied, setCopied] = useState<"code" | "password" | null>(null);
 
-  const copy = async (text: string, what: string) => {
+  const copy = async (text: string, id: "code" | "password") => {
     try {
       await writeClipboardText(text);
-      setCopied(what);
-      toast.success(`${what}已复制`);
+      setCopied(id);
+      toast.success(id === "code" ? t("设备码已复制") : t("配对密码已复制"));
       window.setTimeout(
-        () => setCopied((value) => (value === what ? null : value)),
+        () => setCopied((value) => (value === id ? null : value)),
         1800,
       );
     } catch {
-      toast.error("复制失败，请手动选择并复制");
+      toast.error(t("复制失败，请手动选择并复制"));
     }
   };
 
@@ -81,9 +82,9 @@ export function LocalDevicePopover({
     try {
       await api.refreshPassword();
       onRefresh();
-      toast.success("配对密码已更新");
+      toast.success(t("配对密码已更新"));
     } catch (e) {
-      toast.error(`更新失败：${String(e)}`);
+      toast.error(t("更新失败：{{e}}", { e: String(e) }));
     } finally {
       setRefreshing(false);
     }
@@ -94,9 +95,9 @@ export function LocalDevicePopover({
     try {
       await api.setPasswordFixed(!fixed);
       onRefresh();
-      toast.success(fixed ? "已取消固定，下次打开软件会换新密码" : "配对密码已固定，重启也不变");
+      toast.success(fixed ? t("已取消固定，下次打开软件会换新密码") : t("配对密码已固定，重启也不变"));
     } catch (e) {
-      toast.error(`设置失败：${String(e)}`);
+      toast.error(t("设置失败：{{e}}", { e: String(e) }));
     } finally {
       setLocking(false);
     }
@@ -114,7 +115,7 @@ export function LocalDevicePopover({
       }}
     >
       <Button variant="ghost" size="icon-sm"
-        aria-label="本机信息" title="查看本机设备码和配对密码">
+        aria-label={t("本机信息")} title={t("查看本机设备码和配对密码")}>
         <Monitor data-icon="inline-start" />
       </Button>
       <Popover.Content
@@ -123,38 +124,38 @@ export function LocalDevicePopover({
         className="w-80 max-w-[calc(100vw-24px)]"
       >
         <Popover.Arrow />
-        <Popover.Dialog aria-label="本机信息" className="flex flex-col gap-4">
+        <Popover.Dialog aria-label={t("本机信息")} className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
-            <Popover.Heading>本机信息</Popover.Heading>
+            <Popover.Heading>{t("本机信息")}</Popover.Heading>
             <ServerStatus ov={ov} />
           </div>
           <div className="flex flex-col gap-3">
             <div>
-              <div className="credential-label">设备码</div>
+              <div className="credential-label">{t("设备码")}</div>
               <div className="credential-row">
                 {ov?.code ? (
                   <span className="device-code">{formatCode(ov.code)}</span>
                 ) : (
                   <span className="credential-placeholder">
                     {ov?.server.state === "none"
-                      ? "等待配置服务器"
-                      : "正在获取设备码…"}
+                      ? t("等待配置服务器")
+                      : t("正在获取设备码…")}
                   </span>
                 )}
                 <Button
                   variant="ghost"
                   size="icon-sm"
                   disabled={!ov?.code}
-                  aria-label="复制设备码"
-                  title="复制设备码"
-                  onClick={() => ov?.code && copy(ov.code, "设备码")}
+                  aria-label={t("复制设备码")}
+                  title={t("复制设备码")}
+                  onClick={() => ov?.code && copy(ov.code, "code")}
                 >
-                  {copied === "设备码" ? <Check /> : <Copy />}
+                  {copied === "code" ? <Check /> : <Copy />}
                 </Button>
               </div>
             </div>
             <div>
-              <div className="credential-label">配对密码</div>
+              <div className="credential-label">{t("配对密码")}</div>
               <div className="credential-row">
                 <span className="device-password">
                   {ov ? (showPassword ? ov.password : "••••••") : "—"}
@@ -164,8 +165,8 @@ export function LocalDevicePopover({
                     variant="ghost"
                     size="icon-sm"
                     disabled={!ov}
-                    aria-label={showPassword ? "隐藏配对密码" : "显示配对密码"}
-                    title={showPassword ? "隐藏配对密码" : "显示配对密码"}
+                    aria-label={showPassword ? t("隐藏配对密码") : t("显示配对密码")}
+                    title={showPassword ? t("隐藏配对密码") : t("显示配对密码")}
                     onClick={() => setShowPassword(!showPassword)}
                   >
                     {showPassword ? <EyeOff /> : <Eye />}
@@ -174,19 +175,19 @@ export function LocalDevicePopover({
                     variant="ghost"
                     size="icon-sm"
                     disabled={!ov}
-                    aria-label="复制配对密码"
-                    title="复制配对密码"
-                    onClick={() => ov && copy(ov.password, "配对密码")}
+                    aria-label={t("复制配对密码")}
+                    title={t("复制配对密码")}
+                    onClick={() => ov && copy(ov.password, "password")}
                   >
-                    {copied === "配对密码" ? <Check /> : <Copy />}
+                    {copied === "password" ? <Check /> : <Copy />}
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon-sm"
                     disabled={!ov || locking}
-                    aria-label={fixed ? "取消固定配对密码" : "固定配对密码"}
+                    aria-label={fixed ? t("取消固定配对密码") : t("固定配对密码")}
                     aria-pressed={fixed}
-                    title={fixed ? "已固定，重启也不变；点击取消固定" : "固定密码，重启也不变，对方以后用同一个密码就能连"}
+                    title={fixed ? t("已固定，重启也不变；点击取消固定") : t("固定密码，重启也不变，对方以后用同一个密码就能连")}
                     onClick={toggleFixed}
                   >
                     {fixed ? <Lock className="text-accent" /> : <LockOpen />}
@@ -195,8 +196,8 @@ export function LocalDevicePopover({
                     variant="ghost"
                     size="icon-sm"
                     disabled={!ov || refreshing || fixed}
-                    aria-label="刷新配对密码"
-                    title={fixed ? "密码已固定，先取消固定才能换" : "刷新密码，旧密码立即失效"}
+                    aria-label={t("刷新配对密码")}
+                    title={fixed ? t("密码已固定，先取消固定才能换") : t("刷新密码，旧密码立即失效")}
                     onClick={refreshPassword}
                   >
                     {refreshing ? (
@@ -211,7 +212,7 @@ export function LocalDevicePopover({
           </div>
           <div className="device-caption">
             <Laptop />
-            <span className="truncate">{ov?.name ?? "正在读取本机信息"}</span>
+            <span className="truncate">{ov?.name ?? t("正在读取本机信息")}</span>
             {ov && <PlatformIcon platform={ov.platform} />}
           </div>
         </Popover.Dialog>
