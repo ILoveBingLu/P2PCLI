@@ -85,31 +85,6 @@
 .collab-drawer .collab-detail-heading > button { display: none; }
 .collab-drawer .collab-detail-scroll { padding: 16px; }
 .collab-drawer-error { flex: none; max-height: 130px; overflow: auto; margin: 0; padding: 12px 16px; color: var(--danger); background: color-mix(in oklab, var(--danger) 8%, transparent); font-size: 11px; overflow-wrap: anywhere; }
-.collab-link-dialog { width: min(500px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow-y: auto; border-radius: 8px; }
-.collab-link-dialog [data-slot="modal-heading"] { font-size: 16px; }
-.collab-link-dialog [data-slot="modal-header"] { padding-right: 24px; }
-.collab-link-dialog p { overflow-wrap: anywhere; }
-.collab-link-route { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); gap: 12px; align-items: center; padding: 12px 0; margin-bottom: 8px; border-block: 1px solid var(--border); font-size: 12px; }
-.collab-link-route > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.collab-link-route span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.collab-link-route svg { width: 16px; height: 16px; flex: none; color: var(--muted-foreground); }
-.collab-link-field { display: grid; gap: 7px; margin: 12px 0; min-width: 0; color: var(--muted-foreground); font-size: 11px; }
-.collab-link-field textarea, .collab-link-field select {
-  width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 6px;
-  padding: 9px 10px; color: var(--foreground); background: var(--muted-surface);
-  font: 12px/1.6 var(--font-sans); letter-spacing: 0;
-}
-.collab-link-field textarea { resize: vertical; min-height: 70px; }
-.collab-link-field select { height: 38px; }
-.collab-link-advanced { margin-bottom: 14px; color: var(--muted-foreground); font-size: 11px; }
-.collab-link-advanced summary { padding: 8px 0; cursor: pointer; }
-.collab-link-advanced pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.collab-link-ready, .collab-link-message { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 12px; }
-.collab-link-ready > svg { color: var(--success); width: 14px; height: 14px; }
-.collab-link-ready span { margin-left: auto; color: var(--muted-foreground); font-size: 10px; }
-.collab-link-message svg { width: 16px; height: 16px; color: var(--muted-foreground); }
-.collab-grant { display: flex; align-items: flex-start; gap: 9px; margin-block: 14px; color: var(--muted-foreground); font-size: 11px; line-height: 1.6; }
-.collab-grant input { flex: none; margin-top: 3px; accent-color: var(--accent); }
 .collab-management-dialog { display: flex; flex-direction: column; width: calc(100vw - 32px); max-width: 1120px; height: min(820px, calc(100dvh - 40px)); padding: 0; gap: 0; overflow: hidden; border-radius: 8px; }
 .collab-management-dialog > [data-slot="modal-header"] { padding: 12px 48px 12px 20px; border-bottom: 1px solid var(--border); }
 .collab-management-dialog [data-slot="modal-heading"] { font-size: 14px; }
@@ -122,7 +97,6 @@
   .workspace { grid-column: 1 / -1; grid-row: 2; }
   .connection-sidebar:not([data-collapsed]) + .workspace { border-left: 0; border-top-left-radius: 0; }
   .collab-drawer { position: fixed; top: 44px; width: min(380px, calc(100vw - 36px)); z-index: 35; }
-  .collab-link-dialog { max-height: calc(100dvh - 24px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .collab-wire-path { transition: none; }

@@ -5,6 +5,7 @@ export interface CollaborationEndpoint {
   deviceName: string;
   terminalId?: string;
   sessionName?: string;
+  agentKind?: string;
 }
 export interface CollaborationLink {
   source: CollaborationEndpoint;

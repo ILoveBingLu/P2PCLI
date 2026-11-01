@@ -1,17 +1,21 @@
-import { useRef, useState } from "react";
-import { ArrowRight, Check, Copy, LoaderCircle, Send, Terminal } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import {
+  Accordion, Alert, Button, Checkbox, Description, Fieldset, Form, Label,
+  ListBox, Modal, Select, Spinner, TextArea, TextField, Tooltip,
+} from "@heroui/react";
+import { Copy, Monitor, Send, Terminal } from "lucide-react";
 import { api } from "../api";
 import {
   CollaborationError, collaborationErrorText, expectCollaboration, sessionRef,
   type TaskSpec,
 } from "../lib/collaboration";
 import {
-  endpointKey, endpointLabel, linkInputs, matchingSessions, registrationPrompt, sessionReady,
+  endpointKey, linkInputs, matchingSessions, registrationPrompt, sessionReady,
   type CollaborationEndpoint,
 } from "../lib/collaborationLinks";
 import { useCollaboration } from "./CollaborationContext";
-import { Button } from "./ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
+import { AgentIcon } from "./Agent";
+import { PlatformIcon } from "./PlatformIcon";
 import { toast } from "./ui/toast";
 
 export function CollaborationLinkDialog() {
@@ -21,6 +25,8 @@ export function CollaborationLinkDialog() {
 
 function LinkDialog() {
   const collab = useCollaboration();
+  const formId = useId();
+  const descriptionId = useId();
   const link = collab.link!;
   const [goal, setGoal] = useState("");
   const [acceptance, setAcceptance] = useState("");
@@ -50,6 +56,20 @@ function LinkDialog() {
   const denied = !!member && (member.revoked || member.role === "viewer");
   const blocked = collab.loading || collab.busy || !!collab.error || !canDispatch;
   const frozen = !!submission.current;
+  const agentIcon = (deviceId: string, terminalId?: string) => {
+    const kind = collab.terminals.find((item) => item.deviceId === deviceId && item.terminalId === terminalId)?.agentKind;
+    return kind ? <AgentIcon kind={kind} className="size-4" /> : <Terminal size={16} aria-hidden="true" />;
+  };
+  const endpointContent = (endpoint: CollaborationEndpoint) => {
+    const platform = endpoint.deviceId === owner ? collab.overview?.platform :
+      collab.overview?.nearby.find((device) => device.endpoint_id === endpoint.deviceId)?.platform ??
+      collab.overview?.recent.find((device) => device.endpoint_id === endpoint.deviceId)?.platform;
+    return <>
+      {platform ? <PlatformIcon platform={platform} decorative /> : <Monitor size={16} aria-hidden="true" />}
+      {" "}{endpoint.deviceName}
+      {endpoint.sessionName && <> / {agentIcon(endpoint.deviceId, endpoint.terminalId)}{" "}{endpoint.sessionName}</>}
+    </>;
+  };
 
   const prepare = async (copyOnly: boolean) => {
     if (blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))) return;
@@ -122,75 +142,130 @@ function LinkDialog() {
     }
   };
   const noAccess = !canDispatch && !collab.loading && !collab.error;
-  return <Dialog open onOpenChange={(open) => { if (!open && !collab.busy && !preparing) collab.setLink(null); }}>
-    <DialogContent className="collab-link-dialog">
-      <DialogHeader>
-        <DialogTitle>连接协作</DialogTitle>
-        <DialogDescription>{endpointLabel(link.source)} → {endpointLabel(link.destination)}</DialogDescription>
-      </DialogHeader>
-      <div className="collab-link-route" aria-hidden="true">
-        <div><Terminal /><span>{link.source.sessionName ?? link.source.deviceName}</span></div><ArrowRight />
-        <div><Terminal /><span>{link.destination.sessionName ?? link.destination.deviceName}</span></div>
-      </div>
-      {collab.loading ? <p className="collab-link-message" role="status"><LoaderCircle className="animate-spin" />读取协作会话</p> :
-        collab.error ? <p className="collab-error-text" role="alert">{collab.error}</p> :
-        noAccess ? <p className="collab-error-text" role="alert">当前设备没有分配任务的权限。</p> :
-        submitted ? <p className="collab-notice" role="status">{notice}</p> :
-        ready.length > 0 ? <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-          {ready.length > 1 && <label className="collab-link-field">执行会话
-            <select aria-label="执行会话" value={sessionId} disabled={blocked || frozen} onChange={(event) => setSessionId(event.target.value)}>
-              <option value="">选择会话</option>
-              {ready.map((session) => <option key={session.id} value={session.id}>{session.name}</option>)}
-            </select>
-          </label>}
-          {selected && <p className="collab-link-ready"><Check />{selected.name}<span>{selected.mode === "manual_pull" ? "等待会话主动领取" : "托管执行"}</span></p>}
-          <label className="collab-link-field">让它做什么
-            <textarea autoFocus aria-label="让它做什么" rows={4} maxLength={16000} value={goal}
-              disabled={blocked || frozen} onChange={(event) => setGoal(event.target.value)} />
-          </label>
-          <details className="collab-link-advanced">
-            <summary>更多选项</summary>
-            <label className="collab-link-field">验收条件
-              <textarea aria-label="验收条件" rows={2} value={acceptance} disabled={blocked || frozen} onChange={(event) => setAcceptance(event.target.value)} />
-            </label>
-            <p>{collab.project?.name} · 记录保存在{collab.deviceName(collab.target ?? owner)}</p>
-          </details>
-          {error && <p className="collab-error-text" role="alert">{error}</p>}
-          {uncertain && <p className="collab-notice">提交结果未确认。重试将沿用原请求，不会再次创建任务。</p>}
-          <DialogFooter>
-            <Button variant="ghost" onPress={() => collab.setLink(null)} disabled={collab.busy}>取消</Button>
-            <Button type="submit" disabled={blocked || (!frozen && (!goal.trim() || !selected))}>
-              {collab.busy ? <LoaderCircle className="animate-spin" /> : <Send />}{uncertain ? "重试原请求" : "确认协作"}
-            </Button>
-          </DialogFooter>
-        </form> : <div>
-          <p className="collab-link-message"><Terminal />{denied ? "此设备的协作访问受限" : matches.length ? "会话已失联或不可用" : "待接入"}</p>
-          {!link.destination.terminalId && terminals.length > 0 && <label className="collab-link-field">接入会话
-            <select aria-label="接入会话" value={terminal?.terminalId ?? ""} disabled={blocked} onChange={(event) => setTerminalId(event.target.value)}>
-              <option value="">选择 AI 会话</option>
-              {terminals.map((terminal) => <option key={terminal.terminalId} value={terminal.terminalId}>{terminal.sessionName}</option>)}
-            </select>
-          </label>}
-          {!terminals.length && !link.destination.terminalId && <p className="collab-note">此设备暂无可接入的 AI 会话。</p>}
-          {!terminal && link.destination.terminalId && <p className="collab-note">此终端未检测到可接入的 AI 会话。</p>}
-          {needsGrant && <label className="collab-grant"><input type="checkbox" checked={consent} disabled={!canGrant || blocked}
-            onChange={(event) => setConsent(event.target.checked)} />
-            <span>允许{destination.deviceName}作为执行者加入{collab.project?.name ?? "设备协作"}，读取分配给它的任务并回报结果。</span>
-          </label>}
-          {denied && <Button variant="secondary" size="sm" onPress={() => { collab.setLink(null); collab.setAdvanced(true); }}>查看权限</Button>}
-          {prompt && <details className="collab-link-advanced"><summary>接入请求</summary><pre>{prompt}</pre></details>}
-          {error && <p className="collab-error-text" role="alert">{error}</p>}
-          <DialogFooter>
-            <Button variant="ghost" size="icon-sm" title="复制接入请求" aria-label="复制接入请求"
-              disabled={blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))}
-              onPress={() => void prepare(true)}><Copy /></Button>
-            <Button disabled={blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))}
-              onPress={() => void prepare(false)}>{preparing ? <LoaderCircle className="animate-spin" /> : <Terminal />}准备接入请求</Button>
-          </DialogFooter>
-        </div>}
-      {(collab.error || noAccess || submitted) && <DialogFooter>
-        <Button variant="secondary" onPress={() => { collab.setLink(null); collab.setOpen(true); }}>查看协作</Button>
-      </DialogFooter>}
-    </DialogContent>
-  </Dialog>;
+  return <Modal.Backdrop isOpen isDismissable={!collab.busy && !preparing}
+    isKeyboardDismissDisabled={collab.busy || preparing}
+    onOpenChange={(open) => { if (!open && !collab.busy && !preparing) collab.setLink(null); }}>
+    <Modal.Container size="lg" scroll="inside">
+      <Modal.Dialog aria-describedby={descriptionId}>
+        <Modal.CloseTrigger aria-label="关闭" isDisabled={collab.busy || preparing} />
+        <Modal.Header>
+          <Modal.Heading>连接协作</Modal.Heading>
+          <Description id={descriptionId}>{endpointContent(link.source)} ↔ {endpointContent(link.destination)}</Description>
+        </Modal.Header>
+        <Modal.Body>
+          {collab.loading ? <Alert role="status">
+            <Alert.Indicator><Spinner size="sm" /></Alert.Indicator>
+            <Alert.Content><Alert.Title>读取协作会话</Alert.Title></Alert.Content>
+          </Alert> : collab.error || noAccess ? <Alert status="danger" role="alert">
+            <Alert.Indicator />
+            <Alert.Content><Alert.Description>{collab.error || "当前设备没有分配任务的权限。"}</Alert.Description></Alert.Content>
+          </Alert> : submitted ? <Alert status="warning" role="status">
+            <Alert.Indicator />
+            <Alert.Content><Alert.Description>{notice}</Alert.Description></Alert.Content>
+          </Alert> : ready.length > 0 ? <Form id={formId} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+            <Fieldset.Group>
+              {ready.length > 1 && <Select placeholder="选择会话" selectedKey={sessionId || null}
+                isDisabled={blocked || frozen} onSelectionChange={(key) => setSessionId(key == null ? "" : String(key))}>
+                <Label>执行会话</Label>
+                <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
+                <Select.Popover><ListBox>
+                  {ready.map((session) => <ListBox.Item key={session.id} id={session.id} textValue={session.name}>
+                    {agentIcon(session.device_id, session.terminal?.terminal_id)}{" "}
+                    <Label>{session.name}</Label><ListBox.ItemIndicator />
+                  </ListBox.Item>)}
+                </ListBox></Select.Popover>
+              </Select>}
+              {selected && <Alert status="success">
+                <Alert.Indicator>{agentIcon(selected.device_id, selected.terminal?.terminal_id)}</Alert.Indicator>
+                <Alert.Content>
+                  <Alert.Title>{selected.name}</Alert.Title>
+                  <Alert.Description>{selected.mode === "manual_pull" ? "等待会话主动领取" : "托管执行"}</Alert.Description>
+                </Alert.Content>
+              </Alert>}
+              <TextField value={goal} onChange={setGoal} isDisabled={blocked || frozen}>
+                <Label>让它做什么</Label>
+                <TextArea autoFocus rows={4} maxLength={16000} />
+              </TextField>
+              <Accordion>
+                <Accordion.Item>
+                  <Accordion.Heading><Accordion.Trigger>更多选项<Accordion.Indicator /></Accordion.Trigger></Accordion.Heading>
+                  <Accordion.Panel><Accordion.Body>
+                    <TextField value={acceptance} onChange={setAcceptance} isDisabled={blocked || frozen}>
+                      <Label>验收条件</Label>
+                      <TextArea rows={2} />
+                      <Description>{collab.project?.name} · 记录保存在{collab.deviceName(collab.target ?? owner)}</Description>
+                    </TextField>
+                  </Accordion.Body></Accordion.Panel>
+                </Accordion.Item>
+              </Accordion>
+              {error && <Alert status="danger" role="alert">
+                <Alert.Indicator /><Alert.Content><Alert.Description>{error}</Alert.Description></Alert.Content>
+              </Alert>}
+              {uncertain && <Alert status="warning" role="status">
+                <Alert.Indicator />
+                <Alert.Content><Alert.Description>提交结果未确认。重试将沿用原请求，不会再次创建任务。</Alert.Description></Alert.Content>
+              </Alert>}
+            </Fieldset.Group>
+          </Form> : <Fieldset.Group>
+            <Alert status={denied ? "warning" : "default"}>
+              <Alert.Indicator><Terminal /></Alert.Indicator>
+              <Alert.Content><Alert.Title>{denied ? "此设备的协作访问受限" : matches.length ? "会话已失联或不可用" : "待接入"}</Alert.Title></Alert.Content>
+            </Alert>
+            {!link.destination.terminalId && terminals.length > 0 && <Select placeholder="选择 AI 会话"
+              selectedKey={terminal?.terminalId ?? null} isDisabled={blocked || preparing}
+              onSelectionChange={(key) => setTerminalId(key == null ? "" : String(key))}>
+              <Label>接入会话</Label>
+              <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
+              <Select.Popover><ListBox>
+                {terminals.map((terminal) => <ListBox.Item key={terminal.terminalId} id={terminal.terminalId} textValue={terminal.sessionName}>
+                  {agentIcon(terminal.deviceId, terminal.terminalId)}{" "}
+                  <Label>{terminal.sessionName}</Label><ListBox.ItemIndicator />
+                </ListBox.Item>)}
+              </ListBox></Select.Popover>
+            </Select>}
+            {!terminals.length && !link.destination.terminalId && <Description>此设备暂无可接入的 AI 会话。</Description>}
+            {!terminal && link.destination.terminalId && <Description>此终端未检测到可接入的 AI 会话。</Description>}
+            {needsGrant && <Checkbox isSelected={consent} isDisabled={!canGrant || blocked || preparing} onChange={setConsent}>
+              <Checkbox.Content>
+                <Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>
+                允许{destination.deviceName}作为执行者加入{collab.project?.name ?? "设备协作"}
+              </Checkbox.Content>
+              <Description>读取分配给它的任务并回报结果。</Description>
+            </Checkbox>}
+            {denied && <Button variant="secondary" size="sm" onPress={() => { collab.setLink(null); collab.setAdvanced(true); }}>查看权限</Button>}
+            {prompt && <Accordion>
+              <Accordion.Item>
+                <Accordion.Heading><Accordion.Trigger>接入请求<Accordion.Indicator /></Accordion.Trigger></Accordion.Heading>
+                <Accordion.Panel><Accordion.Body>
+                  <TextField aria-label="接入请求" value={prompt} isReadOnly><TextArea rows={6} /></TextField>
+                </Accordion.Body></Accordion.Panel>
+              </Accordion.Item>
+            </Accordion>}
+            {error && <Alert status="danger" role="alert">
+              <Alert.Indicator /><Alert.Content><Alert.Description>{error}</Alert.Description></Alert.Content>
+            </Alert>}
+          </Fieldset.Group>}
+        </Modal.Body>
+        {!collab.loading && <Modal.Footer>
+          {collab.error || noAccess || submitted ?
+            <Button variant="secondary" onPress={() => { collab.setLink(null); collab.setOpen(true); }}>查看协作</Button> :
+            ready.length > 0 ? <>
+              <Button variant="ghost" onPress={() => collab.setLink(null)} isDisabled={collab.busy}>取消</Button>
+              <Button type="submit" form={formId} isDisabled={blocked || (!frozen && (!goal.trim() || !selected))}>
+                {collab.busy ? <Spinner size="sm" color="current" /> : <Send />}{uncertain ? "重试原请求" : "确认协作"}
+              </Button>
+            </> : <>
+              <Tooltip>
+                <Button variant="ghost" isIconOnly aria-label="复制接入请求"
+                  isDisabled={blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))}
+                  onPress={() => void prepare(true)}><Copy /></Button>
+                <Tooltip.Content>复制接入请求</Tooltip.Content>
+              </Tooltip>
+              <Button isDisabled={blocked || preparing || denied || !terminal || (needsGrant && (!consent || !canGrant))}
+                onPress={() => void prepare(false)}>{preparing ? <Spinner size="sm" color="current" /> : <Terminal />}准备接入请求</Button>
+            </>}
+        </Modal.Footer>}
+      </Modal.Dialog>
+    </Modal.Container>
+  </Modal.Backdrop>;
 }
