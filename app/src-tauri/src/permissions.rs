@@ -1,7 +1,9 @@
 use serde::Serialize;
 
+// Keep the shared response type; only macOS currently creates permission entries.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum PermissionStatus {
     Granted,
     Denied,
@@ -19,6 +21,7 @@ pub struct SystemPermission {
 }
 
 const LOCAL_NETWORK_ID: &str = "local_network";
+#[cfg(target_os = "macos")]
 const LOCAL_NETWORK_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork";
 
@@ -39,6 +42,9 @@ pub fn list() -> Vec<SystemPermission> {
 }
 
 pub async fn request(id: &str, state: &crate::AppState) -> Result<Vec<SystemPermission>, String> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = state;
+
     if id != LOCAL_NETWORK_ID {
         return Err(format!("未知的系统权限：{id}"));
     }

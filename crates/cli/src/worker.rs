@@ -1004,6 +1004,8 @@ fn short(value: &str) -> String {
 fn configure_process_group(command: &mut Command) {
     #[cfg(unix)]
     command.process_group(0);
+    #[cfg(not(unix))]
+    let _ = command;
 }
 
 fn terminate_process(pid: Option<u32>) {
@@ -1114,6 +1116,8 @@ fn persist<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 fn sync_parent(path: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(path.parent().context("path has no parent")?)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

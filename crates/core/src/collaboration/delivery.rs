@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, atomic::Ordering};
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::{Action, Reply, Request, Response, MAX_MESSAGE_BYTES};
