@@ -1,5 +1,12 @@
-import type { ReactNode } from "react";
-import { ArrowUpRight, Bug, Download, LoaderCircle, Lock, Package, RefreshCw, Route, Scale } from "lucide-react";
+import { ArrowUpRight, Bug, Download, LoaderCircle, Package, RefreshCw } from "lucide-react";
+import tauriIcon from "@/assets/technologies/tauri.svg";
+import reactIcon from "@/assets/technologies/react.svg";
+import heroUIIcon from "@/assets/technologies/heroui.svg";
+import tailwindIcon from "@/assets/technologies/tailwindcss.svg";
+import rustIcon from "@/assets/technologies/rust.svg";
+import viteIcon from "@/assets/technologies/vite.svg";
+import alibabaCloudIcon from "@/assets/technologies/alibabacloud.svg";
+import cloudflareIcon from "@/assets/technologies/cloudflare.svg";
 import { api } from "../api";
 import { GlassLogo } from "./GlassLogo";
 import { Badge } from "@/components/ui/badge";
@@ -10,24 +17,48 @@ import { progressText, type useUpdater } from "./useUpdater";
 /** 项目主页，和后端 links.rs 里的 REPO_URL 一致；后端只认这个地址和它下面的页面 */
 const REPO_URL = "https://github.com/ILoveBingLu/P2PCLI";
 
+/** 页面底部的两行小图标：上行是软件框架，下行是服务端。统一单色，跟着次要文字颜色走 */
+const FRAMEWORKS = [
+  { name: "Tauri", icon: tauriIcon },
+  { name: "React", icon: reactIcon },
+  { name: "HeroUI", icon: heroUIIcon },
+  { name: "Tailwind CSS", icon: tailwindIcon },
+  { name: "Rust", icon: rustIcon },
+  { name: "Vite", icon: viteIcon },
+];
+
+const SERVERS = [
+  { name: "阿里云", icon: alibabaCloudIcon },
+  { name: "Cloudflare", icon: cloudflareIcon },
+];
+
+/** 一行用乘号连起来的图标；两个数组共用这个组件，两行宽度不同但都居中 */
+function StackRow({ items }: { items: { name: string; icon: string }[] }) {
+  return (
+    <ul className="flex max-w-full flex-wrap items-center justify-center gap-x-1.5 gap-y-1.5">
+      {items.map(({ name, icon }) => (
+        <li
+          key={name}
+          className="flex items-center gap-1 after:ml-0.5 after:text-[10px] after:leading-none after:text-muted-foreground/40 after:content-['×'] last:after:content-none"
+        >
+          <span
+            aria-hidden="true"
+            className="block size-3.5 shrink-0 bg-current text-muted-foreground mask-contain mask-center mask-no-repeat"
+            style={{ maskImage: `url("${icon}")`, WebkitMaskImage: `url("${icon}")` }}
+          />
+          <span className="text-xs leading-4 text-muted-foreground" title={name}>{name}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** lucide 没有品牌图标，用 GitHub 官方的 mark */
 function GithubMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className={className} data-icon="inline-start">
       <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
     </svg>
-  );
-}
-
-function Feature({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-card p-3.5">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <span className="flex size-6 items-center justify-center rounded-md bg-muted-surface text-muted-foreground [&>svg]:size-3.5">{icon}</span>
-        {title}
-      </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
-    </div>
   );
 }
 
@@ -86,12 +117,6 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <Feature icon={<Lock />} title="端到端加密">连接两端互相认证，中继只转发，看不到内容。</Feature>
-        <Feature icon={<Route />} title="直连优先">IPv6 直连、IPv4 打洞，实在不通才走中继兜底。</Feature>
-        <Feature icon={<Scale />} title="MIT 开源">代码都在 GitHub 上，随时可以看、可以改。</Feature>
-      </div>
-
       <section className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -120,7 +145,12 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
         )}
       </section>
 
-      <p className="text-center text-xs text-muted-foreground">© 2026 ILoveBingLu · MIT 开源协议</p>
+      {/* 版权上面两行：软件框架、服务端，各自用乘号连接并居中 */}
+      <div className="flex flex-col items-center gap-2.5 text-center">
+        <StackRow items={FRAMEWORKS} />
+        <StackRow items={SERVERS} />
+        <p className="text-xs text-muted-foreground">© 2026 ILoveBingLu · MIT 开源协议</p>
+      </div>
     </div>
   );
 }
