@@ -5,6 +5,7 @@ import {
 } from "@heroui/react";
 import { Copy, Monitor, Send, Terminal } from "lucide-react";
 import { api } from "../api";
+import { writeClipboardText } from "../lib/clipboard";
 import {
   CollaborationError, collaborationErrorText, expectCollaboration, sessionRef,
   type CollaborationSession, type TaskSpec,
@@ -113,7 +114,7 @@ function LinkDialog() {
       const text = registrationDraftText(drafts);
       setPrompt(text);
       if (copyOnly) {
-        await navigator.clipboard.writeText(text);
+        await writeClipboardText(text);
         toast.success("已复制接入请求");
       } else {
         collab.onPrepare(drafts);

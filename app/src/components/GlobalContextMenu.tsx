@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { ClipboardPaste, Copy, Scissors, TextSelect } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
+import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 
 /** 有选区的输入框类型；number、email 这些拿不到 selectionStart */
 const TEXT_TYPES = new Set(["text", "search", "url", "tel", "password"]);
@@ -41,18 +42,18 @@ function fieldActions(el: Field): MenuAction[] {
   return [
     {
       id: "cut", label: "剪切", icon: <Scissors className="size-4" />, disabled: !selected || secret || !writable,
-      onAction: () => void navigator.clipboard.writeText(selected).then(() => {
+      onAction: () => void writeClipboardText(selected).then(() => {
         restore();
         document.execCommand("delete");
       }, fail("剪切")),
     },
     {
       id: "copy", label: "复制", icon: <Copy className="size-4" />, disabled: !selected || secret,
-      onAction: () => void navigator.clipboard.writeText(selected).then(restore, fail("复制")),
+      onAction: () => void writeClipboardText(selected).then(restore, fail("复制")),
     },
     {
       id: "paste", label: "粘贴", icon: <ClipboardPaste className="size-4" />, disabled: !writable,
-      onAction: () => void navigator.clipboard.readText().then((text) => {
+      onAction: () => void readClipboardText().then((text) => {
         restore();
         pasteInto(el, text);
       }, fail("粘贴")),
@@ -89,7 +90,7 @@ export function GlobalContextMenu() {
       if (text.trim())
         open.current(e, [{
           id: "copy", label: "复制", icon: <Copy className="size-4" />,
-          onAction: () => void navigator.clipboard.writeText(text).catch(fail("复制")),
+          onAction: () => void writeClipboardText(text).catch(fail("复制")),
         }]);
     };
     document.addEventListener("contextmenu", onContextMenu);

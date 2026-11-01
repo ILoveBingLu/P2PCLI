@@ -13,6 +13,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { api, formatCode, type Overview } from "../api";
+import { writeClipboardText } from "../lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
@@ -63,7 +64,7 @@ export function LocalDevicePopover({
 
   const copy = async (text: string, what: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
       setCopied(what);
       toast.success(`${what}已复制`);
       window.setTimeout(
