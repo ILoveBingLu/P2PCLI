@@ -27,6 +27,31 @@
       }
     }
   },
+  "linux": {
+    "tool": "tmux",
+    "version": "3.7c",
+    "linkage": "static-musl",
+    "binaries": {
+      "x86_64-unknown-linux-gnu": {
+        "file": "p2pcli-tmux-x86_64-unknown-linux-gnu",
+        "sha256": "7d0f1e85c5b11df7fe127ab90674c6a15663ad72a25fcf7fabadba6bbb0b29d5",
+        "size": 2232808,
+        "source": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-linux-x86_64.tar.gz",
+        "archiveSha256": "cc56bd1cc873eb6089c615f0496b072385bda8a6d944069f38564a5d49c128aa"
+      },
+      "aarch64-unknown-linux-gnu": {
+        "file": "p2pcli-tmux-aarch64-unknown-linux-gnu",
+        "sha256": "111b775d043d5aadfa13e8ec76f961fbf865dcf0f67df17d53222a9ff376898b",
+        "size": 2307584,
+        "source": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-linux-arm64.tar.gz",
+        "archiveSha256": "29dcb978da2a4b0cf6790f9e004865dac239a3ba03bbf776dddacce23d03831b"
+      }
+    },
+    "licenseSource": {
+      "url": "https://github.com/tmux/tmux-builds/releases/download/v3.7c/LICENSES.tar.gz",
+      "sha256": "094905d3ba42397c65fecd817dc29736dd14bd35e75600441403a365125f47d1"
+    }
+  },
   "macos": {
     "tool": "tmux",
     "version": "3.7c",

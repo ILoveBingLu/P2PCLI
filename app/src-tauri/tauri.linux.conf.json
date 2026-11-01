@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["appimage", "deb", "rpm"],
+    "externalBin": ["binaries/p2pcli-tmux", "binaries/p2pcli"],
+    "resources": {
+      "resources/session-tools/linux/": "session-tools/"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libayatana-appindicator3-1", "xdg-utils"]
+      },
+      "rpm": {
+        "depends": ["libayatana-appindicator-gtk3", "xdg-utils"]
+      }
+    }
+  }
+}

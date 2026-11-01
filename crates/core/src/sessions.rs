@@ -577,8 +577,10 @@ fn executable(bundled: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file()) { return Ok(path); }
     bail!("{}", if cfg!(windows) {
         "被连设备未安装 psmux，请在被连设备运行 winget install psmux 后重试"
-    } else {
+    } else if cfg!(target_os = "macos") {
         "被连设备未安装 tmux；macOS 可运行 brew install tmux，安装后重试"
+    } else {
+        "被连设备未安装 tmux；Linux 可通过系统包管理器安装 tmux，或重新安装带有内置组件的 P2PCLI"
     })
 }
 

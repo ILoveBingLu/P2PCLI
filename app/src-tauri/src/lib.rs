@@ -44,12 +44,14 @@ const NEARBY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_s
 static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn bundled_session_program() -> std::io::Result<Option<PathBuf>> {
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     {
-        let name = if cfg!(windows) { "psmux.exe" } else { "tmux" };
+        let name = if cfg!(windows) { "psmux.exe" }
+            else if cfg!(target_os = "linux") { "p2pcli-tmux" }
+            else { "tmux" };
         Ok(Some(std::env::current_exe()?.with_file_name(name)))
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     { Ok(None) }
 }
 
@@ -1303,6 +1305,11 @@ pub fn run() {
         .on_window_event(|window, event| {
             // 关窗口只是藏起来，别人还要能连进来
             if let WindowEvent::CloseRequested { api, .. } = event {
+                // If tray creation failed, closing must not hide an unreachable window.
+                #[cfg(target_os = "linux")]
+                if window.app_handle().tray_by_id("main").is_none() {
+                    return;
+                }
                 api.prevent_close();
                 let _ = window.hide();
             }

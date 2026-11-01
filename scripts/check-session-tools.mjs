@@ -16,6 +16,8 @@ export function selectTarget(triple) {
   if (windows) return { triple, platform: "windows", arch: windows[1], tool: "psmux", suffix: ".exe" };
   const mac = /^(x86_64|aarch64|universal)-apple-darwin$/.exec(triple);
   if (mac) return { triple, platform: "macos", arch: mac[1], tool: "tmux", suffix: "" };
+  const linux = /^(x86_64|aarch64)-unknown-linux-gnu$/.exec(triple);
+  if (linux) return { triple, platform: "linux", arch: linux[1], tool: "p2pcli-tmux", suffix: "" };
   throw new Error(`暂不支持此桌面打包目标：${triple}。不会混入其他平台的会话组件。`);
 }
 
@@ -29,6 +31,23 @@ export function validatePE(bytes, arch) {
   if (pe + 6 > bytes.length || bytes.readUInt32LE(pe) !== 0x4550) throw new Error("PE 文件头不合法");
   if (bytes.readUInt16LE(pe + 4) !== { x86_64: 0x8664, aarch64: 0xaa64, i686: 0x14c }[arch])
     throw new Error("psmux 的 CPU 架构与打包目标不匹配");
+}
+
+export function validateELF(bytes, arch) {
+  if (bytes.length < 64 || !bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
+      bytes[4] !== 2 || bytes[5] !== 1 || bytes[6] !== 1)
+    throw new Error("不是 64 位小端 ELF 文件");
+  if (bytes.readUInt16LE(18) !== { x86_64: 62, aarch64: 183 }[arch])
+    throw new Error("tmux 的 CPU 架构与打包目标不匹配");
+  if (![2, 3].includes(bytes.readUInt16LE(16))) throw new Error("ELF 不是可执行文件");
+  const offset = Number(bytes.readBigUInt64LE(32)), size = bytes.readUInt16LE(54), count = bytes.readUInt16LE(56);
+  if (!Number.isSafeInteger(offset) || offset < 64 || size < 56 || !count || offset + size * count > bytes.length)
+    throw new Error("ELF program header 越界");
+  for (let i = 0; i < count; i++) {
+    // Official Linux builds are static musl executables, not host-linked distro binaries.
+    if ([2, 3].includes(bytes.readUInt32LE(offset + i * size)))
+      throw new Error("tmux 必须为无动态加载器和动态依赖的静态 ELF");
+  }
 }
 
 export function validateMachO(bytes, arch) {
@@ -92,6 +111,7 @@ export async function checkTarget(triple) {
   if (bytes.length !== entry.size) throw new Error(`组件大小不匹配，请恢复仓库文件：${file}`);
   verifyHash(bytes, entry.sha256);
   if (target.platform === "windows") validatePE(bytes, target.arch);
+  else if (target.platform === "linux") validateELF(bytes, target.arch);
   else if (target.arch === "universal") {
     validateUniversal(bytes, spec.binaries);
     // Tauri also builds each thin target before assembling a universal app.
@@ -105,7 +125,8 @@ export async function checkTarget(triple) {
   }
   const provenance = JSON.parse(await readRequired(path.join(resources, target.platform, "versions.json")));
   if (JSON.stringify(provenance) !== JSON.stringify(spec)) throw new Error("组件版本记录与清单不一致");
-  if (target.platform === "macos" && process.platform === "darwin") await chmod(file, 0o755);
+  if ((target.platform === "macos" && process.platform === "darwin") ||
+      (target.platform === "linux" && process.platform === "linux")) await chmod(file, 0o755);
   return target;
 }
 
