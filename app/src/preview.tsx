@@ -319,6 +319,30 @@ if (s.startsWith("collab")) {
   if (s === "collab-unregistered" || s === "collab-empty") collabSessions.length = 0;
   if (s === "collab-stale") for (const session of collabSessions) session.last_seen = now - 3600;
   if (s === "collab-multiple") collabSessions.push({ ...collabSessions[0], id: "second-windows-session", name: "Windows 复核", terminal: null });
+  if (s === "collab-team" || s === "collab-team-no-lead") {
+    for (let index = 1; index <= 6; index++) {
+      const terminalId = `team-terminal-${index}`;
+      ov.devices[1].sessions.push({
+        ...terminalSessions[1], id: terminalId,
+        agent: { ...terminalSessions[1].agent!, kind: index % 2 ? "claude" : "codex", name: `执行会话 ${index + 1}` },
+      });
+      collabSessions.push({
+        ...collabSessions[0], id: `team-session-${index}`, name: `执行会话 ${index + 1}`,
+        terminal: { host_device_id: "windows-device-01", owner_device_id: collabDevice, terminal_id: terminalId },
+      });
+    }
+    if (s === "collab-team-no-lead") collabSessions.splice(collabSessions.findIndex((session) => session.id === "session-local"), 1);
+  }
+  if (s.startsWith("collab-onboarding")) {
+    collabSessions.length = 0;
+    collabMembers.splice(collabMembers.findIndex((member) => member.device_id === "studio-device-02"), 1);
+    ov.devices[0].sessions = Array.from({ length: s === "collab-onboarding-many" ? 7 : 2 }, (_, index) => ({
+      ...terminalSessions[0], id: `onboarding-studio-${index + 1}`,
+      agent: { ...terminalSessions[0].agent!, kind: "codebuddy", name: "CodeBuddy",
+        state: s === "collab-onboarding-busy" && index === 1 ? "working" : "idle" },
+    }));
+    terminalSessions.push(...ov.devices[0].sessions);
+  }
 }
 // s=agents：Claude Code 过一会儿停下来等确认，再过一会儿干完，看提醒
 if (s === "agents") {
@@ -469,6 +493,8 @@ mockIPC(
       }
       case "list_terminals": {
         if (s.startsWith("collab")) {
+          const remote = Number(args.connId) === 2 ? ov.devices[1] : Number(args.connId) === 1 ? ov.devices[0] : null;
+          if (remote) return collabClone(remote.sessions);
           const id = (Number(args.connId) === 2 ? "b" : "a").repeat(32);
           return collabClone(terminalSessions.filter((session) => session.id === id));
         }
@@ -528,6 +554,29 @@ mockIPC(
         }
         return null;
       }
+      case "send_agent_message": {
+        if (s === "collab-onboarding-old") throw new Error("对方尚不支持自动接入，请更新对方 P2PCLI");
+        const terminal = terminalSessions.find((item) => item.id === args.sessionId);
+        if (!terminal?.agent || terminal.agent.kind !== args.kind) throw new Error("AI 已退出");
+        if (terminal.agent.state !== "idle") throw new Error("AI 正在工作或等待授权，请处理后重新连接协作");
+        const [version, coordinatorId, projectId, ownerId, terminalId] = JSON.parse(args.requestId);
+        if (version !== "onboard-v1" || terminalId !== args.sessionId) throw new Error("接入请求格式不合法");
+        const data = collabCoordinators.get(coordinatorId === collabDevice ? "local" : coordinatorId)?.find((item) => item.project.id === projectId);
+        if (!data) throw new Error("项目不存在");
+        const receipt = `onboarding:${args.connId}:${args.requestId}`;
+        if (collabReceipts.has(receipt)) return null;
+        collabReceipts.set(receipt, { request: args.text, reply: { response: { type: "ack" } } });
+        console.info("Onboarding preview submitted", args.sessionId, args.requestId);
+        if (s !== "collab-onboarding-timeout") window.setTimeout(() => {
+          data.sessions.push({
+            id: `registered-${args.sessionId}`, project_id: projectId, device_id: "studio-device-02",
+            name: terminal.agent!.name + " · " + args.sessionId, mode: "manual_pull",
+            terminal: { host_device_id: "studio-device-02", owner_device_id: ownerId, terminal_id: terminalId },
+            cwd: null, available: true, last_seen: Math.floor(Date.now() / 1000),
+          });
+        }, 1500);
+        return null;
+      }
       case "end_terminal": {
         await new Promise((r) => setTimeout(r, 500));
         if (s === "collab-clear-error") throw new Error("模拟清除失败：设备连接已断开");
@@ -545,7 +594,8 @@ mockIPC(
         return null;
       }
       case "open_terminal": {
-        let session = terminalSessions.find((session) => session.id === args.sessionId);
+        let session = terminalSessions.find((session) => session.id === args.sessionId) ??
+          ov.devices.flatMap((device) => device.sessions).find((session) => session.id === args.sessionId);
         if (!session && args.sessionId) return Promise.reject("会话已结束");
         if (!session) { session = { id: crypto.randomUUID().replaceAll("-", ""), created_at: Math.floor(Date.now() / 1000), attached: true }; terminalSessions.push(session); }
         session.attached = true;

@@ -396,6 +396,8 @@ export const api = {
     invoke<void>("launch_agent", { connId, sessionId, kind, allowBypass }),
   chooseAgentOption: (connId: number, sessionId: string, approvalId: string, optionId: number) =>
     invoke<void>("choose_agent_option", { connId, sessionId, approvalId, optionId }),
+  sendAgentMessage: (connId: number, sessionId: string, kind: string, requestId: string, text: string) =>
+    invoke<void>("send_agent_message", { connId, sessionId, kind, requestId, text }),
   endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
   systemPermissions: () => invoke<SystemPermission[]>("system_permissions"),

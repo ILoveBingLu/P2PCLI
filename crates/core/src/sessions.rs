@@ -17,6 +17,7 @@ use crate::proto::{TerminalDetails, TerminalSession};
 const SESSION_FORMAT: &str = "#{session_name}\t#{session_created}\t#{session_attached}\t#{status}\t#{window_index}\t#{window_name}\t#{session_windows}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_title}";
 const HEALTH_FORMAT: &str = "#{session_name}\t#{pid}\t#{socket_path}";
 const LAUNCHER_FORMAT: &str = "#{pane_pid}\t#{pane_current_command}\t#{cursor_x}\t#{cursor_y}\t#{alternate_on}\t#{pane_in_mode}";
+const AGENT_INPUT_FORMAT: &str = "#{pane_pid}\t#{window_index}\t#{pane_index}\t#{pane_in_mode}\t#{bracket_paste_flag}\t#{cursor_y}\t#{pane_current_command}\t#{synchronize-panes}\t#{pane_title}";
 
 /// 滚轮交给 tmux：本机终端只把滚轮（还有退出复制模式用的中键）发过来，点击、拖选、右键都留在本机。
 /// shell 里往上滚进复制模式翻历史，滚回底部自动退出；全屏程序要了鼠标就转给它；在备用屏幕又没要鼠标的（less、man）转成上下键。
@@ -60,6 +61,7 @@ pub struct SessionManager {
     agent_commands: std::sync::RwLock<BTreeMap<String, String>>,
     approvals: std::sync::Mutex<crate::approval::Tracker>,
     approval_gate: tokio::sync::Mutex<()>,
+    message_receipts: std::sync::Mutex<BTreeMap<(String, String), (blake3::Hash, bool)>>,
     /// 会话管理器自己报的版本，问一次记住
     described: tokio::sync::OnceCell<Option<String>>,
 }
@@ -81,6 +83,7 @@ impl SessionManager {
             agent_commands: Default::default(),
             approvals: Default::default(),
             approval_gate: Default::default(),
+            message_receipts: Default::default(),
             described: Default::default(),
         }
     }
@@ -278,6 +281,89 @@ impl SessionManager {
         Ok(())
     }
 
+    pub async fn send_agent_message(&self, owner: &str, id: &str, kind: &str, request_id: &str, text: &str) -> Result<()> {
+        let name = Self::name(owner, id)?;
+        if request_id.is_empty() || request_id.len() > 512 || text.is_empty() || text.len() > 16_000 ||
+            text.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+            bail!("接入请求格式不合法");
+        }
+        let _gate = self.gate.lock().await;
+        let _approval_gate = self.approval_gate.lock().await;
+        let key = (name.clone(), request_id.to_string());
+        let digest = blake3::hash(&serde_json::to_vec(&(kind, text))?);
+        {
+            let receipts = self.message_receipts.lock().unwrap();
+            if let Some((previous, sent)) = receipts.get(&key) {
+                if previous != &digest { bail!("接入请求内容已变化，请先核对原请求"); }
+                if !sent { bail!("上次接入提交结果未确认，请查看终端，未重复发送"); }
+                return Ok(());
+            }
+            if receipts.len() >= 4096 { bail!("接入请求记录已满，请检查已有会话"); }
+        }
+        let (pid, pane) = self.agent_message_target(&name, kind, true).await?;
+        // Named buffers do not touch the clipboard or another client's pending paste.
+        #[cfg(not(windows))]
+        let buffer = format!("p2pcli-{:032x}", rand::random::<u128>());
+        #[cfg(not(windows))]
+        self.checked(&["set-buffer", "-b", &buffer, "--", text]).await?;
+        let result = async {
+            // Recheck after preparing the buffer, targeting the same pane rather than its active window.
+            let (current, _) = self.agent_message_target(&pane, kind, true).await?;
+            if current != pid { bail!("AI 进程已变化，未发送接入请求"); }
+            // Record before input: a timeout after paste must never cause an automatic second paste.
+            self.message_receipts.lock().unwrap().insert(key.clone(), (digest, false));
+            #[cfg(windows)]
+            {
+                use base64::Engine as _;
+                // psmux buffers are session-local. Its direct paste API avoids default-session routing.
+                let payload = base64::engine::general_purpose::STANDARD.encode(text);
+                self.checked(&["send-paste", "-t", &pane, &payload]).await?;
+            }
+            #[cfg(not(windows))]
+            self.checked(&["paste-buffer", "-p", "-d", "-b", &buffer, "-t", &pane]).await?;
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let (current, _) = self.agent_message_target(&pane, kind, false).await?;
+            if current != pid { bail!("AI 进程已变化，未自动提交，请查看终端"); }
+            self.checked(&["send-keys", "-t", &pane, "Enter"]).await?;
+            self.message_receipts.lock().unwrap().insert(key, (digest, true));
+            Ok(())
+        }.await;
+        #[cfg(not(windows))]
+        let _ = self.command(&["delete-buffer", "-b", &buffer]).await;
+        result
+    }
+
+    async fn agent_message_target(&self, target: &str, expected: &str, empty: bool) -> Result<(u32, String)> {
+        let out = self.command(&["display-message", "-p", "-t", target, AGENT_INPUT_FORMAT]).await?;
+        if !out.status.success() { bail!("会话已结束"); }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let fields: Vec<_> = text.trim_end_matches(['\r', '\n']).splitn(9, '\t').collect();
+        // psmux wraps send-paste explicitly but does not expose bracket_paste_flag.
+        if fields.len() != 9 || fields[3] != "0" || (!cfg!(windows) && fields[4] != "1") {
+            bail!("终端暂不支持安全自动接入，请退出复制模式或更新会话组件");
+        }
+        if !matches!(fields[7], "0" | "off") { bail!("请关闭终端同步输入后再连接协作"); }
+        if fields[6].is_empty() || crate::launchers::is_shell(fields[6]) {
+            bail!("终端前台不是 AI，未发送接入请求");
+        }
+        let (pid, kind, _) = self.processes.lock().unwrap().fresh_agent_under(fields[0].parse()?)
+            .context("AI 已退出，未向 shell 发送接入请求")?;
+        if kind != expected { bail!("AI 类型已变化，请重新选择会话"); }
+        let session = target.split_once(':').map_or(target, |(session, _)| session);
+        let pane = format!("{session}:{}.{}", fields[1].parse::<u32>()?, fields[2].parse::<u32>()?);
+        let out = self.command(&["capture-pane", "-p", "-t", &pane]).await?;
+        if !out.status.success() { bail!("无法确认 AI 输入状态"); }
+        let screen = String::from_utf8_lossy(&out.stdout);
+        if agents::state(fields[8], &screen) != agents::AgentState::Idle ||
+            self.parse_approval(&pane, kind, pid, &screen).await.is_some() {
+            bail!("AI 正在工作或等待授权，请处理后重新连接协作");
+        }
+        if empty && !empty_agent_prompt(&screen, fields[5].parse()?) {
+            bail!("AI 输入框非空或无法识别，请清空终端输入后重新连接协作");
+        }
+        Ok((pid, pane))
+    }
+
     pub async fn attach(&self, owner: &str, requested: Option<&str>, cols: u16, rows: u16) -> Result<(CommandBuilder, String)> {
         let _gate = self.gate.lock().await;
         let id = requested.map(str::to_string).unwrap_or_else(|| format!("{:032x}", rand::random::<u128>()));
@@ -461,6 +547,13 @@ fn status_text(value: Option<&str>) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+fn empty_agent_prompt(screen: &str, row: usize) -> bool {
+    // Fail closed on placeholders, wrapped drafts and unrecognized input widgets.
+    screen.lines().nth(row).is_some_and(|line| {
+        matches!(line.trim().trim_matches(['│', '┃', '║']).trim(), ">" | "❯" | "›")
+    })
+}
+
 fn executable(bundled: Option<&Path>) -> Result<PathBuf> {
     // Desktop builds always supply an absolute sidecar path. Never silently
     // switch to an unrelated executable on PATH if the installation is damaged.
@@ -492,6 +585,18 @@ fn executable(bundled: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_input_requires_an_empty_recognized_prompt() {
+        for screen in [">\n", "❯ \n", "│ ›   │\n"] {
+            assert!(empty_agent_prompt(screen, 0));
+        }
+        for screen in ["", "$ ", "PS C:\\> ", "❯ existing draft", "❯ Try something", "› 1. Yes", "unknown widget"] {
+            assert!(!empty_agent_prompt(screen, 0));
+        }
+        assert!(!empty_agent_prompt("❯\nexisting draft", 1));
+        assert!(!empty_agent_prompt("❯", 5));
+    }
+
     #[test]
     fn desktop_uses_only_the_explicit_sidecar_path() {
         let existing = std::env::current_exe().unwrap();

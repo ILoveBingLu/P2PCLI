@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{COLLABORATION_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -114,7 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into()],
         },
     )
     .await?;
@@ -270,6 +270,20 @@ impl RemoteHost {
         match self.session_request(Msg::ChooseAgentOption { session_id, approval_id, option_id }).await? {
             Msg::AgentOptionChosen => Ok(()),
             other => bail!("提交选项失败：{other:?}"),
+        }
+    }
+
+    pub async fn send_agent_message(&self, session_id: String, kind: String, request_id: String, text: String) -> Result<()> {
+        if let Link::Local { host, owner } = &self.link {
+            return host.terminals.send_agent_message(owner, &session_id, &kind, &request_id, &text).await;
+        }
+        if let Link::Net { capabilities, .. } = &self.link
+            && !capabilities.iter().any(|capability| capability == AGENT_MESSAGE_V1) {
+            bail!("对方尚不支持自动接入，请更新对方 P2PCLI");
+        }
+        match self.session_request(Msg::SendAgentMessage { session_id, kind, request_id, text }).await? {
+            Msg::AgentMessageSent => Ok(()),
+            other => bail!("接入请求未确认：{other:?}"),
         }
     }
 

@@ -19,7 +19,7 @@ use crate::PROTO_VERSION;
 use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::Files;
 use crate::identity::DeviceInfo;
-use crate::proto::{COLLABORATION_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
@@ -508,7 +508,8 @@ impl Host {
                 version: me.version,
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
-                capabilities: if collaboration { vec![COLLABORATION_V1.into()] } else { Vec::new() },
+                capabilities: capabilities.iter().filter(|capability|
+                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1)).cloned().collect(),
             },
         )
         .await?;
@@ -578,6 +579,10 @@ impl Host {
                 Msg::ChooseAgentOption { session_id, approval_id, option_id } => {
                     self.terminals.choose_agent_option(&owner, &session_id, &approval_id, option_id).await?;
                     write_msg(&mut send, &Msg::AgentOptionChosen).await?;
+                }
+                Msg::SendAgentMessage { session_id, kind, request_id, text } => {
+                    self.terminals.send_agent_message(&owner, &session_id, &kind, &request_id, &text).await?;
+                    write_msg(&mut send, &Msg::AgentMessageSent).await?;
                 }
                 Msg::ListInstalledAgents { refresh } => {
                     let agents = self.terminals.installed_agents(refresh).await?;

@@ -64,7 +64,8 @@ import { CollaborationProvider } from "./components/CollaborationContext";
 import { CollaborationPorts } from "./components/CollaborationPorts";
 import { CollaborationDrawer } from "./components/CollaborationDrawer";
 import { sessionTitles } from "./components/sessionText";
-import type { CollaborationEndpoint } from "./lib/collaborationLinks";
+import { connectCollaborationSession, endpointKey, type CollaborationDraft, type CollaborationEndpoint } from "./lib/collaborationLinks";
+import { expectCollaboration } from "./lib/collaboration";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -109,7 +110,14 @@ export default function App() {
   });
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const pendingCollaborationDraft = useRef<{ endpoint: CollaborationEndpoint; prompt: string } | null>(null);
+  const pendingCollaborationDrafts = useRef(new Map<string, CollaborationDraft>());
+  const onboardingInFlight = useRef(new Map<string, Promise<void>>());
+  const onboardingController = useRef(new AbortController());
+  useEffect(() => {
+    const controller = new AbortController();
+    onboardingController.current = controller;
+    return () => controller.abort();
+  }, []);
   const termHandles = useRef(new Map<number, TerminalHandle>());
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -334,21 +342,12 @@ export default function App() {
     );
   }, [liveConnectionKey]);
 
-  const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string) => {
-    const prepareDraft = (key: number) => {
-      const pending = pendingCollaborationDraft.current;
-      if (!pending || pending.endpoint.deviceId !== info.endpoint_id || pending.endpoint.terminalId !== sessionId) return;
-      pendingCollaborationDraft.current = null;
-      setDrafts((current) => ({ ...current, [key]: current[key]?.trim() ? `${current[key]}\n\n${pending.prompt}` : pending.prompt }));
-      hideComposer(false);
-      setShowCollaboration(false);
-    };
+  const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string, keepConnection = false) => {
     if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
       void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
     const existing = sessionId ? tabs.find((t) => t.info.endpoint_id === info.endpoint_id && t.sessionId === sessionId && (t.state === "open" || t.state === "opening")) : null;
     if (existing) {
-      prepareDraft(existing.key);
-      if (existing.connId !== connId && !tabs.some((t) => t.connId === connId))
+      if (!keepConnection && existing.connId !== connId && !tabs.some((t) => t.connId === connId))
         void api.disconnect(connId).catch((e) => toast.error(String(e)));
       setActiveKey(existing.key); setSessionTarget(null); setShowSettings(false); return;
     }
@@ -356,12 +355,61 @@ export default function App() {
     setSessionTarget(null);
     setShowSettings(false);
     const key = tabSeq.current++;
-    prepareDraft(key);
     setTabs((ts) => [
       ...ts.filter((t) => !sessionId || t.info.endpoint_id !== info.endpoint_id || t.sessionId !== sessionId),
       { key, connId, info, code, state: "opening", note: null, sessionId },
     ]);
     setActiveKey(key);
+  };
+  const openCollaborationDrafts = (connId: number, info: RemoteInfo, code: string | null, drafts: CollaborationDraft[]) => {
+    const needsConnection = tabs.some((tab) => tab.connId === connId) || drafts.some(({ endpoint }) =>
+      !tabs.some((tab) => tab.info.endpoint_id === endpoint.deviceId && tab.sessionId === endpoint.terminalId &&
+        (tab.state === "open" || tab.state === "opening")));
+    // Reusing one tab must not disconnect a connection needed by another tab in this batch.
+    for (const draft of drafts) addTab(connId, info, code, draft.endpoint.terminalId, true);
+    setShowCollaboration(false);
+    for (const draft of drafts) pendingCollaborationDrafts.current.delete(endpointKey(draft.endpoint));
+    const signal = onboardingController.current.signal;
+    toast.notice(`正在接入 ${drafts.length} 个会话`, { description: "等待会话登记确认；需要授权时会在目标会话中提示。" });
+    const requests = drafts.map((draft) => {
+      const key = `${draft.endpoint.deviceId}:${draft.requestId}`;
+      const existing = onboardingInFlight.current.get(key);
+      if (existing) return existing;
+      const request = connectCollaborationSession(draft, {
+        signal,
+        read: async () => {
+          const target = draft.coordinatorId === draft.ownerId ? null : draft.coordinatorId;
+          const [sessions, members] = await Promise.all([
+            api.collabRequest(target, draft.projectId, { type: "sessions_list" }),
+            api.collabRequest(target, draft.projectId, { type: "members_list" }),
+          ]);
+          return {
+            sessions: expectCollaboration(sessions, "sessions").sessions,
+            members: expectCollaboration(members, "members").members,
+          };
+        },
+        send: () => {
+          if (!draft.endpoint.agentKind) throw new Error("未识别目标 AI，未发送接入请求");
+          return api.sendAgentMessage(connId, draft.endpoint.terminalId!, draft.endpoint.agentKind, draft.requestId, draft.prompt);
+        },
+        wait: () => new Promise<void>((resolve) => window.setTimeout(resolve, 2000)),
+      }).finally(() => onboardingInFlight.current.delete(key));
+      onboardingInFlight.current.set(key, request);
+      return request;
+    });
+    void Promise.allSettled(requests).then((results) => {
+      if (signal.aborted) return;
+      const failed = results.flatMap((result, index) => result.status === "rejected" ?
+        [`${drafts[index].endpoint.sessionName ?? "会话"}：${String(result.reason)}`] : []);
+      if (!failed.length) toast.success(`${results.length} 个会话已接入协作`);
+      else toast.notice(`已确认接入 ${results.length - failed.length}/${results.length} 个会话`, {
+        warning: true, description: failed.join("\n"),
+        action: { label: "查看协作", onPress: () => setShowCollaboration(true) },
+      });
+      refresh();
+    }).finally(() => {
+      if (!needsConnection) void api.disconnect(connId).catch((e) => toast.error(String(e)));
+    });
   };
 
   /** 连接后执行用户指定的会话操作；清除操作已在会话菜单中确认。 */
@@ -382,7 +430,9 @@ export default function App() {
     pendingOpen.current = null;
     if (window.__ptTest) addTab(connId, info, code);
     else if (pending && !pending.clear && pending.endpointId === info.endpoint_id) {
-      addTab(connId, info, code, pending.sessionId ?? undefined);
+      const drafts = [...pendingCollaborationDrafts.current.values()].filter((draft) => draft.endpoint.deviceId === info.endpoint_id);
+      if (drafts.length) openCollaborationDrafts(connId, info, code, drafts);
+      else addTab(connId, info, code, pending.sessionId ?? undefined);
     } else {
       if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((t) => t.connId === sessionTarget.connId))
         void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
@@ -577,8 +627,10 @@ export default function App() {
       });
     }
   }
-  const prepareCollaboration = (endpoint: CollaborationEndpoint, prompt: string) => {
-    if (!endpoint.terminalId) throw new Error("请先选择目标 AI 会话");
+  const prepareCollaboration = (drafts: CollaborationDraft[]) => {
+    const endpoint = drafts[0]?.endpoint;
+    if (!endpoint || drafts.some((draft) => !draft.endpoint.terminalId)) throw new Error("请先选择目标 AI 会话");
+    if (drafts.some((draft) => draft.endpoint.deviceId !== endpoint.deviceId)) throw new Error("接入会话必须属于同一台设备");
     if (connection.busy) throw new Error("设备正在连接，请稍后重试");
     const local = ov?.local;
     const target = endpoint.deviceId === ov?.endpoint_id && local ? { connId: local.conn_id, info: local.info, code: null } :
@@ -587,10 +639,13 @@ export default function App() {
     const nearby = ov?.nearby.find((device) => device.endpoint_id === endpoint.deviceId && device.online);
     const recent = ov?.recent.find((device) => device.endpoint_id === endpoint.deviceId);
     if (!target && !nearby && !recent) throw new Error("此设备还未连接，请先连接设备");
-    pendingCollaborationDraft.current = { endpoint, prompt };
-    if (target) addTab(target.connId, target.info, target.code, endpoint.terminalId);
+    pendingCollaborationDrafts.current = new Map(drafts.map((draft) => [endpointKey(draft.endpoint), draft]));
+    pendingOpen.current = null;
+    if (target) {
+      openCollaborationDrafts(target.connId, target.info, target.code, drafts);
+    }
     else {
-      pendingOpen.current = { endpointId: endpoint.deviceId, sessionId: endpoint.terminalId };
+      pendingOpen.current = { endpointId: endpoint.deviceId, sessionId: endpoint.terminalId! };
       if (nearby) void connection.connectLan(nearby);
       else if (recent) void connection.doConnect(recent.code, "");
     }
@@ -636,7 +691,7 @@ export default function App() {
                 if (!open) {
                   connection.setLanTarget(null);
                   // 没连上就关了面板：之前点的会话不再自动打开
-                  if (!connection.busy) { pendingOpen.current = null; pendingCollaborationDraft.current = null; }
+                  if (!connection.busy) { pendingOpen.current = null; pendingCollaborationDrafts.current.clear(); }
                 }
               }}
             />
@@ -649,9 +704,12 @@ export default function App() {
         onSessionEnded={sessionEnded}
         onSessionsChanged={() => setSessionsRev((v) => v + 1)}
         onSessionsLocalChange={updateLiveSessions}
-        onPendingOpen={(endpointId, sessionId) => { pendingOpen.current = { endpointId, sessionId }; }}
+        onPendingOpen={(endpointId, sessionId) => {
+          pendingCollaborationDrafts.current.clear();
+          pendingOpen.current = { endpointId, sessionId };
+        }}
         onPendingClear={(endpointId, sessionId) => {
-          pendingCollaborationDraft.current = null;
+          pendingCollaborationDrafts.current.clear();
           pendingOpen.current = { endpointId, sessionId, clear: true };
         }}
         busy={connection.busy}
