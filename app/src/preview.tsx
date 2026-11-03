@@ -689,7 +689,7 @@ function fakeAgentInput(termId: number, data: string) {
 // 传文件：s=transfers 一开始就有几条在传、传完、失败的；发文件时模拟进度
 const transfers: Transfer[] = [];
 const transferBase = { files: 1, error: null, dir: null, paths: [] as string[], started_at: now, finished_at: null as number | null };
-if (s === "transfers") {
+if (s === "transfers" || s === "transfers-update") {
   transfers.push(
     { ...transferBase, id: "t1", direction: "send", peer: "x", peer_name: "工作室 Mac mini", label: "设计稿 等 3 项", files: 12, total: 420_000_000, done: 168_000_000, state: "running" },
     { ...transferBase, id: "t2", direction: "receive", peer: "y", peer_name: "办公室 PC", label: "报告.pdf", total: 2_400_000, done: 2_400_000, state: "done", finished_at: now + 3600, paths: ["/Users/me/Downloads/P2PCLI/办公室 PC/报告.pdf"] },
@@ -697,6 +697,19 @@ if (s === "transfers") {
   );
 }
 const emitTransfers = () => void emit("transfers", transfers.map((t) => ({ ...t })));
+// s=transfer-live：一次发送从 0 走到 100%，看灵动岛从进度变成对勾
+if (s === "transfer-live") {
+  const live: Transfer = { ...transferBase, id: "live", direction: "send", peer: "x", peer_name: "工作室 Mac mini", label: "演示视频.mov", total: 96_000_000, done: 0, state: "connecting" };
+  transfers.push(live);
+  let tick = 0;
+  const timer = setInterval(() => {
+    tick++;
+    if (tick === 3) live.state = "running";
+    if (live.state === "running") live.done = Math.min(live.total, live.done + 9_600_000);
+    if (live.done >= live.total) { live.state = "done"; live.finished_at = Math.floor(Date.now() / 1000); clearInterval(timer); }
+    emitTransfers();
+  }, 400);
+}
 if (s === "collab-traffic") Object.assign(window, {
   __wirePreview: {
     event: (kind: string) => {
@@ -1056,7 +1069,7 @@ mockIPC(
         return "0.1.0";
       // s=update：发布页上有新版本；s=update-fail：下载到一半失败
       case "check_update":
-        return s === "update" || s === "update-fail"
+        return s === "update" || s === "update-fail" || s === "transfers-update"
           ? { version: "0.1.1", current_version: "0.1.0", notes: "局域网发现更稳定\n修复连接面板偶尔不弹出" }
           : null;
       case "install_update": {

@@ -1042,5 +1042,22 @@
   "拉取": "Pull",
   "设备工具": "Device tools",
   "在单独的窗口里打开代码编辑器，直接编辑这台设备上的文件": "Open the code editor in its own window to edit files on this device directly",
-  "{{device}} — 代码编辑器": "{{device}} — Code editor"
+  "{{device}} — 代码编辑器": "{{device}} — Code editor",
+  "正在传 {{count}} 个": "Transferring {{count}}",
+  "全部关闭": "Close all",
+  "还有 {{count}} 个": "{{count}} more",
+  "等 {{name}} 同意…": "Waiting for {{name}} to accept…",
+  "准备接收…": "Getting ready to receive…",
+  "{{count}} 个传输": "{{count}} transfers",
+  "文件传输 {{percent}}%": "File transfer {{percent}}%",
+  "正在发送 {{label}}": "Sending {{label}}",
+  "正在接收 {{label}}": "Receiving {{label}}",
+  "{{count}} 个传输失败": "{{count}} transfers failed",
+  "没发出去：{{label}}": "Couldn't send: {{label}}",
+  "没收到：{{label}}": "Couldn't receive: {{label}}",
+  "文件传输失败": "File transfer failed",
+  "{{count}} 个都传完了": "All {{count}} transfers finished",
+  "已发到 {{name}}": "Sent to {{name}}",
+  "已收到 {{label}}": "Received {{label}}",
+  "文件传完了": "File transfer finished"
 }

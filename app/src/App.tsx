@@ -48,7 +48,7 @@ import { ConnectionSidebar } from "./components/ConnectionSidebar";
 import { useConnection } from "./components/useConnection";
 import { useSidebar } from "./components/useSidebar";
 import { useUpdater } from "./components/useUpdater";
-import { UpdateIsland } from "./components/UpdateIsland";
+import { DynamicIsland } from "./components/DynamicIsland";
 import { useAgentAlerts } from "./components/useAgentAlerts";
 import { AgentTabTitle } from "./components/Agent";
 import { GlobalContextMenu } from "./components/GlobalContextMenu";
@@ -60,7 +60,6 @@ import {
   DiagDialog,
   FileApproveDialog,
 } from "./components/AppDialogs";
-import { TransferPanel } from "./components/TransferPanel";
 import { RemoteSessions, type SessionTarget } from "./components/RemoteSessions";
 import { SettingsPage } from "./components/SettingsPage";
 import { Welcome } from "./components/Welcome";
@@ -720,7 +719,7 @@ export default function App() {
       onOpenChange={setShowCollaboration} onPrepare={prepareCollaboration}>
     <CollaborationPorts>
     <div className="app-shell">
-      <UpdateIsland updater={updater} />
+      <DynamicIsland updater={updater} transfers={transfers} />
       <Titlebar
         ov={ov}
         onKick={(session) => void api.kick(session.session).then(refresh).catch((e) => toast.error(String(e)))}
@@ -1088,7 +1087,6 @@ export default function App() {
           </Tabs>
 
         </div>
-        <TransferPanel transfers={transfers} />
       </main>
       {showDiag && <DiagDialog publicKey={ov?.endpoint_id ?? null} onClose={() => setShowDiag(false)} />}
       {requests.length > 0 && (
