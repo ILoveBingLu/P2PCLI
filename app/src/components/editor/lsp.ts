@@ -4,6 +4,7 @@ import { api, LSP_MISSING_PREFIX, type LspEventView } from "../../api";
 import { monaco } from "./monaco";
 import { baseName, dirName, isUnder } from "./paths";
 import { JsonRpc, pathKey, pathToUri, uriToPath, type CancelToken } from "./lspClient";
+import { t } from "@/i18n";
 
 /** Monaco 的语言 → 对方电脑上哪种语言服务 */
 const FAMILIES: Record<string, string> = {
@@ -61,6 +62,21 @@ export interface LspStatus {
   detail?: string;
 }
 
+/** 问题面板里的一条 */
+export interface Problem {
+  severity: "error" | "warning" | "info" | "hint";
+  message: string;
+  source?: string;
+  code?: string;
+  line: number;
+  col: number;
+}
+
+export interface FileProblems { path: string; problems: Problem[] }
+
+/** 项目里按名字找到的符号（⌘T） */
+export interface FoundSymbol { name: string; kind: number; container?: string; path: string; line: number; col: number }
+
 /** 编辑器提供给语言服务用的几件事 */
 export interface LspHost {
   connId(): number | null;
@@ -72,6 +88,8 @@ export interface LspHost {
   pathOf(uri: monaco.Uri): string | null;
   /** 打开文件并选中这段（跳转到别的文件时） */
   open(path: string, range: monaco.IRange): void;
+  /** 重命名、快速修复要改别的文件：在后台打开成标签（改完是未保存，由用户保存），给出它的模型 */
+  openForEdit(path: string): Promise<monaco.editor.ITextModel | null>;
   /** 状态变了，界面要刷新 */
   changed(): void;
 }
@@ -95,6 +113,8 @@ interface Session {
   detail?: string;
   progress: Map<string | number, string>;
   docs: Set<Doc>;
+  /** 语言服务报的问题，按文件存，没打开的文件也留着（问题面板用） */
+  diagnostics: Map<string, { path: string; items: any[] }>;
   stopping: boolean;
   ready: Promise<boolean>;
 }
@@ -332,7 +352,148 @@ function registerProviders(family: string) {
         return result?.map(toEdit);
       },
     });
+    monaco.languages.registerRenameProvider(language, {
+      async provideRenameEdits(model, pos, newName, token) {
+        const doc = docFor(model);
+        if (!doc?.session.caps.renameProvider) return undefined;
+        const result = await doc.session.rpc!.request("textDocument/rename", { textDocument: ident(doc), position: position(pos), newName }, token);
+        if (!result) return { edits: [], rejectReason: t("这里不能重命名") };
+        return workspaceEdit(doc, result);
+      },
+      async resolveRenameLocation(model, pos, token) {
+        const doc = docFor(model);
+        const cap = doc?.session.caps.renameProvider;
+        if (!doc || !cap) return undefined;
+        const word = model.getWordAtPosition(pos);
+        const fallback = word ? { range: new monaco.Range(pos.lineNumber, word.startColumn, pos.lineNumber, word.endColumn), text: word.word } : undefined;
+        if (typeof cap !== "object" || !cap.prepareProvider) return fallback;
+        const result: any = await doc.session.rpc!.request("textDocument/prepareRename", { textDocument: ident(doc), position: position(pos) }, token).catch(() => null);
+        if (!result) return { range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column), text: "", rejectReason: t("这里不能重命名") };
+        if (result.defaultBehavior) return fallback;
+        const range = toRange(result.range ?? result);
+        return { range, text: result.placeholder ?? model.getValueInRange(range) };
+      },
+    });
+    monaco.languages.registerCodeActionProvider(language, {
+      async provideCodeActions(model, range, context, token) {
+        const doc = docFor(model);
+        if (!doc?.session.caps.codeActionProvider) return undefined;
+        // 光标处的报错一起发过去，快速修复要靠它们
+        const diagnostics = (doc.session.diagnostics.get(pathKey(doc.path))?.items ?? []).filter((d) => {
+          const r = toRange(d.range);
+          return r.startLineNumber <= range.endLineNumber && r.endLineNumber >= range.startLineNumber;
+        });
+        const result: any[] | null = await doc.session.rpc!.request("textDocument/codeAction", {
+          textDocument: ident(doc), range: toLspRange(range),
+          context: { diagnostics, only: context.only ? [context.only] : undefined, triggerKind: context.trigger },
+        }, token).catch(() => null);
+        const actions = (result ?? []).map((item): CodeAction => typeof item.command === "string"
+          ? { title: item.title, command: commandFor(doc, item) }
+          : {
+            title: item.title,
+            kind: item.kind,
+            isPreferred: item.isPreferred,
+            disabled: item.disabled?.reason,
+            diagnostics: item.diagnostics ? markers(item.diagnostics) : undefined,
+            command: item.command ? commandFor(doc, item.command) : undefined,
+            lsp: item,
+            doc,
+          });
+        return { actions, dispose() {} };
+      },
+      // 选中某个修复时才去要具体改动、打开要改的文件，不然每挪一下光标都要开一堆文件
+      async resolveCodeAction(action: CodeAction, token) {
+        const doc = action.doc;
+        if (!doc?.session.rpc || doc.session.rpc.closed || !action.lsp) return action;
+        let item = action.lsp;
+        if (!item.edit && doc.session.caps.codeActionProvider?.resolveProvider) {
+          item = await doc.session.rpc.request("codeAction/resolve", item, token).catch(() => null) ?? item;
+        }
+        if (item.edit) action.edit = await workspaceEdit(doc, item.edit);
+        return action;
+      },
+    });
+    monaco.languages.registerDocumentSymbolProvider(language, {
+      async provideDocumentSymbols(model, token) {
+        const doc = docFor(model);
+        if (!doc?.session.caps.documentSymbolProvider) return undefined;
+        const result: any[] | null = await doc.session.rpc!.request("textDocument/documentSymbol", { textDocument: ident(doc) }, token).catch(() => null);
+        return result?.map(documentSymbol);
+      },
+    });
   }
+}
+
+type CodeAction = monaco.languages.CodeAction & { lsp?: any; doc?: Doc };
+
+/** 语言服务给的命令：只转它自己声明能执行的，编辑器那边的命令（比如运行测试）这里做不了 */
+function commandFor(doc: Doc, command: any): monaco.languages.Command | undefined {
+  if (KNOWN_COMMANDS.has(command.command)) return { id: command.command, title: command.title ?? "" };
+  const supported: string[] = doc.session.caps.executeCommandProvider?.commands ?? [];
+  if (!supported.includes(command.command)) return undefined;
+  return { id: LSP_COMMAND, title: command.title ?? "", arguments: [doc.model.uri.toString(), command] };
+}
+
+const LSP_COMMAND = "p2pcli.lsp.executeCommand";
+let commandRegistered = false;
+function registerCommand() {
+  if (commandRegistered) return;
+  commandRegistered = true;
+  monaco.editor.registerCommand(LSP_COMMAND, (_accessor, key: string, command: any) => {
+    const doc = docs.get(key);
+    if (!doc?.session.rpc || doc.session.rpc.closed) return;
+    // 执行过程中语言服务会用 workspace/applyEdit 让我们改文件
+    void doc.session.rpc.request("workspace/executeCommand", { command: command.command, arguments: command.arguments }).catch(() => {});
+  });
+}
+
+/** 改动涉及的文件 → 打开成标签拿到模型 */
+async function editModels(doc: Doc, uris: string[]): Promise<Map<string, monaco.editor.ITextModel>> {
+  const manager = [...managers].find((m) => m.owns(doc));
+  const models = new Map<string, monaco.editor.ITextModel>();
+  await Promise.all([...new Set(uris)].map(async (uri) => {
+    const path = uriToPath(uri);
+    if (!path) return;
+    const model = pathKey(path) === pathKey(doc.path) ? doc.model : await manager?.host.openForEdit(path).catch(() => null);
+    if (model) models.set(uri, model);
+  }));
+  return models;
+}
+
+/** LSP 的 WorkspaceEdit 拆成每个文件的一组改动；新建、改名、删除文件这类不做 */
+function textEdits(edit: any): { uri: string; edits: any[] }[] {
+  const out: { uri: string; edits: any[] }[] = [];
+  for (const [uri, edits] of Object.entries(edit?.changes ?? {})) out.push({ uri, edits: edits as any[] });
+  for (const change of edit?.documentChanges ?? []) if (change.textDocument && change.edits) out.push({ uri: change.textDocument.uri, edits: change.edits });
+  return out;
+}
+
+async function workspaceEdit(doc: Doc, edit: any): Promise<monaco.languages.WorkspaceEdit & { rejectReason?: string }> {
+  const groups = textEdits(edit);
+  const models = await editModels(doc, groups.map((g) => g.uri));
+  const missing = groups.filter((g) => !models.has(g.uri)).length;
+  const result: monaco.languages.WorkspaceEdit & { rejectReason?: string } = {
+    edits: groups.flatMap((g) => {
+      const model = models.get(g.uri);
+      return model ? g.edits.map((e) => ({ resource: model.uri, textEdit: { range: toRange(e.range), text: e.newText }, versionId: undefined })) : [];
+    }),
+  };
+  if (missing) result.rejectReason = t("有 {{count}} 个文件打不开，没法改", { count: missing });
+  return result;
+}
+
+function documentSymbol(item: any): monaco.languages.DocumentSymbol {
+  // 老的语言服务给扁平的 SymbolInformation，没有 children 和 selectionRange
+  const range = toRange(item.range ?? item.location.range);
+  return {
+    name: item.name,
+    detail: item.detail ?? item.containerName ?? "",
+    kind: Math.max(0, (item.kind ?? 1) - 1) as monaco.languages.SymbolKind,
+    tags: item.tags ?? [],
+    range,
+    selectionRange: item.selectionRange ? toRange(item.selectionRange) : range,
+    children: item.children?.map(documentSymbol),
+  };
 }
 
 // 跳到别的文件：Monaco 自己不会开新文件，交给编辑器打开标签
@@ -386,6 +547,7 @@ export class LspManager {
   constructor(readonly host: LspHost) {
     managers.add(this);
     registerOpener();
+    registerCommand();
   }
 
   owns(doc: Doc) { return this.sessions.includes(doc.session); }
@@ -421,6 +583,54 @@ export class LspManager {
     if (session) return { family, state: session.state, server: session.server, root: session.root, detail: session.detail };
     if (this.missing.has(family)) return { family, state: "missing" };
     return null;
+  }
+
+  /** 所有语言服务报的问题，按文件排：错误多的在前 */
+  problems(): FileProblems[] {
+    const files = new Map<string, FileProblems>();
+    const level = ["error", "warning", "info", "hint"] as const;
+    for (const session of this.sessions) {
+      for (const [key, { path, items }] of session.diagnostics) {
+        if (!items.length) continue;
+        const entry = files.get(key) ?? { path, problems: [] };
+        for (const d of items) {
+          entry.problems.push({
+            severity: level[(d.severity ?? 1) - 1] ?? "error",
+            message: d.message,
+            source: d.source,
+            code: d.code != null ? String(d.code) : undefined,
+            line: d.range.start.line + 1,
+            col: d.range.start.character + 1,
+          });
+        }
+        files.set(key, entry);
+      }
+    }
+    const rank = (f: FileProblems) => f.problems.filter((p) => p.severity === "error").length;
+    for (const f of files.values()) f.problems.sort((a, b) => level.indexOf(a.severity) - level.indexOf(b.severity) || a.line - b.line);
+    return [...files.values()].sort((a, b) => rank(b) - rank(a) || a.path.localeCompare(b.path));
+  }
+
+  /** ⌘T：在所有语言服务里按名字找符号 */
+  async symbols(query: string, token?: CancelToken): Promise<FoundSymbol[]> {
+    const ready = this.sessions.filter((s) => s.rpc && !s.rpc.closed && s.caps?.workspaceSymbolProvider);
+    const results = await Promise.all(ready.map((s) => s.rpc!.request<any[]>("workspace/symbol", { query }, token).catch(() => null)));
+    const out: FoundSymbol[] = [];
+    for (const list of results) {
+      for (const item of list ?? []) {
+        const path = uriToPath(item.location?.uri ?? "");
+        if (!path) continue;
+        const start = item.location.range?.start ?? { line: 0, character: 0 };
+        out.push({ name: item.name, kind: item.kind, container: item.containerName, path, line: start.line + 1, col: start.character + 1 });
+        if (out.length >= 300) return out;
+      }
+    }
+    return out;
+  }
+
+  /** 有没有能按名字找符号的语言服务 */
+  canSearchSymbols() {
+    return this.sessions.some((s) => s.rpc && !s.rpc.closed && s.caps?.workspaceSymbolProvider);
   }
 
   /** 出错或没找到以后，用户点重试 */
@@ -487,7 +697,7 @@ export class LspManager {
     if (conn == null) return Promise.resolve(null);
     let finish!: (ok: boolean) => void;
     const session: Session = {
-      family, root: dirName(path), caps: null, state: "starting", progress: new Map(), docs: new Set(), stopping: false,
+      family, root: dirName(path), caps: null, state: "starting", progress: new Map(), docs: new Set(), diagnostics: new Map(), stopping: false,
       ready: new Promise<boolean>((resolve) => { finish = resolve; }),
     };
     this.sessions.push(session);
@@ -552,7 +762,10 @@ export class LspManager {
       capabilities: {
         general: { positionEncodings: ["utf-16"] },
         window: { workDoneProgress: true, showMessage: {} },
-        workspace: { configuration: true, workspaceFolders: true, applyEdit: false },
+        workspace: {
+          configuration: true, workspaceFolders: true, applyEdit: true, workspaceEdit: { documentChanges: true },
+          executeCommand: {}, symbol: { symbolKind: { valueSet: Array.from({ length: 26 }, (_, i) => i + 1) } },
+        },
         textDocument: {
           synchronization: { didSave: true, dynamicRegistration: false },
           completion: {
@@ -577,6 +790,14 @@ export class LspManager {
           documentHighlight: {},
           formatting: {},
           rangeFormatting: {},
+          rename: { prepareSupport: true },
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true, symbolKind: { valueSet: Array.from({ length: 26 }, (_, i) => i + 1) } },
+          codeAction: {
+            codeActionLiteralSupport: {
+              codeActionKind: { valueSet: ["", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports", "source.fixAll"] },
+            },
+            isPreferredSupport: true, disabledSupport: true, dataSupport: true, resolveSupport: { properties: ["edit"] },
+          },
           publishDiagnostics: { tagSupport: { valueSet: [1, 2] }, codeDescriptionSupport: true },
         },
         // rust-analyzer 用它告诉我们项目加载好没有、有没有出错
@@ -593,14 +814,35 @@ export class LspManager {
       "workspace/semanticTokens/refresh", "workspace/inlayHint/refresh", "workspace/codeLens/refresh", "workspace/diagnostic/refresh"]) {
       rpc.onRequest(method, () => null);
     }
-    rpc.onRequest("workspace/applyEdit", () => ({ applied: false }));
+    // 语言服务执行命令时让我们改文件：涉及的文件打开成标签，改完是未保存
+    rpc.onRequest("workspace/applyEdit", async (params) => {
+      const groups = textEdits(params?.edit);
+      const models = new Map<string, monaco.editor.ITextModel | null>();
+      for (const g of groups) {
+        const path = uriToPath(g.uri);
+        if (path && !models.has(g.uri)) models.set(g.uri, await this.host.openForEdit(path).catch(() => null));
+      }
+      if (groups.some((g) => !models.get(g.uri))) return { applied: false, failureReason: "file not available" };
+      for (const g of groups) {
+        const model = models.get(g.uri)!;
+        model.pushStackElement();
+        model.pushEditOperations([], g.edits.map((e) => ({ range: toRange(e.range), text: e.newText })), () => null);
+        model.pushStackElement();
+      }
+      return { applied: true };
+    });
     rpc.onNotification("textDocument/publishDiagnostics", (params) => {
       const path = uriToPath(params?.uri ?? "");
       if (!path) return;
       const key = pathKey(path);
+      const items: any[] = params.diagnostics ?? [];
+      // 没打开的文件也记下来：rust-analyzer 跑 cargo check 会报整个项目的问题
+      if (items.length) session.diagnostics.set(key, { path, items });
+      else session.diagnostics.delete(key);
       for (const doc of session.docs) {
-        if (pathKey(doc.path) === key && !doc.model.isDisposed()) monaco.editor.setModelMarkers(doc.model, "lsp", markers(params.diagnostics ?? []));
+        if (pathKey(doc.path) === key && !doc.model.isDisposed()) monaco.editor.setModelMarkers(doc.model, "lsp", markers(items));
       }
+      this.changed();
     });
     rpc.onNotification("$/progress", (params) => {
       const value = params?.value;
@@ -643,6 +885,9 @@ export class LspManager {
     session.docs.add(doc);
     const alias = ALIASES[model.getLanguageId()];
     if (alias) monaco.editor.setModelLanguage(model, alias);
+    // 打开前语言服务已经报过这个文件的问题（项目检查），先标上
+    const known = session.diagnostics.get(pathKey(path));
+    if (known) monaco.editor.setModelMarkers(model, "lsp", markers(known.items));
     rpc.notify("textDocument/didOpen", {
       textDocument: { uri: doc.uri, languageId: lspLanguageId(model.getLanguageId(), path), version: model.getVersionId(), text: model.getValue() },
     });

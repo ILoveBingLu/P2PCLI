@@ -2576,3 +2576,56 @@ img.agent-icon {
   border-radius: 6px;
 }
 .remote-editor-quickopen-item[aria-selected="true"] { background: rgb(255 255 255 / 0.09); }
+
+/* 问题面板 */
+.remote-editor-problem {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px 0 30px;
+  text-align: left;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.remote-editor-problem:hover { background: rgb(255 255 255 / 0.05); }
+.remote-editor-problem svg { width: 13px; height: 13px; flex: none; color: var(--muted-foreground); }
+.remote-editor-problem.is-error svg { color: var(--danger); }
+.remote-editor-problem.is-warning svg { color: var(--warning); }
+.remote-editor-problem .remote-editor-search-dir { margin-left: auto; flex: none; padding-left: 6px; }
+.remote-editor-count {
+  margin-left: 3px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.1);
+  font-size: 10px;
+  line-height: 15px;
+}
+/* 状态栏里的错误、警告数，点了打开问题面板 */
+.remote-editor-status button.remote-editor-problem-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.remote-editor-status button.remote-editor-problem-count:hover { color: var(--foreground); }
+.remote-editor-problem-count svg:first-child { color: var(--danger); }
+.remote-editor-problem-count svg + svg, .remote-editor-problem-count svg:nth-of-type(2) { margin-left: 4px; color: var(--warning); }
+/* ⌘T 结果前面的符号种类 */
+.remote-editor-symbol-kind {
+  flex: none;
+  width: 14px;
+  color: #c586c0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: center;
+}

@@ -40,6 +40,8 @@ import {
   type Transfer,
 } from "./api";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
+import type { TerminalPathLink } from "./terminalLinks";
+import { dirName, resolvePath } from "./components/editor/paths";
 import { pollConnections } from "./lib/pollConnections";
 import { withoutClearedSessions } from "./lib/sessionCleanup";
 import { TerminalStatusbar } from "./components/TerminalStatusbar";
@@ -107,6 +109,8 @@ interface EditorState {
   /** 外面要求换根目录时加一 */
   seq: number;
   shown: boolean;
+  /** 终端里点了文件路径：打开它并跳到这一行；seq 每次加一 */
+  open?: { path: string; line: number; col: number; seq: number };
 }
 
 /** 拖文件进窗口时的提示：发给谁，或者为什么发不了 */
@@ -231,6 +235,24 @@ export default function App() {
       // 已经开着又没指定目录：只是重新显示，不换根目录，免得收起的文件树被重置
       if (existing && path === undefined) return { ...all, [id]: { ...existing, shown: true } };
       return { ...all, [id]: { root: path ?? current ?? "", seq: (existing?.seq ?? 0) + 1, shown: true } };
+    });
+  };
+  /** 终端里 ⌘/Ctrl+点击了文件路径：相对路径按终端当前目录算，对方电脑上有这个文件才打开编辑器跳过去 */
+  const openFromTerminal = async (tab: Tab, link: TerminalPathLink) => {
+    const id = tab.info.endpoint_id;
+    const cwd = tab.sessionId
+      ? liveSessions[tab.connId]?.sessions?.find((s) => s.id === tab.sessionId)?.details?.current_path
+      : undefined;
+    const path = resolvePath(link.path, cwd || editors[id]?.root);
+    if (!path) return void toast.error(t("不知道终端现在在哪个目录，没法打开 {{path}}", { path: link.path }));
+    const [stat] = await api.statFiles(tab.connId, [path]).catch(() => [null]);
+    if (!stat || stat.dir) return void toast.error(t("对方电脑上没有这个文件：{{path}}", { path }));
+    const open = { path, line: link.line ?? 1, col: link.col ?? 1 };
+    setEditors((all) => {
+      const existing = all[id];
+      const seq = (existing?.open?.seq ?? 0) + 1;
+      if (existing) return { ...all, [id]: { ...existing, shown: true, open: { ...open, seq } } };
+      return { ...all, [id]: { root: cwd || dirName(path), seq: 1, shown: true, open: { ...open, seq } } };
     });
   };
   const closeEditor = (endpointId: string) => {
@@ -987,6 +1009,7 @@ export default function App() {
                     }
                     onStatus={(s) => setTabState(tab.key, s)}
                     onPromptReady={(ready) => setPromptReady((current) => current[tab.key] === ready ? current : { ...current, [tab.key]: ready })}
+                    onOpenPath={(link) => void openFromTerminal(tab, link)}
                     onHandle={(handle) => {
                       if (handle) termHandles.current.set(tab.key, handle);
                       else termHandles.current.delete(tab.key);
@@ -1066,6 +1089,7 @@ export default function App() {
                         connId={editorConnId(endpointId)}
                         root={editor.root}
                         rootSeq={editor.seq}
+                        openRequest={editor.open}
                         active={visible && !showSettings && !sessionTarget}
                         onDirty={(count) => setEditorDirty((all) => all[endpointId] === count ? all : { ...all, [endpointId]: count })}
                         onClose={() => closeEditor(endpointId)}

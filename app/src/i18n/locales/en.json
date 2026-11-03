@@ -957,5 +957,21 @@
   "语言服务": "Language server",
   "{{server}} 已停止": "{{server}} stopped",
   "补全、跳转、报错由对方电脑上的 {{server}} 提供": "Completion, navigation, and errors come from {{server}} on the other computer",
-  "项目目录：{{root}}": "Project folder: {{root}}"
+  "项目目录：{{root}}": "Project folder: {{root}}",
+  "不知道终端现在在哪个目录，没法打开 {{path}}": "Can't tell which folder the terminal is in, so {{path}} can't be opened",
+  "对方电脑上没有这个文件：{{path}}": "This file doesn't exist on the other computer: {{path}}",
+  "⌘/Ctrl+点击在编辑器里打开": "⌘/Ctrl+click to open in the editor",
+  "没有发现问题。打开代码文件后，语言服务会在这里列出整个项目的错误和警告。": "No problems found. After you open a code file, the language server lists errors and warnings for the whole project here.",
+  "按名字找符号": "Find symbol by name",
+  "输入函数、类型的名字": "Type a function or type name",
+  "先打开一个代码文件，等语言服务启动后才能按名字找符号。": "Open a code file first. You can search symbols by name once the language server has started.",
+  "正在查找…": "Searching…",
+  "没有匹配的符号": "No matching symbols",
+  "全部保存": "Save all",
+  "全部保存 {{count}} 个文件（⌘/Ctrl+Alt+S）": "Save all {{count}} files (⌘/Ctrl+Alt+S)",
+  "语言服务报的问题（⌘/Ctrl+Shift+M）": "Problems reported by the language server (⌘/Ctrl+Shift+M)",
+  "问题": "Problems",
+  "{{errors}} 个错误，{{warnings}} 个警告（⌘/Ctrl+Shift+M）": "{{errors}} errors, {{warnings}} warnings (⌘/Ctrl+Shift+M)",
+  "这里不能重命名": "This can't be renamed",
+  "有 {{count}} 个文件打不开，没法改": "{{count}} files couldn't be opened, so the change can't be applied"
 }
