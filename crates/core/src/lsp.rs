@@ -201,7 +201,7 @@ fn workspace_root(server: &Server, file: &Path, fallback: &Path) -> PathBuf {
 }
 
 /// 找语言服务的目录：用户 Shell 里的 PATH（从访达启动的程序拿不到），加上常见的安装位置
-async fn search_path() -> &'static Vec<PathBuf> {
+pub(crate) async fn search_path() -> &'static Vec<PathBuf> {
     static PATH: OnceCell<Vec<PathBuf>> = OnceCell::const_new();
     PATH.get_or_init(|| async {
         let mut dirs = login_path().await.unwrap_or_default();

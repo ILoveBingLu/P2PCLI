@@ -50,6 +50,25 @@ pub enum EditRequest {
     Delete { path: String },
     /// root 所在 Git 仓库的改动；不在仓库里或没装 git 时回空
     GitStatus { root: String },
+    /// 下面这些是 Git 面板的操作，需要 git_v1；paths 相对仓库根目录，和 GitStatus 给的一样
+    /// 暂存；paths 空着是全部
+    GitStage { root: String, paths: Vec<String> },
+    /// 取消暂存；paths 空着是全部
+    GitUnstage { root: String, paths: Vec<String> },
+    /// 放弃修改：paths 换回暂存区的版本，untracked（没跟踪的）移到废纸篓
+    GitDiscard { root: String, paths: Vec<String>, #[serde(default)] untracked: Vec<String> },
+    GitCommit { root: String, message: String },
+    GitPush { root: String },
+    GitPull { root: String },
+    GitLog { root: String, limit: usize },
+}
+
+impl EditRequest {
+    /// 需要 git_v1 的操作
+    pub fn needs_git_v1(&self) -> bool {
+        matches!(self, EditRequest::GitStage { .. } | EditRequest::GitUnstage { .. } | EditRequest::GitDiscard { .. }
+            | EditRequest::GitCommit { .. } | EditRequest::GitPush { .. } | EditRequest::GitPull { .. } | EditRequest::GitLog { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -60,6 +79,9 @@ pub enum EditReply {
     Stats { stats: Vec<Option<FileStat>> },
     Done,
     Git { status: Option<GitStatus> },
+    /// git 命令的输出（提交、推送、拉取的结果）
+    Output { text: String },
+    Log { commits: Vec<crate::git_ops::GitCommit> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -111,6 +133,14 @@ pub struct GitStatus {
     pub prefix: String,
     pub branch: Option<String>,
     pub entries: Vec<GitEntry>,
+    /// 上游分支，比如 origin/main；没有时为空。旧版本不给
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// 比上游多几个提交（要推送）、少几个（要拉取）
+    #[serde(default)]
+    pub ahead: u32,
+    #[serde(default)]
+    pub behind: u32,
 }
 
 /// status 是 git status --porcelain 的两个字母，比如 " M"、"A "、"??"
@@ -167,6 +197,13 @@ pub async fn handle(request: EditRequest) -> Result<EditReply> {
             EditReply::Done
         }
         EditRequest::GitStatus { root } => EditReply::Git { status: git_status(&resolve(&root)?).await },
+        EditRequest::GitStage { root, paths } => { crate::git_ops::stage(&root, &paths).await?; EditReply::Done }
+        EditRequest::GitUnstage { root, paths } => { crate::git_ops::unstage(&root, &paths).await?; EditReply::Done }
+        EditRequest::GitDiscard { root, paths, untracked } => { crate::git_ops::discard(&root, &paths, &untracked).await?; EditReply::Done }
+        EditRequest::GitCommit { root, message } => EditReply::Output { text: crate::git_ops::commit(&root, &message).await? },
+        EditRequest::GitPush { root } => EditReply::Output { text: crate::git_ops::push(&root).await? },
+        EditRequest::GitPull { root } => EditReply::Output { text: crate::git_ops::pull(&root).await? },
+        EditRequest::GitLog { root, limit } => EditReply::Log { commits: crate::git_ops::log(&root, limit).await? },
     })
 }
 
@@ -177,7 +214,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn move_to_trash(path: &Path) -> Result<()> {
+pub(crate) fn move_to_trash(path: &Path) -> Result<()> {
     #[allow(unused_mut)]
     let mut ctx = trash::TrashContext::default();
     // 默认的做法是让 Finder 来删，会在被连的电脑上弹“想控制 Finder”的授权框
@@ -327,14 +364,18 @@ async fn git_status(root: &Path) -> Option<GitStatus> {
     let top = String::from_utf8(top).ok()?.trim().to_string();
     let prefix = String::from_utf8(git(root, &["rev-parse", "--show-prefix"]).await?).ok()?.trim().to_string();
     let out = git(root, &["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=normal"]).await?;
-    let (branch, entries) = parse_status(&out);
+    let (branch, entries, (upstream, ahead, behind)) = parse_status(&out);
     // git 在 Windows 上回的是 C:/a/b 这种写法，换成系统自己的分隔符，和文件树里的路径对得上
     let top = PathBuf::from(top).components().collect::<PathBuf>().to_string_lossy().into_owned();
-    Some(GitStatus { top, prefix, branch, entries })
+    Some(GitStatus { top, prefix, branch, entries, upstream, ahead, behind })
 }
 
-fn parse_status(out: &[u8]) -> (Option<String>, Vec<GitEntry>) {
+/// 上游分支、领先几个、落后几个
+type Tracking = (Option<String>, u32, u32);
+
+fn parse_status(out: &[u8]) -> (Option<String>, Vec<GitEntry>, Tracking) {
     let mut branch = None;
+    let mut tracking: Tracking = (None, 0, 0);
     let mut entries = Vec::new();
     let mut parts = out.split(|b| *b == 0).filter(|p| !p.is_empty());
     while let Some(part) = parts.next() {
@@ -344,6 +385,11 @@ fn parse_status(out: &[u8]) -> (Option<String>, Vec<GitEntry>) {
             let name = head.strip_prefix("No commits yet on ").unwrap_or(head);
             let name = name.split("...").next().unwrap_or(name).split(' ').next().unwrap_or(name);
             branch = Some(name.to_string());
+            if let Some((_, rest)) = head.split_once("...") {
+                let upstream = rest.split(' ').next().unwrap_or(rest);
+                let count = |word: &str| rest.split(word).nth(1).and_then(|s| s.trim().split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()).unwrap_or(0);
+                tracking = (Some(upstream.to_string()), count("ahead "), count("behind "));
+            }
             continue;
         }
         if text.len() < 4 { continue; }
@@ -354,7 +400,7 @@ fn parse_status(out: &[u8]) -> (Option<String>, Vec<GitEntry>) {
             entries.push(GitEntry { path: text[3..].to_string(), status });
         }
     }
-    (branch, entries)
+    (branch, entries, tracking)
 }
 
 /// Git 最新提交里的这个文件，按文本读出来，和编辑器里打开时做同样的检查
@@ -452,11 +498,23 @@ mod tests {
     #[test]
     fn parses_porcelain_status() {
         let out = b"## main...origin/main [ahead 1]\0 M src/a.rs\0?? new.txt\0R  b.rs\0old.rs\0A  \xE4\xB8\xAD.md\0";
-        let (branch, entries) = parse_status(out);
+        let (branch, entries, _) = parse_status(out);
         assert_eq!(branch.as_deref(), Some("main"));
         let got: Vec<_> = entries.iter().map(|e| (e.status.as_str(), e.path.as_str())).collect();
         assert_eq!(got, [(" M", "src/a.rs"), ("??", "new.txt"), ("R ", "b.rs"), ("A ", "中.md")]);
         assert_eq!(parse_status(b"## No commits yet on dev\0").0.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn parses_branch_tracking() {
+        let (branch, entries, tracking) = parse_status(b"## main...origin/main [ahead 2, behind 13]\0 M src/a.rs\0?? new.txt\0");
+        assert_eq!(branch.as_deref(), Some("main"));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(tracking, (Some("origin/main".into()), 2, 13));
+        assert_eq!(parse_status(b"## feature...origin/feature [behind 1]\0").2, (Some("origin/feature".into()), 0, 1));
+        assert_eq!(parse_status(b"## main...origin/main\0").2, (Some("origin/main".into()), 0, 0));
+        assert_eq!(parse_status(b"## No commits yet on main\0").2, (None, 0, 0));
+        assert_eq!(parse_status(b"## dev\0").2, (None, 0, 0));
     }
 
     #[tokio::test]

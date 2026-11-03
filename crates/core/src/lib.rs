@@ -13,6 +13,7 @@ pub mod diag;
 pub mod dirs;
 pub mod exec;
 pub mod files;
+pub mod git_ops;
 pub mod host;
 pub mod identity;
 pub mod lan;

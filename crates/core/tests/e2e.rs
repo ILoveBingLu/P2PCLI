@@ -1876,3 +1876,47 @@ async fn port_forward_over_connection() {
     host.shutdown().await;
 }
 
+
+/// Git 面板：经连接暂存、提交、看提交记录和领先数
+#[tokio::test]
+async fn git_panel_ops_over_connection() {
+    use p2pcli_core::remote_ops::{EditReply, EditRequest};
+    if std::process::Command::new("git").arg("--version").output().is_err() { return; }
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("git-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("git-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+
+    let work = temp_dir("git-work");
+    let origin = temp_dir("git-origin");
+    std::fs::create_dir_all(&work).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap().status.success(), "{args:?}");
+    std::fs::create_dir_all(&origin).unwrap();
+    git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    git(&work, &["init", "-q", "-b", "main"]);
+    for (k, v) in [("user.name", "t"), ("user.email", "t@e"), ("commit.gpgsign", "false")] { git(&work, &["config", k, v]); }
+    git(&work, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    std::fs::write(work.join("a.txt"), "one\n").unwrap();
+    let root = work.to_string_lossy().into_owned();
+
+    assert_eq!(remote.edit(EditRequest::GitStage { root: root.clone(), paths: vec![] }).await.unwrap(), EditReply::Done);
+    let EditReply::Output { text } = remote.edit(EditRequest::GitCommit { root: root.clone(), message: "init".into() }).await.unwrap() else { panic!() };
+    assert!(text.contains("init"), "{text}");
+    // 没有上游：推送时自动设到 origin/main
+    remote.edit(EditRequest::GitPush { root: root.clone() }).await.unwrap();
+    std::fs::write(work.join("a.txt"), "two\n").unwrap();
+    remote.edit(EditRequest::GitStage { root: root.clone(), paths: vec!["a.txt".into()] }).await.unwrap();
+    remote.edit(EditRequest::GitCommit { root: root.clone(), message: "second".into() }).await.unwrap();
+    let EditReply::Git { status: Some(status) } = remote.edit(EditRequest::GitStatus { root: root.clone() }).await.unwrap() else { panic!() };
+    assert_eq!((status.upstream.as_deref(), status.ahead, status.behind), (Some("origin/main"), 1, 0));
+    let EditReply::Log { commits } = remote.edit(EditRequest::GitLog { root: root.clone(), limit: 10 }).await.unwrap() else { panic!() };
+    assert_eq!(commits.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["second", "init"]);
+
+    std::fs::remove_dir_all(&work).ok();
+    std::fs::remove_dir_all(&origin).ok();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
