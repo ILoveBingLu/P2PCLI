@@ -2231,14 +2231,46 @@ img.agent-icon {
   flex: 1;
   min-height: 0;
 }
-.remote-editor-tree {
-  width: 220px;
+.remote-editor-side {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
   flex: none;
-  overflow: auto;
-  padding: 4px 0 12px;
+  min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--sidebar);
 }
+.remote-editor-side-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  flex: none;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+.remote-editor-side-tabs > button[role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  cursor: pointer;
+}
+.remote-editor-side-tabs > button[role="tab"]:hover { color: var(--foreground); }
+.remote-editor-side-tabs > button.is-active { color: var(--foreground); background: rgb(255 255 255 / 0.08); }
+.remote-editor-side-tabs svg { width: 13px; height: 13px; }
+.remote-editor-side-tabs .grow { flex: 1; }
+.remote-editor-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 12px;
+}
+.remote-editor-tree[hidden] { display: none; }
 .remote-editor-node {
   display: flex;
   align-items: center;
@@ -2364,3 +2396,146 @@ img.agent-icon {
 .remote-editor-status .grow { flex: 1; }
 .remote-editor-status button { height: 20px; font-size: 11px; gap: 4px; }
 .remote-editor-status svg { width: 12px; height: 12px; }
+
+/* 选中（新建放在哪）和 Git 改动的颜色，和 VS Code 的习惯一致 */
+.remote-editor-node.is-selected:not(.is-active) { box-shadow: inset 2px 0 0 var(--accent); }
+.remote-editor-node.git-modified,
+.remote-editor-tab.git-modified { color: #e2c08d; }
+.remote-editor-node.git-added,
+.remote-editor-node.git-untracked,
+.remote-editor-tab.git-added,
+.remote-editor-tab.git-untracked { color: #73c991; }
+.remote-editor-node.git-deleted,
+.remote-editor-node.git-conflict,
+.remote-editor-tab.git-conflict { color: #e5786d; }
+.remote-editor-node.git-inside > .truncate { color: color-mix(in oklab, #e2c08d 70%, var(--foreground)); }
+.remote-editor-git-letter {
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.remote-editor-git-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  flex: none;
+  border-radius: 50%;
+  background: #e2c08d;
+  opacity: 0.7;
+}
+.remote-editor-tab.is-gone > .truncate { text-decoration: line-through; }
+.remote-editor-banner.is-diff { color: var(--foreground); background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.remote-editor-banner button svg { width: 12px; height: 12px; }
+.remote-editor-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 全项目搜索 */
+.remote-editor-search {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.remote-editor-search-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 8px 4px;
+}
+.remote-editor-search-box input { height: 28px; font-size: 12px; }
+.remote-editor-search-options {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.remote-editor-search-options svg { width: 14px; height: 14px; }
+.remote-editor-toggle.is-on { color: var(--accent); background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.remote-editor-search-results {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.remote-editor-search-file,
+.remote-editor-search-match,
+.remote-editor-quickopen-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.remote-editor-search-file:hover,
+.remote-editor-search-match:hover { background: rgb(255 255 255 / 0.05); }
+.remote-editor-search-file svg,
+.remote-editor-quickopen-item svg { width: 13px; height: 13px; flex: none; color: var(--muted-foreground); }
+.remote-editor-search-file .chevron { width: 12px; height: 12px; }
+.remote-editor-search-dir {
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.remote-editor-search-count {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.08);
+  font-size: 10px;
+}
+.remote-editor-search-match {
+  padding-left: 34px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.remote-editor-search-match mark,
+.remote-editor-quickopen mark {
+  border-radius: 2px;
+  background: color-mix(in oklab, #e2c08d 35%, transparent);
+  color: var(--foreground);
+}
+
+/* ⌘P 按名字打开 */
+.remote-editor { position: relative; }
+.remote-editor-quickopen-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 44px;
+  background: rgb(0 0 0 / 0.25);
+}
+.remote-editor-quickopen {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100% - 24px));
+  max-height: min(420px, calc(100% - 64px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #1b1b20;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
+}
+.remote-editor-quickopen input { height: 30px; font-size: 13px; }
+.remote-editor-quickopen-list {
+  margin-top: 4px;
+  overflow: auto;
+}
+.remote-editor-quickopen-item {
+  height: 26px;
+  border-radius: 6px;
+}
+.remote-editor-quickopen-item[aria-selected="true"] { background: rgb(255 255 255 / 0.09); }

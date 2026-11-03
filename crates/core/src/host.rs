@@ -19,7 +19,7 @@ use crate::PROTO_VERSION;
 use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::Files;
 use crate::identity::DeviceInfo;
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_data, write_json, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, Frame, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_data, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
@@ -512,7 +512,7 @@ impl Host {
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
                 capabilities: capabilities.iter().filter(|capability|
-                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1)).cloned().collect(),
+                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2)).cloned().collect(),
             },
         )
         .await?;
@@ -615,14 +615,28 @@ impl Host {
                     let listing = crate::remote_fs::list_entries(&path).await?;
                     write_msg(&mut send, &Msg::Entries { listing }).await?;
                 }
-                Msg::ReadFile { path } => {
-                    let (meta, text) = crate::remote_fs::read_text(&path).await?;
+                Msg::ReadFile { path, head } => {
+                    let (meta, text) = if head {
+                        crate::remote_ops::read_head(&path).await?
+                    } else {
+                        crate::remote_fs::read_text(&path).await?
+                    };
                     info!(session, bytes = meta.size, "对面在编辑器里打开了本机的文件");
                     debug!(session, path = %meta.path, "远程编辑：打开");
                     write_msg(&mut send, &Msg::FileOpened { meta }).await?;
                     for chunk in text.as_bytes().chunks(EDIT_CHUNK) {
                         write_data(&mut send, chunk).await?;
                     }
+                }
+                Msg::Edit { request } => {
+                    // 改动类的操作记一笔，便于被连方事后查；搜索、轮询这类只读的不记
+                    if matches!(request, crate::remote_ops::EditRequest::CreateFile { .. } | crate::remote_ops::EditRequest::CreateDir { .. }
+                        | crate::remote_ops::EditRequest::Rename { .. } | crate::remote_ops::EditRequest::Delete { .. }) {
+                        info!(session, "对面在编辑器里改动了本机的文件");
+                        debug!(session, ?request, "远程编辑：文件操作");
+                    }
+                    let reply = crate::remote_ops::handle(request).await?;
+                    write_msg(&mut send, &Msg::EditDone { reply }).await?;
                 }
                 Msg::WriteFile { path, size, bom, expected, force } => {
                     if size > crate::remote_fs::MAX_SAVE_BYTES { bail!("内容太大，最多保存 16 MB"); }

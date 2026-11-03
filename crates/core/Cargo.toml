@@ -34,6 +34,11 @@ noq-proto = "=1.4.0"
 # 控制口里命令输出的原始字节用 base64 装进 JSON
 base64 = "0.22"
 rusqlite = { version = "0.41", features = ["bundled"] }
+# 远程编辑的全项目搜索：ripgrep 用的目录遍历，认 .gitignore；匹配用 regex
+ignore = "0.4"
+regex = "1"
+# 远程编辑删除文件时移到废纸篓/回收站，不直接删掉
+trash = "5"
 
 [target.'cfg(unix)'.dependencies]
 # 远程执行的命令超时或被取消时，按进程组结束它和它的子进程

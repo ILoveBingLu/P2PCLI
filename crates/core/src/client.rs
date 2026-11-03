@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -114,7 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into()],
         },
     )
     .await?;
@@ -324,12 +324,13 @@ impl RemoteHost {
     }
 
     /// 远程编辑：打开文本文件，返回文件信息和内容（不含 BOM）
-    pub async fn read_file(&self, path: String) -> Result<(crate::remote_fs::FileMeta, String)> {
+    /// head 为真时读 Git 最新提交里的版本（对比用）
+    pub async fn read_file(&self, path: String, head: bool) -> Result<(crate::remote_fs::FileMeta, String)> {
         if self.is_local() {
-            return crate::remote_fs::read_text(&path).await;
+            return if head { crate::remote_ops::read_head(&path).await } else { crate::remote_fs::read_text(&path).await };
         }
-        self.require_remote_edit()?;
-        let (_send, mut recv) = self.open_stream(&Msg::ReadFile { path }).await?;
+        if head { self.require_capability(REMOTE_EDIT_V2)?; } else { self.require_remote_edit()?; }
+        let (_send, mut recv) = self.open_stream(&Msg::ReadFile { path, head }).await?;
         timeout(Duration::from_secs(120), async {
             let meta = match read_msg(&mut recv).await? {
                 Msg::FileOpened { meta } => meta,
@@ -374,6 +375,27 @@ impl RemoteHost {
         })
         .await
         .map_err(|_| anyhow!("保存超时，文件可能已经写入，请重新打开确认"))?
+    }
+
+    /// 远程编辑的其他操作：搜索、按名字找文件、看文件变没变、新建/重命名/删除、Git 状态
+    pub async fn edit(&self, request: crate::remote_ops::EditRequest) -> Result<crate::remote_ops::EditReply> {
+        if self.is_local() {
+            return crate::remote_ops::handle(request).await;
+        }
+        self.require_capability(REMOTE_EDIT_V2)?;
+        match self.session_request(Msg::Edit { request }).await? {
+            Msg::EditDone { reply } => Ok(reply),
+            other => bail!("操作失败：{other:?}"),
+        }
+    }
+
+    fn require_capability(&self, capability: &str) -> Result<()> {
+        if let Link::Net { capabilities, .. } = &self.link
+            && !capabilities.iter().any(|c| c == capability)
+        {
+            bail!("对方的 P2PCLI 版本较旧，不支持这个编辑功能，请更新对方的 P2PCLI");
+        }
+        Ok(())
     }
 
     fn require_remote_edit(&self) -> Result<()> {
