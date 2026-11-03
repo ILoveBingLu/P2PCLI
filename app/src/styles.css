@@ -2053,8 +2053,9 @@ img.agent-icon {
   height: 28px;
   font-size: 12px;
 }
+/* 列表定高：读取前后弹层大小不变，不会往上跳；窗口矮时随弹层的 max-height 缩 */
 .dir-picker-list {
-  flex: 1;
+  flex: 0 1 300px;
   min-height: 80px;
   overflow-y: auto;
   padding: 2px 6px 6px;
@@ -2079,8 +2080,13 @@ img.agent-icon {
   flex: none;
   color: var(--muted-foreground);
 }
+.dir-picker-item:hover,
 .dir-picker-item[aria-selected="true"] {
   background: rgb(255 255 255 / 0.07);
+}
+/* 鼠标在列表上时只亮鼠标那一行，键盘选中的先让开 */
+.dir-picker-list:hover .dir-picker-item[aria-selected="true"]:not(:hover) {
+  background: transparent;
 }
 .dir-picker-empty {
   padding: 14px 8px;

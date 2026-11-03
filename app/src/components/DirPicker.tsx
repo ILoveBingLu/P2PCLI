@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Popover } from "@heroui/react";
 import { ArrowUp, CornerDownLeft, Folder, House, LoaderCircle } from "lucide-react";
 import { api, type DirListing } from "../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+function sameListing(a: DirListing | null, b: DirListing) {
+  return a != null && a.path === b.path && a.parent === b.parent && a.truncated === b.truncated &&
+    a.dirs.length === b.dirs.length && a.dirs.every((name, i) => name === b.dirs[i]);
+}
+
 /**
  * 底部栏的当前目录：点开是对方电脑上的目录列表，单击进入子目录，点“切换到这里”让终端 cd 过去。
  * 只在终端停在空闲提示符时能切；跑着程序（包括命令行 AI）时只能看，免得 cd 被当成输入发给程序。
  */
-export function DirPicker({ connId, sessionId, currentPath, canChange, blockedReason }: {
+// 状态栏随会话轮询整页重渲染，属性都是原始值，没变就不用跟着重画列表
+export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPath, canChange, blockedReason }: {
   connId: number;
   sessionId: string;
   currentPath: string | null;
@@ -33,9 +39,13 @@ export function DirPicker({ connId, sessionId, currentPath, canChange, blockedRe
     try {
       const next = await api.listDir(connId, path);
       if (id !== request.current) return;
-      setListing(next);
-      setFilter("");
-      setActive(0);
+      // 重新打开时是刷新同一个目录，别把已经输入的筛选清掉
+      if (next.path !== listing?.path) {
+        setFilter("");
+        setActive(0);
+      }
+      // 内容没变就留着旧对象，不然几千行又得整个重画一遍
+      if (!sameListing(listing, next)) setListing(next);
     } catch (e) {
       if (id === request.current) setError(String(e));
     } finally {
@@ -46,11 +56,13 @@ export function DirPicker({ connId, sessionId, currentPath, canChange, blockedRe
   useEffect(() => {
     if (!open) {
       request.current++;
-      setListing(null);
       setError(null);
       setFilter("");
+      setActive(0);
       return;
     }
+    // 上次看的正好是当前目录就先摆出来，后台刷新；远程一来一回期间不至于空着
+    if (listing?.path !== currentPath) setListing(null);
     void browse(currentPath ?? "");
     // 只在打开时从当前目录开始；之后浏览到哪里由用户决定
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,6 +116,16 @@ export function DirPicker({ connId, sessionId, currentPath, canChange, blockedRe
     }
   };
 
+  // 鼠标悬停只靠 CSS 高亮，active 只跟键盘走，免得每划过一行就把整个列表重画一遍
+  const rows = useMemo(() => shown.map((name, i) => (
+    <button key={name} type="button" role="option" data-index={i} aria-selected={i === active}
+      className="dir-picker-item" onClick={() => void browse(join(name))}>
+      <Folder /><span className="truncate">{name}</span>
+    </button>
+    // browse/join 只依赖 listing 和 connId，shown 跟着 listing 变
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  )), [shown, active, connId]);
+
   const here = listing?.path ?? currentPath ?? "";
   const atCurrent = listing != null && listing.path === currentPath;
 
@@ -131,17 +153,10 @@ export function DirPicker({ connId, sessionId, currentPath, canChange, blockedRe
               onChange={(e) => { setFilter(e.target.value); setActive(0); }} onKeyDown={onKeyDown} />
           </div>
           <div ref={listRef} className="dir-picker-list" role="listbox" aria-label="子目录">
-            {listing && shown.map((name, i) => (
-              <button key={name} type="button" role="option" data-index={i} aria-selected={i === active}
-                className="dir-picker-item"
-                onMouseEnter={() => setActive(i)}
-                onClick={() => void browse(join(name))}>
-                <Folder /><span className="truncate">{name}</span>
-              </button>
-            ))}
+            {listing ? rows : loading && <div className="dir-picker-empty">读取中…</div>}
             {listing && shown.length === 0 && !loading &&
               <div className="dir-picker-empty">{filter ? "没有匹配的子目录" : "没有子目录"}</div>}
-            {listing?.truncated && <div className="dir-picker-empty">子目录太多，只列出了前 2000 个，可以输入名字筛选</div>}
+            {listing?.truncated && <div className="dir-picker-empty">子目录太多，只列出了前 {listing.dirs.length} 个，可以输入名字筛选</div>}
           </div>
           {error && <div className="dir-picker-error" role="alert">{error}</div>}
           <div className="dir-picker-foot">
@@ -155,4 +170,4 @@ export function DirPicker({ connId, sessionId, currentPath, canChange, blockedRe
       </Popover.Content>
     </Popover>
   );
-}
+});
