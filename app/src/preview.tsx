@@ -629,6 +629,27 @@ mockIPC(
         }, 1500);
         return null;
       }
+      case "list_dir": {
+        // 假的目录树：从路径算出几个子目录，够看列表、筛选和上一级
+        await new Promise((r) => setTimeout(r, 200));
+        const path = String(args.path || "/Users/demo").replace(/\/+$/, "") || "/";
+        if (path.endsWith("/locked")) throw new Error(`打不开目录 ${path}: Permission denied (os error 13)`);
+        const depth = path.split("/").filter(Boolean).length;
+        const dirs = depth >= 5 ? [] : path === "/Users/demo/Projects"
+          ? ["P2PCLI", "demo", "website", "notes app", "it's quoted", ".archive"]
+          : ["Projects", "Documents", "Downloads", "locked", ".config", ".ssh"];
+        return { path, parent: path === "/" ? null : path.slice(0, path.lastIndexOf("/")) || "/", dirs, truncated: false };
+      }
+      case "change_dir": {
+        await new Promise((r) => setTimeout(r, 200));
+        const session = terminalSessions.find((x) => x.id === args.sessionId);
+        if (!session?.details?.shell_ready) throw new Error("终端不在空闲提示符，请先完成当前输入或退出正在运行的程序");
+        session.details.current_path = args.path;
+        for (const attachment of attachments.values()) {
+          if (attachment.sessionId === session.id) previewWrite(attachment.output, `cd '${args.path}'\r\n` + shellPrompt);
+        }
+        return null;
+      }
       case "end_terminal": {
         await new Promise((r) => setTimeout(r, 500));
         if (s === "collab-clear-error") throw new Error("模拟清除失败：设备连接已断开");

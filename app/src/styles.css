@@ -1985,3 +1985,131 @@ img.agent-icon {
 .glass-logo-lo {
   opacity: calc(0.16 + (var(--gx) + var(--gy)) * 0.1);
 }
+
+/* 底部栏的当前目录：点开是对方电脑上的目录列表，选好以后让终端切过去 */
+.terminal-status-dir-button {
+  max-width: 100%;
+  height: 20px;
+  gap: 5px;
+  padding: 0 6px;
+  margin-left: -6px;
+  border-radius: 6px;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  justify-content: flex-start;
+}
+.terminal-status-dir-button svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.terminal-status-dir-button:hover,
+.terminal-status-dir-button[aria-expanded="true"] {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--foreground);
+}
+.dir-picker {
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  max-height: min(460px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  font-size: 12px;
+}
+.dir-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px 6px;
+}
+.dir-picker-head svg {
+  width: 14px;
+  height: 14px;
+}
+.dir-picker-path {
+  flex: 1;
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* 路径太长时省略开头，留住最后几级目录 */
+  direction: rtl;
+  text-align: left;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--foreground);
+}
+.dir-picker-filter {
+  padding: 0 10px 6px;
+}
+.dir-picker-filter input {
+  height: 28px;
+  font-size: 12px;
+}
+.dir-picker-list {
+  flex: 1;
+  min-height: 80px;
+  overflow-y: auto;
+  padding: 2px 6px 6px;
+  border-top: 1px solid var(--border);
+}
+.dir-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.dir-picker-item svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.dir-picker-item[aria-selected="true"] {
+  background: rgb(255 255 255 / 0.07);
+}
+.dir-picker-empty {
+  padding: 14px 8px;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.dir-picker-error {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+.dir-picker-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+.dir-picker-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.dir-picker-foot svg {
+  width: 13px;
+  height: 13px;
+}
+.dir-picker-spin {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dir-picker-spin { animation: none; }
+}
