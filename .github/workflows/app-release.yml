@@ -23,7 +23,10 @@ jobs:
       matrix:
         include:
           - { name: Mac（Apple 芯片）, os: macos-latest, target: aarch64-apple-darwin, bundles: "app,dmg", arch: aarch64 }
-          - { name: Mac（Intel）, os: macos-latest, target: x86_64-apple-darwin, bundles: "app,dmg", arch: x64 }
+          # Intel 版在 Intel 的 Mac 机器上原生编：和 Apple 芯片版放在同一种机器上时，两个任务抢同一批机器，
+          # 机器紧张时 Intel 那个常常排不上（“not acquired by Runner”），整个发布就卡住。
+          # GitHub 说 macos-15-intel 用到 2027 年 8 月，之后改回在 macos-latest 上交叉编
+          - { name: Mac（Intel）, os: macos-15-intel, target: x86_64-apple-darwin, bundles: "app,dmg", arch: x64 }
           - { name: Windows（x64）, os: windows-latest, target: x86_64-pc-windows-msvc, bundles: nsis, arch: x64 }
           - { name: Windows（ARM64）, os: windows-latest, target: aarch64-pc-windows-msvc, bundles: nsis, arch: arm64 }
           - { name: Windows（32 位）, os: windows-latest, target: i686-pc-windows-msvc, bundles: nsis, arch: x86 }
