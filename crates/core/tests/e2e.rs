@@ -1751,3 +1751,65 @@ async fn lsp_real_clangd() {
     guest.shutdown().await;
     host.shutdown().await;
 }
+
+/// TypeScript 7 自带的语言服务：借用桌面端前端装的 typescript（7.x），手动跑（cargo test -- --ignored lsp_real）
+#[cfg(unix)]
+#[tokio::test]
+#[ignore]
+async fn lsp_real_typescript_native() {
+    use p2pcli_core::client::LspEvent;
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("lspts-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("lspts-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+
+    let work = temp_dir("lspts-work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(work.join("tsconfig.json"), r#"{"compilerOptions":{"strict":true}}"#).unwrap();
+    std::os::unix::fs::symlink(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../node_modules").canonicalize().unwrap(), work.join("node_modules")).unwrap();
+    std::fs::write(work.join("src/util.ts"), "export function addNumbers(a: number, b: number) { return a + b; }\n").unwrap();
+    let main = work.join("src/main.ts");
+    let text = "import { addNumbers } from './util';\naddNum\n";
+    std::fs::write(&main, text).unwrap();
+    let uri = |p: &std::path::Path| format!("file://{}", p.display());
+    let (started, mut input, mut output) = remote.open_lsp("typescript".into(), main.to_string_lossy().into(), work.to_string_lossy().into()).await.unwrap();
+    assert!(started.server.starts_with("TypeScript 7"), "{}", started.server);
+
+    let send = |v: serde_json::Value| v.to_string();
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":uri(&work),"capabilities":{}}})).as_bytes()).await.unwrap();
+    // 等某个请求的回复；语言服务反过来问的（要配置、注册能力）都回空，和编辑器一样
+    async fn next_reply(input: &mut p2pcli_core::client::LspInput, output: &mut p2pcli_core::client::LspOutput, id: i64) -> serde_json::Value {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(30), output.next()).await.unwrap().unwrap() {
+                Some(LspEvent::Message(m)) => {
+                    let v: serde_json::Value = serde_json::from_str(&m).unwrap();
+                    if v["id"] == id && v.get("method").is_none() { return v; }
+                    if v.get("method").is_some() && v.get("id").is_some() {
+                        let result = if v["method"] == "workspace/configuration" {
+                            serde_json::Value::Array(vec![serde_json::Value::Null; v["params"]["items"].as_array().map_or(0, Vec::len)])
+                        } else { serde_json::Value::Null };
+                        input.send(serde_json::json!({"jsonrpc":"2.0","id":v["id"],"result":result}).to_string().as_bytes()).await.unwrap();
+                    }
+                }
+                Some(LspEvent::Exited(reason)) => panic!("语言服务提前结束：{reason}"),
+                None => panic!("语言服务提前结束"),
+            }
+        }
+    }
+    let init = next_reply(&mut input, &mut output, 1).await;
+    assert!(init["result"]["capabilities"]["completionProvider"].is_object(), "{init}");
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","method":"initialized","params":{}})).as_bytes()).await.unwrap();
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri(&main),"languageId":"typescript","version":1,"text":text}}})).as_bytes()).await.unwrap();
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":uri(&main)},"position":{"line":1,"character":6}}})).as_bytes()).await.unwrap();
+    let completion = next_reply(&mut input, &mut output, 2).await;
+    let items = completion["result"]["items"].as_array().or(completion["result"].as_array()).cloned().unwrap_or_default();
+    assert!(items.iter().any(|i| i["label"] == "addNumbers"), "{}", completion.to_string().chars().take(500).collect::<String>());
+
+    input.close();
+    std::fs::remove_dir_all(&work).ok();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}

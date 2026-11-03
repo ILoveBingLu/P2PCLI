@@ -93,10 +93,18 @@ where
     let server = server(family)?;
     let (file, root) = (PathBuf::from(file), PathBuf::from(root));
     if !file.is_absolute() || !root.is_absolute() { bail!("路径必须是绝对路径"); }
-    let workspace = tokio::task::spawn_blocking(move || workspace_root(server, &file, &root)).await?;
+    let workspace = {
+        let file = file.clone();
+        tokio::task::spawn_blocking(move || workspace_root(server, &file, &root)).await?
+    };
     let path = search_path().await;
-    let (program, args) = locate(server, path).await?;
-    let name = program.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| server.family.into());
+    let (program, args, name) = if server.family == "typescript" {
+        locate_typescript(&file, path).await?
+    } else {
+        let (program, args) = locate(server, path).await?;
+        (program, args, None)
+    };
+    let name = name.unwrap_or_else(|| program.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| server.family.into()));
 
     let mut cmd = Command::new(&program);
     cmd.args(args).current_dir(&workspace).env("PATH", std::env::join_paths(path)?)
@@ -315,6 +323,89 @@ async fn locate(server: &'static Server, dirs: &[PathBuf]) -> Result<Located> {
     bail!("{MISSING}{}", server.family)
 }
 
+/// TypeScript 7 起自带语言服务（原生程序 `tsc --lsp --stdio`），不再需要 typescript-language-server
+const NATIVE_TS_ARGS: &[&str] = &["--lsp", "--stdio"];
+
+/// TypeScript 用哪个语言服务：先看项目自己装的 typescript，7 及以上直接用它的原生程序，
+/// 更早的版本交给 typescript-language-server（它会用项目里的 typescript）；项目里没装再看全局的
+async fn locate_typescript(file: &Path, dirs: &[PathBuf]) -> Result<(PathBuf, &'static [&'static str], Option<String>)> {
+    let local = {
+        let file = file.to_path_buf();
+        tokio::task::spawn_blocking(move || project_typescript(&file)).await?
+    };
+    let classic = || which("typescript-language-server", dirs).into_iter().next();
+    match local {
+        Some(ProjectTs::Native { exe, version }) => return Ok((exe, NATIVE_TS_ARGS, Some(format!("TypeScript {version}")))),
+        Some(ProjectTs::Classic) => if let Some(path) = classic() { return Ok((path, &["--stdio"], None)) },
+        None => {}
+    }
+    // 全局装的：tsc 是 7 及以上的直接用，tsgo 是 7 的预览版
+    for tsc in which("tsc", dirs) {
+        if let Some(version) = native_version(&tsc, dirs).await {
+            return Ok((tsc, NATIVE_TS_ARGS, Some(format!("TypeScript {version}"))));
+        }
+    }
+    if let Some(tsgo) = which("tsgo", dirs).into_iter().next() {
+        return Ok((tsgo, NATIVE_TS_ARGS, Some("tsgo".into())));
+    }
+    if let Some(path) = classic() { return Ok((path, &["--stdio"], None)); }
+    bail!("{MISSING}typescript")
+}
+
+enum ProjectTs {
+    /// TypeScript 7 及以上：原生程序和版本号（只到次版本，比如 7.0）
+    Native { exe: PathBuf, version: String },
+    /// 更早的版本
+    Classic,
+}
+
+/// 从文件往上找项目装的 typescript（node_modules/typescript）
+fn project_typescript(file: &Path) -> Option<ProjectTs> {
+    let dir = file.parent()?;
+    for ancestor in dir.ancestors().take(32) {
+        let pkg = ancestor.join("node_modules").join("typescript");
+        let Ok(text) = std::fs::read_to_string(pkg.join("package.json")) else { continue };
+        let version = serde_json::from_str::<serde_json::Value>(&text).ok()?["version"].as_str()?.to_string();
+        let mut parts = version.split('.');
+        let major: u32 = parts.next()?.parse().ok()?;
+        if major < 7 { return Some(ProjectTs::Classic); }
+        let short = format!("{major}.{}", parts.next().unwrap_or("0"));
+        return native_ts_exe(&pkg).map(|exe| ProjectTs::Native { exe, version: short });
+    }
+    None
+}
+
+/// TypeScript 7 的原生程序在按平台拆出去的包里（@typescript/typescript-darwin-arm64 这样），
+/// 照 Node 找包的办法从 typescript 包的真实位置往上找：pnpm 放在它旁边，npm 放在项目的 node_modules 里
+fn native_ts_exe(pkg: &Path) -> Option<PathBuf> {
+    let os = match std::env::consts::OS { "macos" => "darwin", "windows" => "win32", other => other };
+    let arch = match std::env::consts::ARCH { "aarch64" => "arm64", "x86_64" => "x64", "x86" => "ia32", other => other };
+    let platform = format!("typescript-{os}-{arch}");
+    let exe = if cfg!(windows) { "tsc.exe" } else { "tsc" };
+    let real = pkg.canonicalize().ok()?;
+    real.ancestors().take(12).flat_map(|dir| {
+        let nested = dir.join("node_modules").join("@typescript").join(&platform).join("lib").join(exe);
+        let sibling = (dir.file_name() == Some(std::ffi::OsStr::new("node_modules")))
+            .then(|| dir.join("@typescript").join(&platform).join("lib").join(exe));
+        [Some(nested), sibling]
+    }).flatten().find(|p| executable(p))
+}
+
+/// 全局的 tsc 是不是 7 及以上：是的话返回版本号（只到次版本）
+async fn native_version(tsc: &Path, dirs: &[PathBuf]) -> Option<String> {
+    let mut cmd = Command::new(tsc);
+    cmd.arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
+    if let Ok(joined) = std::env::join_paths(dirs) { cmd.env("PATH", joined); }
+    #[cfg(windows)]
+    cmd.creation_flags(crate::exec::CREATE_NO_WINDOW);
+    let out = timeout(Duration::from_secs(10), cmd.output()).await.ok()?.ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let version = text.split_whitespace().find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))?;
+    let mut parts = version.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    (major >= 7).then(|| format!("{major}.{}", parts.next().unwrap_or("0")))
+}
+
 async fn works(path: &Path, dirs: &[PathBuf]) -> bool {
     let mut cmd = Command::new(path);
     cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
@@ -397,6 +488,44 @@ mod tests {
         assert_eq!(workspace_root(server("python").unwrap(), &plain.join("a.py"), &dir.join("plain")), dir.join("plain"));
         std::fs::write(dir.join("plain/sub/pyproject.toml"), "").unwrap();
         assert_eq!(workspace_root(server("python").unwrap(), &plain.join("a.py"), &dir.join("plain")), plain);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn project_typescript_versions() {
+        let dir = std::env::temp_dir().join(format!("p2pcli-lsp-ts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("app/src/main.ts");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        assert!(project_typescript(&file).is_none());
+        // 老版本：交给 typescript-language-server
+        std::fs::create_dir_all(dir.join("app/node_modules/typescript")).unwrap();
+        std::fs::write(dir.join("app/node_modules/typescript/package.json"), r#"{"version":"5.9.3"}"#).unwrap();
+        assert!(matches!(project_typescript(&file), Some(ProjectTs::Classic)));
+        // 7：pnpm 的布局，原生程序在真实目录旁边的 @typescript 里
+        let os = match std::env::consts::OS { "macos" => "darwin", "windows" => "win32", o => o };
+        let arch = match std::env::consts::ARCH { "aarch64" => "arm64", "x86_64" => "x64", a => a };
+        let store = dir.join(".pnpm/typescript@7.0.2/node_modules");
+        std::fs::create_dir_all(store.join("typescript")).unwrap();
+        std::fs::write(store.join("typescript/package.json"), r#"{"version":"7.0.2"}"#).unwrap();
+        let lib = store.join(format!("@typescript/typescript-{os}-{arch}/lib"));
+        std::fs::create_dir_all(&lib).unwrap();
+        let exe = lib.join(if cfg!(windows) { "tsc.exe" } else { "tsc" });
+        std::fs::write(&exe, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::remove_dir_all(dir.join("app/node_modules/typescript")).unwrap();
+            std::os::unix::fs::symlink(store.join("typescript"), dir.join("app/node_modules/typescript")).unwrap();
+            match project_typescript(&file) {
+                Some(ProjectTs::Native { exe: found, version }) => {
+                    assert_eq!(found, exe.canonicalize().unwrap());
+                    assert_eq!(version, "7.0");
+                }
+                _ => panic!("没找到 TypeScript 7 的原生程序"),
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
