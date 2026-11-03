@@ -4,6 +4,7 @@ import type { PathInfo, RemoteInfo, TerminalSessionSnapshot } from "../api";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentIcon, AgentQuotaLabel, AgentStateLabel, agentStateTip } from "./Agent";
 import { ConnectionCard } from "./ConnectionCard";
+import { DirPicker } from "./DirPicker";
 import { t } from "@/i18n";
 
 function Detail({ tip, children, className = "" }: { tip: string; children: ReactNode; className?: string }) {
@@ -39,9 +40,18 @@ export function TerminalStatusbar({ connId, info, sessionId, state, path, snapsh
         <span className="truncate">{details.command}</span>
       </Detail>}
       <div className="terminal-status-path">
-        {details?.current_path && <Detail tip={details.current_path} className="min-w-0">
-          <Folder /><span className="truncate">{details.current_path}</span>
-        </Detail>}
+        {/* 后台会话能点开选目录；临时终端没有会话编号，只显示 */}
+        {sessionId && state === "open" && !error
+          ? <DirPicker
+            connId={connId}
+            sessionId={sessionId}
+            currentPath={details?.current_path ?? null}
+            canChange={!agent && details?.shell_ready === true}
+            blockedReason={agent ? t("{{name}} 正在运行，退出后才能切换目录", { name: agent.name }) : t("终端不在空闲提示符，完成当前输入或退出程序后才能切换")}
+          />
+          : details?.current_path && <Detail tip={details.current_path} className="min-w-0">
+            <Folder /><span className="truncate">{details.current_path}</span>
+          </Detail>}
       </div>
       {error && state !== "closed" && <Detail tip={error}><CircleAlert aria-label={t("状态更新失败")} /></Detail>}
       {state === "open" && path && (path.kind === "local"

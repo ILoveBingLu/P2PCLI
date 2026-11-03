@@ -11,6 +11,8 @@ use crate::collaboration::model::{Reply, Request};
 pub const KIND_MSG: u8 = 1;
 pub const COLLABORATION_V1: &str = crate::collaboration::model::CAPABILITY;
 pub const AGENT_MESSAGE_V1: &str = "agent_message_v1";
+/// 状态栏点路径选目录：列子目录、把会话切过去
+pub const DIR_PICKER_V1: &str = "dir_picker_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -103,6 +105,12 @@ pub enum Msg {
     AgentOptionChosen,
     SendAgentMessage { session_id: String, kind: String, request_id: String, text: String },
     AgentMessageSent,
+    /// 列出对方电脑上某个目录的子目录；路径空着是用户目录
+    ListDir { path: String },
+    DirListing { listing: crate::dirs::DirListing },
+    /// 会话停在空闲提示符时，在里面执行 cd 切到这个目录
+    ChangeDir { session_id: String, path: String },
+    DirChanged,
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,

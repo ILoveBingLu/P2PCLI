@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -114,7 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into()],
         },
     )
     .await?;
@@ -285,6 +285,39 @@ impl RemoteHost {
             Msg::AgentMessageSent => Ok(()),
             other => bail!("接入请求未确认：{other:?}"),
         }
+    }
+
+    /// 列出对方电脑上某个目录的子目录；路径空着是用户目录
+    pub async fn list_dir(&self, path: String) -> Result<crate::dirs::DirListing> {
+        if self.is_local() {
+            return crate::dirs::list(&path).await;
+        }
+        self.require_dir_picker()?;
+        match self.session_request(Msg::ListDir { path }).await? {
+            Msg::DirListing { listing } => Ok(listing),
+            other => bail!("读取目录失败：{other:?}"),
+        }
+    }
+
+    /// 会话停在空闲提示符时切到这个目录
+    pub async fn change_dir(&self, session_id: String, path: String) -> Result<()> {
+        if let Link::Local { host, owner } = &self.link {
+            return host.terminals.change_dir(owner, &session_id, &path).await;
+        }
+        self.require_dir_picker()?;
+        match self.session_request(Msg::ChangeDir { session_id, path }).await? {
+            Msg::DirChanged => Ok(()),
+            other => bail!("切换目录失败：{other:?}"),
+        }
+    }
+
+    fn require_dir_picker(&self) -> Result<()> {
+        if let Link::Net { capabilities, .. } = &self.link
+            && !capabilities.iter().any(|c| c == DIR_PICKER_V1)
+        {
+            bail!("对方的 P2PCLI 版本较旧，不支持选择目录，请更新对方的 P2PCLI");
+        }
+        Ok(())
     }
 
     async fn session_request(&self, msg: Msg) -> Result<Msg> {
