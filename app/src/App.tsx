@@ -1,13 +1,18 @@
 import {
+  Fragment,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
   useState,
   type ComponentProps,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
+  FileCode2,
   FileUp,
   LoaderCircle,
   History,
@@ -18,6 +23,7 @@ import {
 } from "lucide-react";
 import { Tabs } from "@heroui/react";
 import { toast, Toaster } from "@/components/ui/toast";
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
   api,
   shellQuote,
@@ -90,6 +96,17 @@ interface Tab {
   sessionId?: string;
   /** 终端打开以后才有；拖进来的文件发完把路径填进这个终端 */
   termId?: number;
+}
+
+// 代码编辑器带着 Monaco，十几 MB，第一次打开时才加载
+const RemoteEditor = lazy(() => import("./components/editor/RemoteEditor"));
+
+/** 代码编辑器按设备记：断开重连后打开的文件和未保存的修改都还在 */
+interface EditorState {
+  root: string;
+  /** 外面要求换根目录时加一 */
+  seq: number;
+  shown: boolean;
 }
 
 /** 拖文件进窗口时的提示：发给谁，或者为什么发不了 */
@@ -195,6 +212,59 @@ export default function App() {
   }, [refresh]);
 
   const activeTab = tabs.find((tab) => tab.key === activeKey) ?? null;
+  const [editors, setEditors] = useState<Record<string, EditorState>>({});
+  const [editorDirty, setEditorDirty] = useState<Record<string, number>>({});
+  const [editorWidth, setEditorWidth] = useState(() => {
+    const saved = Number(localStorage.getItem("p2pcli.editor.width"));
+    return saved >= 0.25 && saved <= 0.8 ? saved : 0.55;
+  });
+  /** 关掉某台设备最后一个标签时，它的编辑器里还有没保存的文件：先问一下 */
+  const [discardEditor, setDiscardEditor] = useState<{ count: number; onConfirm: () => void } | null>(null);
+  const editorConnId = (endpointId: string) => tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.state === "open")?.connId ?? null;
+  const openEditor = (tab: Tab, path?: string) => {
+    const id = tab.info.endpoint_id;
+    const current = tab.sessionId
+      ? liveSessions[tab.connId]?.sessions?.find((s) => s.id === tab.sessionId)?.details?.current_path
+      : undefined;
+    setEditors((all) => {
+      const existing = all[id];
+      // 已经开着又没指定目录：只是重新显示，不换根目录，免得收起的文件树被重置
+      if (existing && path === undefined) return { ...all, [id]: { ...existing, shown: true } };
+      return { ...all, [id]: { root: path ?? current ?? "", seq: (existing?.seq ?? 0) + 1, shown: true } };
+    });
+  };
+  const closeEditor = (endpointId: string) => {
+    setEditors(({ [endpointId]: _, ...rest }) => rest);
+    setEditorDirty(({ [endpointId]: _, ...rest }) => rest);
+  };
+  // 目录选择用了 memo，传稳定的函数进去，里面再取最新的标签
+  const openEditorRef = useRef<(path: string) => void>(() => {});
+  openEditorRef.current = (path) => { if (activeTab) openEditor(activeTab, path); };
+  const openEditorAt = useCallback((path: string) => openEditorRef.current(path), []);
+  const dragEditorSplit = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const container = event.currentTarget.parentElement;
+    if (!container) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    let frame = 0;
+    let width = editorWidth;
+    const move = (e: PointerEvent) => {
+      const rect = container.getBoundingClientRect();
+      width = Math.min(0.8, Math.max(0.25, (rect.right - e.clientX) / rect.width));
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setEditorWidth(width));
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      try { localStorage.setItem("p2pcli.editor.width", String(width)); } catch { /* 存不了就算了 */ }
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  };
   useEffect(() => {
     setActiveKey((key) => key !== null && !tabs.some((tab) => tab.key === key) ? tabs.at(-1)?.key ?? null : key);
   }, [tabs]);
@@ -497,9 +567,19 @@ export default function App() {
     void api.refreshDevices().catch(() => { /* 下轮常规探测会继续同步缓存。 */ });
   };
 
-  const closeTab = (key: number) => {
+  const closeTab = (key: number, discardEdits = false) => {
     const tab = tabs.find((tab) => tab.key === key);
     const rest = tabs.filter((tab) => tab.key !== key);
+    // 这台设备最后一个标签关掉以后，它的编辑器也跟着关；有没保存的文件先问
+    const endpointId = tab?.info.endpoint_id;
+    if (endpointId && editors[endpointId] && !rest.some((other) => other.info.endpoint_id === endpointId)) {
+      const dirty = editorDirty[endpointId] ?? 0;
+      if (dirty && !discardEdits) {
+        setDiscardEditor({ count: dirty, onConfirm: () => closeTab(key, true) });
+        return;
+      }
+      closeEditor(endpointId);
+    }
     if (tab && !rest.some((tab) => tab.connId === tab.connId))
       api.disconnect(tab.connId).catch((e) => toast.error(String(e)));
     setTabs(rest);
@@ -856,7 +936,21 @@ export default function App() {
                   <History />
                 </Button>
               )}
+              {activeTab && (activeTab.state === "open" || editors[activeTab.info.endpoint_id]) && (
+                <Button variant="ghost" size="icon-sm" className="terminal-editor-toggle"
+                  data-active={editors[activeTab.info.endpoint_id]?.shown || undefined}
+                  aria-label={t("代码编辑器")}
+                  title={editors[activeTab.info.endpoint_id]?.shown ? t("收起代码编辑器（打开的文件会保留）") : t("在代码编辑器里打开这台设备上的文件")}
+                  onClick={() => {
+                    const id = activeTab.info.endpoint_id;
+                    if (editors[id]?.shown) setEditors((all) => ({ ...all, [id]: { ...all[id], shown: false } }));
+                    else openEditor(activeTab);
+                  }}>
+                  <FileCode2 />
+                </Button>
+              )}
             </div>
+            <div className="workspace-split">
             <div className="terminals">
               <Tabs.Panel id="home" className="terminal-panel terminal-home-panel">
                 <Welcome
@@ -959,6 +1053,28 @@ export default function App() {
                 </Tabs.Panel>
               ))}
             </div>
+            {Object.entries(editors).map(([endpointId, editor]) => {
+              const visible = editor.shown && activeTab?.info.endpoint_id === endpointId;
+              return (
+                <Fragment key={endpointId}>
+                  {visible && <div className="workspace-splitter" role="separator" aria-orientation="vertical"
+                    aria-label={t("拖动调整编辑器宽度")} onPointerDown={dragEditorSplit} />}
+                  <div className="remote-editor-pane" hidden={!visible} style={{ flexBasis: `${editorWidth * 100}%` }}>
+                    <Suspense fallback={<div className="remote-editor-placeholder"><LoaderCircle className="animate-spin" />{t("正在加载编辑器…")}</div>}>
+                      <RemoteEditor
+                        connId={editorConnId(endpointId)}
+                        root={editor.root}
+                        rootSeq={editor.seq}
+                        active={visible && !showSettings && !sessionTarget}
+                        onDirty={(count) => setEditorDirty((all) => all[endpointId] === count ? all : { ...all, [endpointId]: count })}
+                        onClose={() => closeEditor(endpointId)}
+                      />
+                    </Suspense>
+                  </div>
+                </Fragment>
+              );
+            })}
+            </div>
             {activeTab && activeAgent && (
               <AgentComposer
                 key={`composer-${activeTab.key}`}
@@ -1014,12 +1130,27 @@ export default function App() {
               state={activeTab.state}
               path={paths[activeTab.connId]}
               snapshot={liveSessions[activeTab.connId]}
+              onOpenEditor={openEditorAt}
             />}
           </Tabs>
 
         </div>
         <TransferPanel transfers={transfers} />
       </main>
+      {discardEditor && (
+        <AlertDialog open>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("有 {{count}} 个文件未保存", { count: discardEditor.count })}</AlertDialogTitle>
+              <AlertDialogDescription>{t("这是这台设备的最后一个标签，关掉以后代码编辑器也会关闭，未保存的修改会丢失。")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button variant="outline" onPress={() => setDiscardEditor(null)}>{t("取消")}</Button>
+              <Button variant="destructive" onPress={() => { const next = discardEditor; setDiscardEditor(null); next.onConfirm(); }}>{t("不保存，关闭标签")}</Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
       {showDiag && <DiagDialog publicKey={ov?.endpoint_id ?? null} onClose={() => setShowDiag(false)} />}
       {requests.length > 0 && (
         <ApproveDialog

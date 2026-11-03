@@ -2124,3 +2124,243 @@ img.agent-icon {
 @media (prefers-reduced-motion: reduce) {
   .dir-picker-spin { animation: none; }
 }
+
+/* 代码编辑器：在终端右边，中间一条可以拖的分隔线 */
+.workspace-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.workspace-split > .terminals {
+  min-width: 240px;
+}
+.workspace-splitter {
+  flex: none;
+  width: 5px;
+  margin: 0 -2px;
+  position: relative;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+}
+.workspace-splitter::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: var(--border);
+}
+.workspace-splitter:hover::after,
+.workspace-splitter:active::after {
+  inset: 0 1px;
+  background: var(--accent);
+}
+.remote-editor-pane {
+  flex: 0 0 auto;
+  min-width: 320px;
+  min-height: 0;
+  display: flex;
+  background: var(--terminal);
+}
+.remote-editor-pane[hidden] {
+  display: none;
+}
+.terminal-editor-toggle[data-active] {
+  color: var(--accent);
+}
+.remote-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  font-size: 12px;
+}
+.remote-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  flex: none;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.remote-editor-head svg {
+  width: 14px;
+  height: 14px;
+}
+.remote-editor-root {
+  flex: 1;
+  min-width: 0;
+  margin: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* 路径太长时省略开头，留住最后几级目录 */
+  direction: rtl;
+  text-align: left;
+  font-family: var(--font-mono);
+  color: var(--foreground);
+}
+.remote-editor-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+.remote-editor-banner {
+  flex-wrap: wrap;
+}
+.remote-editor-banner > span {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.remote-editor-banner > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.remote-editor-banner.is-warning { color: var(--warning); background: color-mix(in oklab, var(--warning) 8%, transparent); }
+.remote-editor-banner.is-error { color: var(--danger); background: color-mix(in oklab, var(--danger) 8%, transparent); }
+.remote-editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.remote-editor-tree {
+  width: 220px;
+  flex: none;
+  overflow: auto;
+  padding: 4px 0 12px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.remote-editor-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 24px;
+  padding-right: 8px;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.remote-editor-node:hover { background: rgb(255 255 255 / 0.05); }
+.remote-editor-node.is-active { background: rgb(255 255 255 / 0.09); }
+.remote-editor-node.is-hidden { color: var(--muted-foreground); }
+.remote-editor-node svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.remote-editor-node .chevron {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.remote-editor-note {
+  padding: 4px 10px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.remote-editor-note.is-error { color: var(--danger); }
+.remote-editor-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.remote-editor-tabs {
+  display: flex;
+  flex: none;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  scrollbar-width: none;
+}
+.remote-editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  height: 30px;
+  flex: none;
+  padding: 0 4px 0 12px;
+  border-right: 1px solid var(--border);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  user-select: none;
+}
+.remote-editor-tab.is-active {
+  background: var(--terminal);
+  color: var(--foreground);
+  box-shadow: inset 0 -1px 0 var(--terminal), inset 0 1px 0 var(--accent);
+}
+.remote-editor-tab-close {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 4px;
+  color: inherit;
+}
+.remote-editor-tab-close > * { grid-area: 1 / 1; }
+.remote-editor-tab-close svg { width: 12px; height: 12px; opacity: 0; }
+.remote-editor-tab-close .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0; }
+.remote-editor-tab:hover .remote-editor-tab-close svg,
+.remote-editor-tab.is-active .remote-editor-tab-close:not([data-dirty]) svg { opacity: 1; }
+/* 有未保存的修改：显示圆点，鼠标移上去才换成关闭按钮 */
+.remote-editor-tab-close[data-dirty] .dot { opacity: 1; }
+.remote-editor-tab-close[data-dirty]:hover .dot { opacity: 0; }
+.remote-editor-tab-close[data-dirty]:hover svg { opacity: 1; }
+.remote-editor-tab-close:hover { background: rgb(255 255 255 / 0.08); }
+.remote-editor-surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.remote-editor-monaco {
+  position: absolute;
+  inset: 0;
+}
+.remote-editor-monaco[hidden] { display: none; }
+.remote-editor-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.remote-editor-pane > .remote-editor-placeholder { position: static; flex: 1; }
+.remote-editor-placeholder.is-error { color: var(--danger); }
+.remote-editor-placeholder svg { width: 16px; height: 16px; }
+.remote-editor-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 26px;
+  flex: none;
+  padding: 0 4px 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.remote-editor-status .grow { flex: 1; }
+.remote-editor-status button { height: 20px; font-size: 11px; gap: 4px; }
+.remote-editor-status svg { width: 12px; height: 12px; }

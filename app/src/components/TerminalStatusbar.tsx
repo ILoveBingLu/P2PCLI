@@ -11,7 +11,7 @@ function Detail({ tip, children, className = "" }: { tip: string; children: Reac
   return <Tooltip content={tip}><TooltipTrigger className={`terminal-status-detail ${className}`}>{children}</TooltipTrigger></Tooltip>;
 }
 
-export function TerminalStatusbar({ connId, info, sessionId, state, path, snapshot, echoLatency }: {
+export function TerminalStatusbar({ connId, info, sessionId, state, path, snapshot, echoLatency, onOpenEditor }: {
   connId: number;
   info: RemoteInfo;
   sessionId?: string;
@@ -20,6 +20,8 @@ export function TerminalStatusbar({ connId, info, sessionId, state, path, snapsh
   snapshot?: TerminalSessionSnapshot;
   /** 这个终端最近的按键回显时间，连接详情里显示 */
   echoLatency: () => number | null;
+  /** 在代码编辑器里打开对方电脑上的这个目录；要稳定的函数，目录选择用了 memo */
+  onOpenEditor?: (path: string) => void;
 }) {
   const sessions = snapshot?.sessions ?? [];
   const session = sessionId ? sessions.find((entry) => entry.id === sessionId) : undefined;
@@ -48,6 +50,7 @@ export function TerminalStatusbar({ connId, info, sessionId, state, path, snapsh
             currentPath={details?.current_path ?? null}
             canChange={!agent && details?.shell_ready === true}
             blockedReason={agent ? t("{{name}} 正在运行，退出后才能切换目录", { name: agent.name }) : t("终端不在空闲提示符，完成当前输入或退出程序后才能切换")}
+            onOpenEditor={onOpenEditor}
           />
           : details?.current_path && <Detail tip={details.current_path} className="min-w-0">
             <Folder /><span className="truncate">{details.current_path}</span>

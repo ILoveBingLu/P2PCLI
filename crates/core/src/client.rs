@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -114,7 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into()],
         },
     )
     .await?;
@@ -309,6 +309,80 @@ impl RemoteHost {
             Msg::DirChanged => Ok(()),
             other => bail!("切换目录失败：{other:?}"),
         }
+    }
+
+    /// 远程编辑：列出目录里的子目录和文件
+    pub async fn list_entries(&self, path: String) -> Result<crate::remote_fs::EntryListing> {
+        if self.is_local() {
+            return crate::remote_fs::list_entries(&path).await;
+        }
+        self.require_remote_edit()?;
+        match self.session_request(Msg::ListEntries { path }).await? {
+            Msg::Entries { listing } => Ok(listing),
+            other => bail!("读取目录失败：{other:?}"),
+        }
+    }
+
+    /// 远程编辑：打开文本文件，返回文件信息和内容（不含 BOM）
+    pub async fn read_file(&self, path: String) -> Result<(crate::remote_fs::FileMeta, String)> {
+        if self.is_local() {
+            return crate::remote_fs::read_text(&path).await;
+        }
+        self.require_remote_edit()?;
+        let (_send, mut recv) = self.open_stream(&Msg::ReadFile { path }).await?;
+        timeout(Duration::from_secs(120), async {
+            let meta = match read_msg(&mut recv).await? {
+                Msg::FileOpened { meta } => meta,
+                Msg::Error { message } => bail!("{message}"),
+                other => bail!("打开文件失败：{other:?}"),
+            };
+            let expected = meta.size - if meta.bom { 3 } else { 0 };
+            let mut body = Vec::with_capacity(expected as usize);
+            while let Some(frame) = read_frame(&mut recv).await? {
+                match frame {
+                    Frame::Data(chunk) if (body.len() + chunk.len()) as u64 <= expected => body.extend_from_slice(&chunk),
+                    Frame::Msg(Msg::Error { message }) => bail!("{message}"),
+                    _ => bail!("文件内容不对"),
+                }
+            }
+            if body.len() as u64 != expected { bail!("文件没有读完整，连接可能中断了"); }
+            Ok((meta, String::from_utf8(body).map_err(|_| anyhow!("文件内容不是 UTF-8"))?))
+        })
+        .await
+        .map_err(|_| anyhow!("打开文件超时"))?
+    }
+
+    /// 远程编辑：保存。expected 是打开时的哈希，文件被别人改过时报冲突（错误以 conflict: 开头），force 时直接覆盖
+    pub async fn write_file(&self, path: String, text: String, bom: bool, expected: Option<String>, force: bool) -> Result<crate::remote_fs::FileMeta> {
+        if self.is_local() {
+            return crate::remote_fs::write_text(&path, text, bom, expected, force).await;
+        }
+        self.require_remote_edit()?;
+        let size = text.len() as u64;
+        if size + 3 > crate::remote_fs::MAX_SAVE_BYTES { bail!("内容太大，最多保存 16 MB"); }
+        let (mut send, mut recv) = self.open_stream(&Msg::WriteFile { path, size, bom, expected, force }).await?;
+        timeout(Duration::from_secs(120), async {
+            for chunk in text.as_bytes().chunks(256 * 1024) {
+                write_data(&mut send, chunk).await?;
+            }
+            send.finish()?;
+            match read_msg(&mut recv).await? {
+                Msg::FileSaved { meta } => Ok(meta),
+                Msg::Error { message } => bail!("{message}"),
+                other => bail!("保存失败：{other:?}"),
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("保存超时，文件可能已经写入，请重新打开确认"))?
+    }
+
+    fn require_remote_edit(&self) -> Result<()> {
+        if let Link::Net { capabilities, .. } = &self.link
+            && !capabilities.iter().any(|c| c == REMOTE_EDIT_V1)
+        {
+            bail!("对方的 P2PCLI 版本较旧，不支持远程编辑，请更新对方的 P2PCLI");
+        }
+        Ok(())
     }
 
     fn require_dir_picker(&self) -> Result<()> {

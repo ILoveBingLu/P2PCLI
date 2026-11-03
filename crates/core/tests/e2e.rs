@@ -1555,3 +1555,48 @@ async fn parallel_transfer_resumes_from_the_verified_segments() {
     sender.shutdown().await;
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// 远程编辑走真连接：列目录、打开超过单帧的大文件、保存、冲突、强制覆盖
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_edit_round_trip_over_connection() {
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("edit-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("edit-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+
+    let work = temp_dir("edit-work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    // 1.5 MB 多字节文本：跨好几帧，分块边界会切在汉字中间
+    let big: String = "第一行，中文 abc\r\n".repeat(60_000);
+    let file = work.join("src").join("main.rs");
+    std::fs::write(&file, format!("\u{feff}{big}")).unwrap();
+
+    let listing = remote.list_entries(work.to_string_lossy().into_owned()).await.unwrap();
+    assert_eq!(listing.entries.iter().map(|e| (e.name.as_str(), e.dir)).collect::<Vec<_>>(), [("src", true)]);
+
+    let path = file.to_string_lossy().into_owned();
+    let (meta, text) = remote.read_file(path.clone()).await.unwrap();
+    assert!(meta.bom && !meta.readonly);
+    assert_eq!(text, big);
+
+    let edited = format!("// 改过\r\n{text}");
+    let saved = remote.write_file(path.clone(), edited.clone(), meta.bom, Some(meta.hash.clone()), false).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("\u{feff}{edited}"));
+
+    // 被连电脑上别的程序改了文件：拿旧哈希保存要报冲突，文件不能被盖掉
+    std::fs::write(&file, "changed by agent").unwrap();
+    let err = remote.write_file(path.clone(), "mine".into(), false, Some(saved.hash.clone()), false).await.unwrap_err();
+    assert!(err.to_string().contains(p2pcli_core::remote_fs::CONFLICT), "{err:#}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "changed by agent");
+    remote.write_file(path.clone(), "mine".into(), false, Some(saved.hash), true).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine");
+
+    assert!(remote.read_file(work.to_string_lossy().into_owned()).await.unwrap_err().to_string().contains("目录"));
+
+    std::fs::remove_dir_all(&work).ok();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}

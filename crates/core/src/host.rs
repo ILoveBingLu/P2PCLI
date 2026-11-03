@@ -19,11 +19,14 @@ use crate::PROTO_VERSION;
 use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::Files;
 use crate::identity::DeviceInfo;
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_data, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
 use crate::store::{TrustStore, write_private};
+
+/// 远程编辑传文件内容时每帧的大小，低于单帧上限
+const EDIT_CHUNK: usize = 256 * 1024;
 
 /// 弹窗最多等多久
 pub const APPROVE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -509,7 +512,7 @@ impl Host {
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
                 capabilities: capabilities.iter().filter(|capability|
-                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1)).cloned().collect(),
+                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1)).cloned().collect(),
             },
         )
         .await?;
@@ -607,6 +610,34 @@ impl Host {
                 Msg::ChangeDir { session_id, path } => {
                     self.terminals.change_dir(&owner, &session_id, &path).await?;
                     write_msg(&mut send, &Msg::DirChanged).await?;
+                }
+                Msg::ListEntries { path } => {
+                    let listing = crate::remote_fs::list_entries(&path).await?;
+                    write_msg(&mut send, &Msg::Entries { listing }).await?;
+                }
+                Msg::ReadFile { path } => {
+                    let (meta, text) = crate::remote_fs::read_text(&path).await?;
+                    info!(session, bytes = meta.size, "对面在编辑器里打开了本机的文件");
+                    debug!(session, path = %meta.path, "远程编辑：打开");
+                    write_msg(&mut send, &Msg::FileOpened { meta }).await?;
+                    for chunk in text.as_bytes().chunks(EDIT_CHUNK) {
+                        write_data(&mut send, chunk).await?;
+                    }
+                }
+                Msg::WriteFile { path, size, bom, expected, force } => {
+                    if size > crate::remote_fs::MAX_SAVE_BYTES { bail!("内容太大，最多保存 16 MB"); }
+                    let mut body = Vec::with_capacity(size as usize);
+                    while (body.len() as u64) < size {
+                        match timeout(Duration::from_secs(60), read_frame(&mut recv)).await?? {
+                            Some(Frame::Data(chunk)) if body.len() as u64 + chunk.len() as u64 <= size => body.extend_from_slice(&chunk),
+                            _ => bail!("保存的内容没传完整"),
+                        }
+                    }
+                    let text = String::from_utf8(body).map_err(|_| anyhow::anyhow!("保存的内容不是 UTF-8"))?;
+                    let meta = crate::remote_fs::write_text(&path, text, bom, expected, force).await?;
+                    info!(session, bytes = meta.size, force, "对面在编辑器里保存了本机的文件");
+                    debug!(session, path = %meta.path, "远程编辑：保存");
+                    write_msg(&mut send, &Msg::FileSaved { meta }).await?;
                 }
                 Msg::Exec { command, cwd, timeout_secs } => {
                     info!(session, bytes = command.len(), "对面要在本机跑一条命令");

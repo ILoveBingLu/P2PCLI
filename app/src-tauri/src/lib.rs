@@ -870,6 +870,28 @@ async fn change_dir(state: State<'_, AppState>, conn_id: u64, session_id: String
     state.remote(conn_id)?.change_dir(session_id, path).await.map_err(|e| format!("{e:#}"))
 }
 
+#[derive(serde::Serialize)]
+struct OpenedFile {
+    meta: p2pcli_core::remote_fs::FileMeta,
+    text: String,
+}
+
+#[tauri::command]
+async fn list_entries(state: State<'_, AppState>, conn_id: u64, path: String) -> Result<p2pcli_core::remote_fs::EntryListing, String> {
+    state.remote(conn_id)?.list_entries(path).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn read_file(state: State<'_, AppState>, conn_id: u64, path: String) -> Result<OpenedFile, String> {
+    let (meta, text) = state.remote(conn_id)?.read_file(path).await.map_err(|e| format!("{e:#}"))?;
+    Ok(OpenedFile { meta, text })
+}
+
+#[tauri::command]
+async fn write_file(state: State<'_, AppState>, conn_id: u64, path: String, text: String, bom: bool, expected: Option<String>, force: bool) -> Result<p2pcli_core::remote_fs::FileMeta, String> {
+    state.remote(conn_id)?.write_file(path, text, bom, expected, force).await.map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 async fn installed_agents(state: State<'_, AppState>, conn_id: u64, refresh: bool) -> Result<Vec<p2pcli_core::launchers::InstalledAgent>, String> {
     state.remote(conn_id)?.installed_agents(refresh).await.map_err(|e| format!("{e:#}"))
@@ -1395,6 +1417,9 @@ pub fn run() {
             end_terminal,
             list_dir,
             change_dir,
+            list_entries,
+            read_file,
+            write_file,
             term_input,
             term_resize,
             term_close,

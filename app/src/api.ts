@@ -114,6 +114,34 @@ export interface DirListing {
   truncated: boolean;
 }
 
+/** 远程编辑：目录里的一项 */
+export interface FsEntry {
+  name: string;
+  dir: boolean;
+  size: number;
+}
+export interface EntryListing {
+  path: string;
+  parent: string | null;
+  /** 目录在前、文件在后 */
+  entries: FsEntry[];
+  truncated: boolean;
+}
+/** 远程编辑：打开或保存后的文件信息 */
+export interface FileMeta {
+  path: string;
+  /** 文件原始字节的 BLAKE3，保存时核对有没有被别人改过 */
+  hash: string;
+  size: number;
+  /** 文件带 UTF-8 BOM；内容里不带，保存时后端加回去 */
+  bom: boolean;
+  readonly: boolean;
+  mtime: number | null;
+}
+export interface OpenedFile { meta: FileMeta; text: string }
+/** 保存时文件被别人改过，后端报的错以它开头 */
+export const CONFLICT_PREFIX = "conflict:";
+
 export interface OpenedTerminal { term_id: number; session_id: string }
 
 export interface Connected {
@@ -414,6 +442,12 @@ export const api = {
   listDir: (connId: number, path: string) => invoke<DirListing>("list_dir", { connId, path }),
   /** 会话在空闲提示符时切到这个目录 */
   changeDir: (connId: number, sessionId: string, path: string) => invoke<void>("change_dir", { connId, sessionId, path }),
+  /** 远程编辑：列出目录里的子目录和文件 */
+  listEntries: (connId: number, path: string) => invoke<EntryListing>("list_entries", { connId, path }),
+  readFile: (connId: number, path: string) => invoke<OpenedFile>("read_file", { connId, path }),
+  /** expected 是打开时的哈希；对不上会报 conflict:，force 直接覆盖 */
+  writeFile: (connId: number, path: string, text: string, bom: boolean, expected: string | null, force = false) =>
+    invoke<FileMeta>("write_file", { connId, path, text, bom, expected, force }),
   getSettings: () => invoke<SettingsView>("get_settings"),
   systemPermissions: () => invoke<SystemPermission[]>("system_permissions"),
   requestSystemPermission: (permission: string) => invoke<SystemPermission[]>("request_system_permission", { permission }),
