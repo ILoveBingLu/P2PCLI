@@ -27,3 +27,4 @@ devices.db*
 .playwright-mcp/
 .env*
 .workbuddy/
+/.claude/launch.json
