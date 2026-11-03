@@ -6,41 +6,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { t } from "@/i18n";
 
-/** 传完的停留多久再收起 */
-const DONE_KEEP_MS = 8000;
-/** 失败的留着等人关，太久以前的就不再显示 */
-const FAILED_KEEP_MS = 10 * 60 * 1000;
-const MAX_ROWS = 4;
-
-/** 工作区左下角的传输列表：进行中的显示进度，传完的停留一会儿，失败的等人关 */
-export function TransferPanel({ transfers }: { transfers: Transfer[] }) {
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const [now, setNow] = useState(Date.now());
-  const busy = transfers.some((transfer) => transfer.finished_at == null);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const shown = transfers
-    .filter((transfer) => {
-      if (dismissed.has(transfer.id)) return false;
-      if (transfer.finished_at == null) return true;
-      const age = now - transfer.finished_at * 1000;
-      return transfer.state === "failed" ? age < FAILED_KEEP_MS : age < DONE_KEEP_MS;
-    })
-    .slice(0, MAX_ROWS);
-  if (!shown.length) return null;
-  return (
-    <div className="transfer-anchor">
-      <div className="transfer-panel" role="status" aria-live="polite" aria-busy={busy}>
-        {shown.map((transfer) => (
-          <TransferRow key={transfer.id} transfer={transfer} onDismiss={() => setDismissed((ids) => new Set(ids).add(transfer.id))} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** 最近几秒的平均速度（字节每秒）；刚开始、还没攒够一秒的数据时是 null */
 function useSpeed(transfer: Transfer): number | null {
   const samples = useRef<{ at: number; done: number }[]>([]);
@@ -61,7 +26,8 @@ function useSpeed(transfer: Transfer): number | null {
   return speed;
 }
 
-function TransferRow({ transfer, onDismiss }: { transfer: Transfer; onDismiss: () => void }) {
+/** 一个传输：进度、速度、传完以后的操作。显示在灵动岛展开的卡片里 */
+export function TransferRow({ transfer, onDismiss }: { transfer: Transfer; onDismiss: () => void }) {
   const send = transfer.direction === "send";
   const speed = useSpeed(transfer);
   const percent = transfer.total ? Math.min(100, Math.floor((transfer.done * 100) / transfer.total)) : transfer.state === "done" ? 100 : 0;

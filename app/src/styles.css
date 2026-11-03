@@ -1272,22 +1272,7 @@
   }
 }
 
-/* 传文件：工作区左下角的进度列表。锚点是工作区最底下一个零高度的块，列表往上长，避开右下角的通知 */
-.transfer-anchor {
-  position: relative;
-  height: 0;
-}
-.transfer-panel {
-  position: absolute;
-  left: 16px;
-  bottom: 40px;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: min(320px, calc(100vw - 32px));
-  pointer-events: none;
-}
+/* 传文件的一行：显示在灵动岛展开的卡片里 */
 .transfer-row {
   display: flex;
   align-items: center;
@@ -1376,62 +1361,132 @@
   color: var(--muted-foreground);
 }
 
-/* 更新提示：标题栏正中的胶囊，像灵动岛。收起时一小条，下载中鼠标移上去撑开成卡片；
-   宽高由组件按当前那层内容量出来，变化时一起过渡，带一点回弹 */
-.update-island {
+/* 灵动岛：标题栏正中，传文件、下载更新时出现，没事时不占地方。
+   宽高由组件按当前那层内容量出来，用弹簧曲线伸缩（会冲过头一点再弹回来）；
+   出现时从标题栏里冒出来，消失时缩成一个点；内容换了从模糊里浮现；状态变了弹一下，失败抖一下。
+   同时有两件事时，另一件分出去成右边的小圆泡 */
+:root {
+  --island-spring: cubic-bezier(0.32, 1.25, 0.5, 1);
+  --island-spring-duration: 0.5s;
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --island-spring: linear(0, 0.029, 0.103, 0.208, 0.328, 0.454, 0.577, 0.691, 0.792, 0.878, 0.948, 1.003, 1.043, 1.07, 1.087, 1.094, 1.094, 1.089, 1.081, 1.07, 1.058, 1.046, 1.035, 1.025, 1.016, 1.008, 1.002, 0.998, 1);
+    --island-spring-duration: 0.62s;
+  }
+}
+.island-stack {
   position: fixed;
   top: 7px;
   left: 50%;
   z-index: 40;
   translate: -50% 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+.island-stack > * { pointer-events: auto; }
+.dynamic-island {
+  position: relative;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.09);
-  border-radius: 15px;
-  background: #161618;
+  border-radius: 16px;
+  background: #0d0d0f;
   color: #f5f5f7;
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.04);
+  transform-origin: 50% 0;
   transition:
-    width 0.42s cubic-bezier(0.32, 1.2, 0.5, 1),
-    height 0.42s cubic-bezier(0.32, 1.2, 0.5, 1),
-    border-radius 0.42s cubic-bezier(0.32, 1.2, 0.5, 1);
+    width var(--island-spring-duration) var(--island-spring),
+    height var(--island-spring-duration) var(--island-spring),
+    border-radius var(--island-spring-duration) var(--island-spring),
+    box-shadow 0.3s ease;
+  animation: island-enter 0.62s var(--island-spring) both;
 }
-.update-island[data-open] {
-  border-radius: 20px;
+.dynamic-island[data-open] {
+  border-radius: 22px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.05);
 }
+/* 从标题栏里冒出来：先是一颗小点，再撑开 */
+@keyframes island-enter {
+  from { transform: scale(0.35, 0.5); opacity: 0; filter: blur(6px); }
+  60% { opacity: 1; filter: blur(0); }
+  to { transform: none; opacity: 1; filter: none; }
+}
+/* 没事了：缩回成一个点再淡掉 */
+.island-stack[data-leaving] .dynamic-island {
+  animation: island-leave 0.32s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+}
+@keyframes island-leave {
+  to { transform: scale(0.3, 0.45); opacity: 0; filter: blur(4px); }
+}
+/* 状态变了弹一下（两个名字轮换，换名字动画才会重播） */
+.dynamic-island[data-beat="a"] { animation: island-bump-a 0.55s var(--island-spring); }
+.dynamic-island[data-beat="b"] { animation: island-bump-b 0.55s var(--island-spring); }
+@keyframes island-bump-a { 0% { transform: scale(1); } 35% { transform: scale(1.07, 1.1); } 100% { transform: scale(1); } }
+@keyframes island-bump-b { 0% { transform: scale(1); } 35% { transform: scale(1.07, 1.1); } 100% { transform: scale(1); } }
+/* 出错时左右抖一下 */
+.dynamic-island[data-tone="error"][data-beat="a"] { animation: island-shake-a 0.5s ease; }
+.dynamic-island[data-tone="error"][data-beat="b"] { animation: island-shake-b 0.5s ease; }
+@keyframes island-shake-a { 0%, 100% { translate: 0; } 20% { translate: -6px; } 40% { translate: 5px; } 60% { translate: -3px; } 80% { translate: 2px; } }
+@keyframes island-shake-b { 0%, 100% { translate: 0; } 20% { translate: -6px; } 40% { translate: 5px; } 60% { translate: -3px; } 80% { translate: 2px; } }
+.dynamic-island[data-tone="error"] { border-color: rgb(255 90 90 / 0.35); }
+.dynamic-island[data-tone="success"] { border-color: rgb(80 220 140 / 0.3); }
+
 .island-layer {
   position: absolute;
   top: 0;
   left: 50%;
   translate: -50% 0;
-  transition: opacity 0.18s ease;
+  transition: opacity 0.2s ease, filter 0.25s ease, scale 0.35s var(--island-spring);
 }
 .island-layer[aria-hidden="true"] {
   opacity: 0;
+  filter: blur(6px);
+  scale: 0.94;
   pointer-events: none;
 }
-.update-island[data-open] .island-expanded {
+.dynamic-island[data-open] .island-expanded {
   transition-delay: 0.08s;
 }
 .island-compact {
+  height: 32px;
+  white-space: nowrap;
+}
+/* 收起时那一条的内容：换内容时从模糊、略小的样子浮现 */
+.island-morph {
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 30px;
-  padding: 0 12px 0 11px;
+  height: 100%;
+  padding: 0 13px 0 11px;
   font-size: 12px;
   font-weight: 500;
-  white-space: nowrap;
+  animation: island-morph-in 0.42s var(--island-spring) both;
 }
-.island-compact:has(button) {
-  padding-right: 4px;
+.island-morph:has(button) {
+  padding-right: 5px;
+}
+@keyframes island-morph-in {
+  from { opacity: 0; filter: blur(5px); transform: scale(0.9); }
+  to { opacity: 1; filter: none; transform: none; }
 }
 .island-expanded {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  width: 340px;
-  padding: 14px 16px;
+  width: 360px;
+  padding: 14px 14px 12px 16px;
   font-size: 13px;
+}
+.island-label {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.island-muted-inline {
+  color: rgb(245 245 247 / 0.5);
+  font-variant-numeric: tabular-nums;
 }
 /* 百分比留够三位数的宽度，数字变了胶囊也不跟着抖 */
 .island-percent {
@@ -1443,6 +1498,11 @@
   width: 15px;
   height: 15px;
 }
+/* 发送的箭头往上跳，接收的往下跳 */
+.island-arrow.is-up { animation: island-hop-up 1.2s ease-in-out infinite; }
+.island-arrow.is-down { animation: island-hop-down 1.2s ease-in-out infinite; }
+@keyframes island-hop-up { 0%, 100% { translate: 0 1px; } 50% { translate: 0 -2px; } }
+@keyframes island-hop-down { 0%, 100% { translate: 0 -1px; } 50% { translate: 0 2px; } }
 .island-title {
   display: flex;
   align-items: center;
@@ -1455,6 +1515,23 @@
   font-weight: 400;
   color: rgb(245 245 247 / 0.5);
 }
+/* 展开卡片里的传输列表 */
+.island-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.island-rows .transfer-row {
+  padding: 7px 4px 7px 9px;
+  border: 0;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.05);
+  color: #f5f5f7;
+  box-shadow: none;
+}
+.island-rows .transfer-status { color: rgb(245 245 247 / 0.55); }
+.island-rows .transfer-bar { background: rgb(255 255 255 / 0.1); }
+.island-rows .transfer-bar > span { background: var(--accent); }
 .island-pill-button {
   display: inline-flex;
   align-items: center;
@@ -1468,11 +1545,10 @@
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-  transition: filter 0.15s ease;
+  transition: filter 0.15s ease, transform 0.25s var(--island-spring);
 }
-.island-pill-button:hover {
-  filter: brightness(1.1);
-}
+.island-pill-button:hover { filter: brightness(1.1); }
+.island-pill-button:active { transform: scale(0.94); }
 .island-close {
   display: inline-flex;
   align-items: center;
@@ -1498,14 +1574,27 @@
   fill: none;
   stroke-width: 2.2;
 }
-.island-ring circle:first-child {
-  stroke: rgb(255 255 255 / 0.18);
-}
+.island-ring circle:first-child { stroke: rgb(255 255 255 / 0.18); }
 .island-ring circle:last-child {
   stroke: var(--accent);
   stroke-linecap: round;
-  transition: stroke-dashoffset 0.3s ease;
+  transition: stroke-dashoffset 0.45s var(--island-spring);
 }
+/* 传完：绿圈里画出一个对勾 */
+.island-check {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.island-check circle { stroke: rgb(80 220 140 / 0.35); fill: rgb(80 220 140 / 0.12); }
+.island-check path {
+  stroke: #50dc8c;
+  stroke-dasharray: 10;
+  stroke-dashoffset: 10;
+  animation: island-check-draw 0.45s 0.12s ease-out forwards;
+}
+@keyframes island-check-draw { to { stroke-dashoffset: 0; } }
 .island-bar {
   position: relative;
   height: 4px;
@@ -1528,13 +1617,43 @@
   from { left: -35%; }
   to { left: 100%; }
 }
+/* 分出去的小圆泡：从主岛旁边“挤”出来 */
+.island-bubble {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 999px;
+  background: #0d0d0f;
+  color: #f5f5f7;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  cursor: pointer;
+  animation: island-split 0.6s var(--island-spring) both;
+  transition: transform 0.3s var(--island-spring);
+}
+.island-bubble:hover { transform: scale(1.08); }
+.island-bubble:active { transform: scale(0.92); }
+.island-bubble[data-tone="error"] { border-color: rgb(255 90 90 / 0.35); }
+@keyframes island-split {
+  from { transform: translateX(-26px) scale(0.3); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .update-island,
+  .dynamic-island,
   .island-layer,
+  .island-morph,
+  .island-bubble,
+  .island-arrow,
+  .island-check path,
   .island-ring circle:last-child,
   .island-bar > span {
     transition: none;
+    animation: none !important;
   }
+  .island-check path { stroke-dashoffset: 0; }
   .island-bar[data-indeterminate] > span {
     animation: none;
   }
