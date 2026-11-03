@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-/// 一次最多回这么多项，防止 node_modules 这种目录把一帧撑爆
-const MAX_ENTRIES: usize = 2000;
+/// 一次最多回这么多项，防止 node_modules 这种目录把一帧撑爆；再多前端一次画不过来，靠筛选找
+const MAX_ENTRIES: usize = 1000;
 /// 路径长度上限：比各系统的 PATH_MAX 宽松，挡住明显异常的输入
 const MAX_PATH: usize = 4096;
 
@@ -54,8 +54,10 @@ fn list_blocking(path: &Path) -> Result<DirListing> {
     let mut dirs = Vec::new();
     let mut truncated = false;
     for entry in entries.flatten() {
-        // 跟随符号链接：指向目录的链接也能进去
-        if !entry.path().is_dir() { continue; }
+        // 类型直接取自读目录的结果，不用逐项再查一遍（文件多或挂着网络盘时很慢）；
+        // 只有符号链接要跟过去看指向的是不是目录，这样指向目录的链接也能进去
+        let Ok(kind) = entry.file_type() else { continue };
+        if !(kind.is_dir() || kind.is_symlink() && entry.path().is_dir()) { continue; }
         let Some(name) = entry.file_name().to_str().map(str::to_string) else { continue };
         if dirs.len() >= MAX_ENTRIES {
             truncated = true;
@@ -118,8 +120,16 @@ mod tests {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
         std::fs::write(root.join("file.txt"), "x").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("c"), root.join("d-link")).unwrap();
+            std::os::unix::fs::symlink(root.join("file.txt"), root.join("file-link")).unwrap();
+        }
         let listing = list(root.to_str().unwrap()).await.unwrap();
         std::fs::remove_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        assert_eq!(listing.dirs, ["A", "b", "c", "d-link", ".hidden"]);
+        #[cfg(not(unix))]
         assert_eq!(listing.dirs, ["A", "b", "c", ".hidden"]);
         assert_eq!(listing.parent.as_deref(), root.parent().and_then(Path::to_str));
         assert!(!listing.truncated);
