@@ -1813,3 +1813,66 @@ async fn lsp_real_typescript_native() {
     guest.shutdown().await;
     host.shutdown().await;
 }
+
+/// 端口转发：对方电脑上的服务（这里是个回显服务）经 P2P 接到本机端口
+#[tokio::test]
+async fn port_forward_over_connection() {
+    use p2pcli_core::ports::Forward;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("pf-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("pf-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = Arc::new(guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap());
+    let local = Arc::new(guest.local_remote().await);
+
+    // “对方电脑上的开发服务器”。测试里两边是同一台电脑，它要占着 127.0.0.1 的这个端口号，
+    // 不然转发会抢到同号端口，对方连 localhost 时连回转发自己
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = server.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = server.accept().await {
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 64 * 1024];
+                while let Ok(n) = s.read(&mut buf).await { if n == 0 || s.write_all(&buf[..n]).await.is_err() { break; } }
+            });
+        }
+    });
+
+    // 对方电脑上没有服务的端口：开始时就报错
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let err = Forward::start(remote.clone(), closed, None).await.err().expect("没有服务的端口应该报错");
+    assert!(format!("{err:#}").contains("没有服务"), "{err:#}");
+    assert!(remote.list_ports().await.is_ok());
+
+    // 本机自己不用转发，直接用 localhost
+    assert!(Forward::start(local.clone(), port, None).await.is_err());
+
+    {
+        let forward = Forward::start(remote.clone(), port, None).await.unwrap();
+        // 回显服务占着同一个端口号（同一台电脑），本机换了一个
+        assert_ne!(forward.local_port, 0);
+        let echo = async |payload: Vec<u8>| {
+            let mut c = tokio::net::TcpStream::connect(("127.0.0.1", forward.local_port)).await.unwrap();
+            let (mut r, mut w) = c.split();
+            let send = async { w.write_all(&payload).await.unwrap(); w.shutdown().await.unwrap(); };
+            let mut back = Vec::new();
+            let recv = async { r.read_to_end(&mut back).await.unwrap(); };
+            tokio::time::timeout(Duration::from_secs(20), async { tokio::join!(send, recv) }).await.unwrap();
+            assert_eq!(back, payload);
+        };
+        // 几个连接一起，各自一条流
+        let big: Vec<u8> = (0..1_000_000u32).map(|i| i as u8).collect();
+        tokio::join!(echo(b"hello".to_vec()), echo(big), echo("中文".as_bytes().to_vec()));
+        let local_port = forward.local_port;
+        drop(forward);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.is_err(), "停止以后本机端口应该关掉");
+    }
+
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+

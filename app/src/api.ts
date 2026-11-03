@@ -176,6 +176,11 @@ export const CONFLICT_PREFIX = "conflict:";
 export const LSP_MISSING_PREFIX = "lsp_missing:";
 
 export interface LspOpened { lsp_id: number; server: string; root: string }
+
+/** 对方电脑上正在监听的端口 */
+export interface ListeningPort { port: number; process?: string; pid?: number }
+/** 一个正在进行的端口转发：对方的 remote_port 接到了本机的 local_port */
+export interface ForwardView { id: number; conn_id: number; remote_port: number; local_port: number; connections: number }
 export type LspEventView = { kind: "message"; message: string } | { kind: "closed"; reason: string | null };
 
 export interface OpenedTerminal { term_id: number; session_id: string }
@@ -501,6 +506,15 @@ export const api = {
   /** 按顺序发一批消息 */
   lspSend: (lspId: number, messages: string[]) => invoke<void>("lsp_send", { lspId, messages }),
   lspStop: (lspId: number) => invoke<void>("lsp_stop", { lspId }),
+  listPorts: (connId: number) => invoke<ListeningPort[]>("list_ports", { connId }),
+  /** 同一台设备的同一个端口已经在转发时返回已有的那个 */
+  forwardPort: (connId: number, remotePort: number, localPort?: number) => invoke<ForwardView>("forward_port", { connId, remotePort, localPort: localPort ?? null }),
+  stopForward: (id: number) => invoke<void>("stop_forward", { id }),
+  portForwards: () => invoke<ForwardView[]>("port_forwards"),
+  /** 在浏览器里打开转发过来的端口，path 是 / 开头的路径 */
+  openForward: (id: number, path = "/", https = false) => invoke<void>("open_forward", { id, path, https }),
+  /** 本机自己的服务，不用转发 */
+  openLocalhost: (port: number, path = "/", https = false) => invoke<void>("open_localhost", { port, path, https }),
   /** expected 是打开时的哈希；对不上会报 conflict:，force 直接覆盖 */
   writeFile: (connId: number, path: string, text: string, bom: boolean, expected: string | null, force = false) =>
     invoke<FileMeta>("write_file", { connId, path, text, bom, expected, force }),

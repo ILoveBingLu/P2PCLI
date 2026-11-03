@@ -3,7 +3,7 @@ import { useEffect, useRef, type MouseEvent } from "react";
 import { ClipboardPaste, Copy, TextSelect } from "lucide-react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
-import { findPathLinks, type TerminalPathLink } from "./terminalLinks";
+import { findLocalUrls, findPathLinks, type FoundUrl, type TerminalPathLink } from "./terminalLinks";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
@@ -87,6 +87,8 @@ interface Props {
   onPromptReady?: (ready: boolean) => void;
   /** 终端里的文件路径被 ⌘/Ctrl+点击 */
   onOpenPath?: (link: TerminalPathLink) => void;
+  /** 终端里的本机网址（http://localhost:5173/）被 ⌘/Ctrl+点击：对方电脑上的端口，要转发过来再打开 */
+  onOpenUrl?: (url: FoundUrl) => void;
   /** 对面的会话在 tmux 里（macOS、Linux）：滚轮交给它翻历史。Windows 的 psmux 没验证过，还是 xterm 自己的做法 */
   tmuxWheel?: boolean;
 }
@@ -98,14 +100,14 @@ const WHEEL_LINES = 3;
 /** 中键按下再松开：对面在复制模式就退出，不在就什么都不做 */
 const LEAVE_COPY_MODE = "\x1b[<1;1;1M\x1b[<1;1;1m";
 
-export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle, onPromptReady, onOpenPath, tmuxWheel = false }: Props) {
+export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle, onPromptReady, onOpenPath, onOpenUrl, tmuxWheel = false }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const resizeFrameRef = useRef<ReturnType<typeof terminalResizeFrame> | null>(null);
   const inputReady = useRef(false);
   const menu = useContextMenu();
-  const cb = useRef({ onStatus, onReady, onHandle, onPromptReady, onOpenPath });
-  cb.current = { onStatus, onReady, onHandle, onPromptReady, onOpenPath };
+  const cb = useRef({ onStatus, onReady, onHandle, onPromptReady, onOpenPath, onOpenUrl });
+  cb.current = { onStatus, onReady, onHandle, onPromptReady, onOpenPath, onOpenUrl };
 
   const openContextMenu = (e: MouseEvent<HTMLDivElement>) => {
     // 在捕获阶段拦截，避免 xterm 的隐藏输入框弹出 WebView 原生菜单。
@@ -172,7 +174,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     // 编译报错、AI 输出里的 src/main.rs:42:5 这类路径：⌘/Ctrl+点击在编辑器里打开（和 VS Code 一样，普通点击照常选文字）
     const links = term.registerLinkProvider({
       provideLinks(row, callback) {
-        if (!cb.current.onOpenPath) return callback(undefined);
+        if (!cb.current.onOpenPath && !cb.current.onOpenUrl) return callback(undefined);
         const line = term.buffer.active.getLine(row - 1);
         if (!line) return callback(undefined);
         // 中文这类宽字符占两格：记下每个字符在第几格
@@ -185,16 +187,31 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
           for (let i = 0; i < chars.length; i++) cells.push(x + 1);
           text += chars;
         }
-        const found = findPathLinks(text).map((link) => ({
-          range: { start: { x: cells[link.start], y: row }, end: { x: cells[link.end - 1], y: row } },
-          text: text.slice(link.start, link.end),
+        const range = (start: number, end: number) => ({ start: { x: cells[start], y: row }, end: { x: cells[end - 1], y: row } });
+        const leave = () => { el.title = ""; };
+        // 网址优先：网址里的一段路径不再单独算文件
+        const urls = cb.current.onOpenUrl ? findLocalUrls(text) : [];
+        const urlLinks = urls.map((url) => ({
+          range: range(url.start, url.end),
+          text: text.slice(url.start, url.end),
           decorations: { pointerCursor: true, underline: true },
-          hover: () => { el.title = t("⌘/Ctrl+点击在编辑器里打开"); },
-          leave: () => { el.title = ""; },
-          activate: (event: globalThis.MouseEvent) => {
-            if (event.metaKey || event.ctrlKey) cb.current.onOpenPath?.({ path: link.path, line: link.line, col: link.col });
-          },
+          hover: () => { el.title = t("⌘/Ctrl+点击在本机浏览器里打开（自动转发端口 {{port}}）", { port: url.port }); },
+          leave,
+          activate: (event: globalThis.MouseEvent) => { if (event.metaKey || event.ctrlKey) cb.current.onOpenUrl?.(url); },
         }));
+        const pathLinks = (cb.current.onOpenPath ? findPathLinks(text) : [])
+          .filter((link) => !urls.some((url) => link.start < url.end && link.end > url.start))
+          .map((link) => ({
+            range: range(link.start, link.end),
+            text: text.slice(link.start, link.end),
+            decorations: { pointerCursor: true, underline: true },
+            hover: () => { el.title = t("⌘/Ctrl+点击在编辑器里打开"); },
+            leave,
+            activate: (event: globalThis.MouseEvent) => {
+              if (event.metaKey || event.ctrlKey) cb.current.onOpenPath?.({ path: link.path, line: link.line, col: link.col });
+            },
+          }));
+        const found = [...urlLinks, ...pathLinks];
         callback(found.length ? found : undefined);
       },
     });

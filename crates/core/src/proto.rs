@@ -19,6 +19,8 @@ pub const REMOTE_EDIT_V1: &str = "remote_edit_v1";
 pub const REMOTE_EDIT_V2: &str = "remote_edit_v2";
 /// 远程编辑第三版：在对方电脑上启动语言服务，做代码补全、跳转、报错
 pub const REMOTE_LSP_V1: &str = "remote_lsp_v1";
+/// 端口转发：把对方电脑上 localhost 的端口接到本机
+pub const PORT_FORWARD_V1: &str = "port_forward_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -156,6 +158,12 @@ pub enum Msg {
     LspStarted { server: String, root: String },
     /// 语言服务自己退出了，message 里带退出码和它最后的报错；之后流就结束
     LspExited { message: String },
+    /// 端口转发：列出对方电脑上正在监听的端口。需要 port_forward_v1
+    ListPorts,
+    Ports { ports: Vec<crate::ports::ListeningPort> },
+    /// 端口转发：对方连它自己 localhost 上的这个端口，回 PortOpened 以后这条流上就是原样的 TCP 字节
+    ForwardPort { port: u16 },
+    PortOpened,
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,
