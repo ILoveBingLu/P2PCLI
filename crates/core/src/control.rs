@@ -1,4 +1,5 @@
-//! 本机控制口：命令行工具 p2pcli 通过它让正在运行的 P2PCLI 干活（列设备、发文件、拉文件、在对方电脑上跑命令、看收件）。
+//! 本机控制口：命令行工具 p2pcli 通过它让正在运行的 P2PCLI 干活（列设备、发文件、拉文件、在对方电脑上跑命令、看收件、
+//! 直接读写对方电脑上的文件）。
 //! Mac 和 Linux 是数据目录下的 Unix socket，权限只给本人；Windows 是按数据目录起名的命名管道。
 //! 一问多答：命令行发一行 JSON 请求，软件回若干行 JSON，最后一行是结果或错误。
 
@@ -56,6 +57,23 @@ pub enum Request {
         request: CollaborationRequest,
     },
     CollabDeliveries,
+    /// 读对方电脑上的文本文件（不超过 5 MB，UTF-8）
+    ReadFile { target: String, path: String },
+    /// 把 text 整个写进对方电脑上的文件，没有就新建；原来有 BOM 的保留
+    WriteFile { target: String, path: String, text: String },
+    /// 按原文替换：old 在文件里必须正好出现一次（all 时全部替换）；写回时核对文件没被别人改过
+    EditFile {
+        target: String,
+        path: String,
+        old: String,
+        new: String,
+        #[serde(default)]
+        all: bool,
+    },
+    /// 列目录
+    ListEntries { target: String, path: String },
+    /// 编辑器的其他文件操作：找文件、搜内容、新建目录、改名、移到废纸篓
+    Edit { target: String, request: crate::remote_ops::EditRequest },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +97,15 @@ pub enum Reply {
     },
     Collab { reply: crate::collaboration::model::Reply },
     CollabDeliveries { deliveries: Vec<delivery::Delivery> },
+    File { meta: crate::remote_fs::FileMeta, text: String },
+    /// 写好了；按原文替换时 replaced 是替换了几处
+    Saved {
+        meta: crate::remote_fs::FileMeta,
+        #[serde(default)]
+        replaced: usize,
+    },
+    Entries { listing: crate::remote_fs::EntryListing },
+    EditDone { reply: crate::remote_ops::EditReply },
     Error { message: String },
 }
 
@@ -190,7 +217,8 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, node: NodeSource) 
     let (r, mut w) = tokio::io::split(stream);
     let mut reader = BufReader::new(r);
     let mut line = String::new();
-    (&mut reader).take(1 << 20).read_line(&mut line).await?;
+    // 写文件时整个文件内容都在这一行里（最大 16 MB，JSON 转义后会变长）
+    (&mut reader).take(48 << 20).read_line(&mut line).await?;
     let req: Request = match serde_json::from_str(line.trim()) {
         Ok(req) => req,
         Err(e) => {
@@ -233,9 +261,93 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, node: NodeSource) 
         Request::Exec { target, command, cwd, timeout_secs } => {
             exec(&node, &mut reader, &mut w, &target, &command, cwd, timeout_secs).await?
         }
+        Request::ReadFile { target, path } => {
+            let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
+            let reply = remote.read_file(path, false).await.map(|(meta, text)| Reply::File { meta, text });
+            send(&mut w, &reply_or_error(reply)).await?
+        }
+        Request::WriteFile { target, path, text } => {
+            let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
+            // 原来的文件有 BOM 就留着；读不出来（不存在、太大）当没有
+            let bom = remote.read_file(path.clone(), false).await.map(|(meta, _)| meta.bom).unwrap_or(false);
+            let reply = remote.write_file(path, text, bom, None, true).await.map(|meta| Reply::Saved { meta, replaced: 0 });
+            send(&mut w, &reply_or_error(reply)).await?
+        }
+        Request::EditFile { target, path, old, new, all } => {
+            let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
+            send(&mut w, &reply_or_error(edit_file(&remote, path, old, new, all).await)).await?
+        }
+        Request::ListEntries { target, path } => {
+            let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
+            let reply = remote.list_entries(path).await.map(|listing| Reply::Entries { listing });
+            send(&mut w, &reply_or_error(reply)).await?
+        }
+        Request::Edit { target, request } => {
+            let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
+            let reply = remote.edit(request).await.map(|reply| Reply::EditDone { reply });
+            send(&mut w, &reply_or_error(reply)).await?
+        }
     }
     let _ = w.shutdown().await;
     Ok(())
+}
+
+fn reply_or_error(reply: Result<Reply>) -> Reply {
+    reply.unwrap_or_else(|e| {
+        let message = format!("{e:#}");
+        // 保存时发现文件被别人改过：说清楚怎么办
+        if message.contains(crate::remote_fs::CONFLICT) {
+            Reply::Error { message: "文件在读出来以后又被别人改过了（可能是对方终端里的程序或编辑器），请重新读一遍再改".into() }
+        } else {
+            Reply::Error { message }
+        }
+    })
+}
+
+/// 连上对方：可能要等它点同意，期间每秒报一次；连不上已经把错误回给命令行了，返回空
+async fn connect_remote<W: AsyncWrite + Unpin>(node: &Arc<Node>, target: &str, w: &mut W) -> Result<Option<Arc<crate::client::RemoteHost>>> {
+    let device = match node.find_device(target) {
+        Ok(d) => d,
+        Err(e) => { send(w, &Reply::Error { message: format!("{e:#}") }).await?; return Ok(None); }
+    };
+    let connect = node.remote_for(&device);
+    tokio::pin!(connect);
+    let remote = loop {
+        tokio::select! {
+            r = &mut connect => break r,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                send(w, &Reply::Status { message: format!("正在连接 {}", device.name) }).await?;
+            }
+        }
+    };
+    match remote {
+        Ok(remote) => Ok(Some(remote)),
+        Err(e) => { send(w, &Reply::Error { message: format!("{e:#}") }).await?; Ok(None) }
+    }
+}
+
+/// 按原文替换。和 AI 自带的编辑工具一样：原文要唯一，不唯一就报出现了几次，让它多带点上下文
+async fn edit_file(remote: &crate::client::RemoteHost, path: String, old: String, new: String, all: bool) -> Result<Reply> {
+    if old.is_empty() { anyhow::bail!("要替换的原文不能为空；新建文件或整个重写请用 p2pcli write"); }
+    if old == new { anyhow::bail!("原文和新文一样，不用改"); }
+    let (meta, text) = remote.read_file(path.clone(), false).await?;
+    let (old, new) = match_line_endings(&text, old, new);
+    let count = text.matches(&old).count();
+    if count == 0 { anyhow::bail!("文件里没找到要替换的原文（空格、缩进、换行要和文件里一模一样）"); }
+    if count > 1 && !all { anyhow::bail!("原文在文件里出现了 {count} 次，请多带一些上下文让它只出现一次，或者加 --all 全部替换"); }
+    let updated = if all { text.replace(&old, &new) } else { text.replacen(&old, &new, 1) };
+    // 带着读出来时的哈希写回：这期间文件被别人改过就报冲突，不盖掉
+    let meta = remote.write_file(path, updated, meta.bom, Some(meta.hash), false).await?;
+    Ok(Reply::Saved { meta, replaced: if all { count } else { 1 } })
+}
+
+/// 文件用 CRLF 换行，而原文、新文是 LF（命令行里写的一般是）：换成 CRLF 再找，免得对不上，也不把文件改成混用
+fn match_line_endings(text: &str, old: String, new: String) -> (String, String) {
+    if text.contains("\r\n") && !old.contains('\r') && old.contains('\n') {
+        (old.replace('\n', "\r\n"), new.replace("\r\n", "\n").replace('\n', "\r\n"))
+    } else {
+        (old, new)
+    }
 }
 
 /// 盯一次传输到结束，进度一行行报给命令行
@@ -381,4 +493,20 @@ async fn connect(data_dir: &Path) -> Result<tokio::net::windows::named_pipe::Nam
         }
     }
     Err(anyhow!("P2PCLI 忙不过来，稍后再试"))
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::match_line_endings;
+
+    #[test]
+    fn crlf_files_match_lf_snippets() {
+        let text = "a\r\nb\r\nc\r\n";
+        let (old, new) = match_line_endings(text, "a\nb".into(), "x\ny".into());
+        assert_eq!((old.as_str(), new.as_str()), ("a\r\nb", "x\r\ny"));
+        assert!(text.contains(&old));
+        // LF 文件、单行原文都原样
+        assert_eq!(match_line_endings("a\nb\n", "a\nb".into(), "x".into()), ("a\nb".into(), "x".into()));
+        assert_eq!(match_line_endings("a\r\nb", "a".into(), "x\ny".into()), ("a".into(), "x\ny".into()));
+    }
 }

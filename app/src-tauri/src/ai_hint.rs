@@ -214,7 +214,8 @@ mod tests {
         assert!((1..=1024).contains(&description.chars().count()), "描述 {} 个字符", description.chars().count());
         assert!(front.contains(MARK));
         // 文档里写的每条命令和选项，命令行里都得真有
-        for needle in ["p2pcli devices", "p2pcli exec", "--cwd", "--timeout", "p2pcli pull", "p2pcli send", "--to", "p2pcli inbox", "--json"] {
+        for needle in ["p2pcli devices", "p2pcli exec", "--cwd", "--timeout", "p2pcli pull", "p2pcli send", "--to", "p2pcli inbox", "--json",
+            "p2pcli cat", "p2pcli edit", "--old", "--new", "--all", "p2pcli write", "p2pcli ls", "p2pcli find", "p2pcli grep", "p2pcli mkdir", "p2pcli mv", "p2pcli rm", "--offset", "--limit"] {
             assert!(SKILL.contains(needle), "缺 {needle}");
         }
     }
