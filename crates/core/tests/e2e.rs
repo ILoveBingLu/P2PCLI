@@ -1920,3 +1920,73 @@ async fn git_panel_ops_over_connection() {
     guest.shutdown().await;
     host.shutdown().await;
 }
+
+/// 命令行直接读写对方电脑上的文件（p2pcli cat/write/edit/ls/find/grep/mv）：走控制口和真的连接
+#[tokio::test]
+async fn control_socket_reads_and_edits_remote_files() {
+    use p2pcli_core::control::{self, Reply, Request};
+    use p2pcli_core::remote_ops::{EditReply, EditRequest};
+    use p2pcli_core::store::RecentDevice;
+    let (host, _delegate, guest, remote) = paired_pair("ctlfs").await;
+    guest.recent.upsert(RecentDevice { code: "123456780".into(), endpoint_id: host.id().to_string(), name: "被连机".into(), platform: "macos".into(), sort_at: 0, last_used: 0 }).unwrap();
+    guest.adopt_remote(remote.clone());
+    let data_dir = std::env::temp_dir().join(format!("p2pcli-ctlfs-{}", std::process::id()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let node = guest.clone();
+    control::serve(&data_dir, Arc::new(move || node.clone())).await.unwrap();
+    let ask = |req: Request| {
+        let data_dir = data_dir.clone();
+        async move {
+            let mut replies = Vec::new();
+            control::request(&data_dir, &req, |r| replies.push(r)).await.unwrap();
+            replies.into_iter().filter(|r| !matches!(r, Reply::Status { .. })).last().expect("没有回复")
+        }
+    };
+    let error = |reply: Reply| match reply { Reply::Error { message } => message, other => panic!("应该出错：{other:?}") };
+
+    let work = temp_dir("ctlfs-work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    let file = work.join("src/main.rs");
+    let path = file.to_string_lossy().into_owned();
+    let target = || "被连机".to_string();
+
+    // 新建、读回
+    let Reply::Saved { meta, .. } = ask(Request::WriteFile { target: target(), path: path.clone(), text: "fn main() {\n    let x = 1;\n    let y = 1;\n}\n".into() }).await else { panic!() };
+    assert_eq!(meta.size, 44);
+    let Reply::File { text, .. } = ask(Request::ReadFile { target: target(), path: path.clone() }).await else { panic!() };
+    assert!(text.contains("let x = 1;"));
+
+    // 按原文替换：唯一时改一处；出现多次要 --all；找不到报错
+    let Reply::Saved { replaced, .. } = ask(Request::EditFile { target: target(), path: path.clone(), old: "let x = 1;".into(), new: "let x = 2;".into(), all: false }).await else { panic!() };
+    assert_eq!(replaced, 1);
+    assert!(error(ask(Request::EditFile { target: target(), path: path.clone(), old: "    let ".into(), new: "    const ".into(), all: false }).await).contains("出现了 2 次"));
+    let Reply::Saved { replaced, .. } = ask(Request::EditFile { target: target(), path: path.clone(), old: "let".into(), new: "let mut".into(), all: true }).await else { panic!() };
+    assert_eq!(replaced, 2);
+    assert!(error(ask(Request::EditFile { target: target(), path: path.clone(), old: "不存在的内容".into(), new: "x".into(), all: false }).await).contains("没找到"));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "fn main() {\n    let mut x = 2;\n    let mut y = 1;\n}\n");
+
+    // CRLF 的文件：命令行里写的 LF 原文也对得上，改完还是 CRLF
+    let win = work.join("src/win.txt");
+    std::fs::write(&win, "a\r\nb\r\nc\r\n").unwrap();
+    ask(Request::EditFile { target: target(), path: win.to_string_lossy().into(), old: "a\nb".into(), new: "x\ny".into(), all: false }).await;
+    assert_eq!(std::fs::read_to_string(&win).unwrap(), "x\r\ny\r\nc\r\n");
+
+    // 列目录、找文件、搜内容、改名
+    let Reply::Entries { listing } = ask(Request::ListEntries { target: target(), path: work.join("src").to_string_lossy().into() }).await else { panic!() };
+    assert_eq!(listing.entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["main.rs", "win.txt"]);
+    let Reply::EditDone { reply: EditReply::Files { list } } = ask(Request::Edit { target: target(), request: EditRequest::ListFiles { root: work.to_string_lossy().into() } }).await else { panic!() };
+    assert_eq!(list.files, ["src/main.rs", "src/win.txt"]);
+    let Reply::EditDone { reply: EditReply::Search { result } } = ask(Request::Edit { target: target(), request: EditRequest::Search { root: work.to_string_lossy().into(), query: r"let mut \w".into(), regex: true, case_sensitive: true, whole_word: false } }).await else { panic!() };
+    assert_eq!(result.files[0].matches.len(), 2);
+    let moved = work.join("src/app.rs").to_string_lossy().into_owned();
+    ask(Request::Edit { target: target(), request: EditRequest::Rename { from: path.clone(), to: moved.clone() } }).await;
+    assert!(std::path::Path::new(&moved).exists() && !file.exists());
+    // 读不存在的文件：给错误
+    assert!(!error(ask(Request::ReadFile { target: target(), path }).await).is_empty());
+
+    std::fs::remove_dir_all(&work).ok();
+    std::fs::remove_dir_all(&data_dir).ok();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}

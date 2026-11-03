@@ -1,6 +1,6 @@
 ---
 name: p2pcli
-description: 在另一台电脑上办事：跑命令、把文件发过去、把对方的文件拉回来。对方设备在 `p2pcli devices` 的列表里（用 P2PCLI 连过）时，用 p2pcli 命令操作它。用户说另一台电脑、远程设备、某台机器、设备码、去那台机器上看看或跑一下或拿个文件，或者提到 P2PCLI 时用。Run commands on, send files to and pull files from another computer paired in P2PCLI (listed by `p2pcli devices`). Use the `p2pcli` command when the user refers to a remote machine, another computer, a device name or a device code.
+description: 在另一台电脑上办事：直接读、改、搜对方电脑上的文件和代码（不用来回传文件）、跑命令、把文件发过去、把对方的文件拉回来。对方设备在 `p2pcli devices` 的列表里（用 P2PCLI 连过）时，用 p2pcli 命令操作它。用户说另一台电脑、远程设备、某台机器、设备码、去那台机器上看看或改一下或跑一下或拿个文件，或者提到 P2PCLI 时用。Read, edit and search files on another computer paired in P2PCLI in place (no copying back and forth), run commands there, and send or pull files. Use the `p2pcli` command when the user refers to a remote machine, another computer, a device name or a device code.
 metadata:
   managed-by: p2pcli
 ---
@@ -9,7 +9,7 @@ metadata:
 
 # 用 p2pcli 操作其他电脑
 
-P2PCLI 是点对点远程终端软件。本机的 P2PCLI 开着时，终端里的 `p2pcli` 命令可以对连过的设备办事：跑命令、发文件、拉文件。命令在本机终端里敲，不用打开 P2PCLI 的窗口。
+P2PCLI 是点对点远程终端软件。本机的 P2PCLI 开着时，终端里的 `p2pcli` 命令可以对连过的设备办事：直接读写对方的文件、跑命令、发文件、拉文件。命令在本机终端里敲，不用打开 P2PCLI 的窗口。
 
 先看有哪些设备、在不在线：
 
@@ -18,6 +18,44 @@ p2pcli devices          # 设备名、系统、在线与否、延迟、设备码
 ```
 
 设备名可以只写一部分，也可以写设备码或公钥开头几位。对上多台会报错，换成设备码。
+
+## 直接读、改、搜对方电脑上的文件
+
+要看或改对方电脑上的代码、配置，用下面这些命令直接在原地改，**不要**先 `pull` 到本机、改完再 `send` 回去。它们和你自带的读、写、改、搜工具一一对应：
+
+```sh
+p2pcli cat 设备 ~/proj/src/main.rs                 # 读文件（UTF-8 文本，不超过 5 MB）
+p2pcli cat 设备 ~/proj/src/main.rs -n --offset 120 --limit 60   # 带行号，只看第 120 行起的 60 行
+p2pcli edit 设备 ~/proj/src/main.rs --old '旧的一段' --new '新的一段'   # 按原文替换
+p2pcli write 设备 ~/proj/notes.md < 本机文件        # 用标准输入的内容整个写入（新建或整个重写）
+p2pcli ls 设备 ~/proj                               # 列目录，目录后面带 /
+p2pcli find 设备 ~/proj '*.rs'                      # 按名字找文件，认 .gitignore；可用 * ? **
+p2pcli grep 设备 'fn main' ~/proj                   # 搜内容（正则；-F 按普通文字，-i 不分大小写，-w 全字）
+p2pcli mkdir 设备 ~/proj/src/new -p                 # 建目录
+p2pcli mv 设备 ~/proj/a.rs ~/proj/b.rs              # 改名或移动，不会盖掉已有的文件
+p2pcli rm 设备 ~/proj/old.rs                        # 移到对方的废纸篓，能找回
+```
+
+- `edit` 和你自带的编辑工具规则一样：`--old` 要和文件里一字不差（包括缩进、空格、换行），而且只能出现一次；出现多次会报出现了几次，多带几行上下文让它唯一，或者确实要全换时加 `--all`。先 `cat` 看清楚再改。
+- 多行的原文和新文用 heredoc 传，避免引号出错：
+
+  ```sh
+  p2pcli edit 设备 ~/proj/src/main.rs --old "$(cat <<'EOF'
+      let x = 1;
+      let y = 2;
+  EOF
+  )" --new "$(cat <<'EOF'
+      let x = 10;
+  EOF
+  )"
+  ```
+
+- 改的时候会核对文件在读出来之后有没有被别人改过（比如对方终端里的程序、用户在 P2PCLI 编辑器里保存）；改过就报错不盖掉，重新 `cat` 一遍再改。文件用 CRLF 换行时，命令行里写的 LF 原文也能对上，改完还是 CRLF。
+- `write` 是整个替换，只用来新建文件或整个重写；改一部分用 `edit`。
+- 路径是对方电脑上的路径：绝对路径、`~` 开头，或者相对路径（从对方的用户目录算起）。对方是 Windows 时写 `C:\Users\...` 或 `~\...`。
+- `grep` 没找到时退出码是 1；所有命令加 `--json` 给程序读（`cat --json` 带文件哈希和总行数）。
+- 二进制文件、非 UTF-8 文件、超过 5 MB 的文件不能 `cat`/`edit`，这类用 `pull`/`send`。
+- 跑构建、测试、git 还是用下面的 `exec`。
 
 ## 在对方电脑上跑命令
 

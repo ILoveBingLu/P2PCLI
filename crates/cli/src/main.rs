@@ -1,4 +1,4 @@
-//! p2pcli 命令行：让正在运行的 P2PCLI 发文件、拉文件、在别的设备上跑命令、列设备、看收到的文件。
+//! p2pcli 命令行：让正在运行的 P2PCLI 发文件、拉文件、在别的设备上跑命令、直接读写别的设备上的文件、列设备、看收到的文件。
 //! 给人用，也给 AI 用：加 --json 输出好解析的结果；出错时退出码不是 0。
 
 use std::io::{IsTerminal, Write};
@@ -14,13 +14,14 @@ use p2pcli_core::node::KnownDevice;
 use p2pcli_core::presence::PresenceState;
 
 mod collab;
+mod fs;
 mod worker;
 
 /// 等对方同意超过这么久才提示，配对过的设备一般马上就收
 const WAITING_HINT_AFTER: Duration = Duration::from_millis(1500);
 
 #[derive(Parser)]
-#[command(name = "p2pcli", version, about = "让正在运行的 P2PCLI 发文件、拉文件、在别的设备上跑命令、列设备、看收到的文件")]
+#[command(name = "p2pcli", version, about = "让正在运行的 P2PCLI 发文件、拉文件、在别的设备上跑命令、直接读写别的设备上的文件、列设备、看收到的文件")]
 struct Cli {
     /// 输出 JSON，方便程序和 AI 读
     #[arg(long, global = true)]
@@ -76,6 +77,8 @@ enum Cmd {
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+    #[command(flatten)]
+    Fs(fs::FsCmd),
     /// 看最近收到的文件
     Inbox {
         /// 最多列几条
@@ -107,6 +110,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     let dir = cli.data_dir.or_else(control::data_dir).ok_or_else(|| anyhow!("找不到 P2PCLI 的数据目录"))?;
     match cli.cmd {
         Cmd::Collab(options) => return collab::run(options, &dir, cli.json).await,
+        Cmd::Fs(cmd) => return fs::run(cmd, &dir, cli.json).await,
         Cmd::Devices => {
             let devices = ask(&dir, Request::Devices, |r| match r {
                 Reply::Devices { devices } => Some(devices),
