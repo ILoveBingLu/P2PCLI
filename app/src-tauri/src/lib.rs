@@ -882,9 +882,14 @@ async fn list_entries(state: State<'_, AppState>, conn_id: u64, path: String) ->
 }
 
 #[tauri::command]
-async fn read_file(state: State<'_, AppState>, conn_id: u64, path: String) -> Result<OpenedFile, String> {
-    let (meta, text) = state.remote(conn_id)?.read_file(path).await.map_err(|e| format!("{e:#}"))?;
+async fn read_file(state: State<'_, AppState>, conn_id: u64, path: String, head: Option<bool>) -> Result<OpenedFile, String> {
+    let (meta, text) = state.remote(conn_id)?.read_file(path, head.unwrap_or(false)).await.map_err(|e| format!("{e:#}"))?;
     Ok(OpenedFile { meta, text })
+}
+
+#[tauri::command]
+async fn edit_op(state: State<'_, AppState>, conn_id: u64, request: p2pcli_core::remote_ops::EditRequest) -> Result<p2pcli_core::remote_ops::EditReply, String> {
+    state.remote(conn_id)?.edit(request).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -1420,6 +1425,7 @@ pub fn run() {
             list_entries,
             read_file,
             write_file,
+            edit_op,
             term_input,
             term_resize,
             term_close,

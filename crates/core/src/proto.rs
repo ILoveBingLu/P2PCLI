@@ -15,6 +15,8 @@ pub const AGENT_MESSAGE_V1: &str = "agent_message_v1";
 pub const DIR_PICKER_V1: &str = "dir_picker_v1";
 /// 远程编辑：列出目录里的文件、读写文本文件
 pub const REMOTE_EDIT_V1: &str = "remote_edit_v1";
+/// 远程编辑第二阶段：搜索、文件操作、Git 状态，打开文件时可以读 Git 最新提交里的版本
+pub const REMOTE_EDIT_V2: &str = "remote_edit_v2";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -117,7 +119,12 @@ pub enum Msg {
     ListEntries { path: String },
     Entries { listing: crate::remote_fs::EntryListing },
     /// 打开文本文件：回 FileOpened，后面跟内容的原始字节帧（UTF-8，不含 BOM），流结束就是读完
-    ReadFile { path: String },
+    ReadFile {
+        path: String,
+        /// 读 Git 最新提交里的版本（对比用），不读磁盘上的；需要 remote_edit_v2
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        head: bool,
+    },
     FileOpened { meta: crate::remote_fs::FileMeta },
     /// 保存文本文件：后面跟 size 字节内容的原始字节帧；expected 是打开时的哈希，对不上就报冲突
     WriteFile {
@@ -130,6 +137,9 @@ pub enum Msg {
         force: bool,
     },
     FileSaved { meta: crate::remote_fs::FileMeta },
+    /// 远程编辑的其他操作：搜索、按名字找文件、看文件变没变、新建/重命名/删除、Git 状态
+    Edit { request: crate::remote_ops::EditRequest },
+    EditDone { reply: crate::remote_ops::EditReply },
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,

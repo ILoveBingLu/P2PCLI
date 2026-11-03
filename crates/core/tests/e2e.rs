@@ -1577,7 +1577,7 @@ async fn remote_edit_round_trip_over_connection() {
     assert_eq!(listing.entries.iter().map(|e| (e.name.as_str(), e.dir)).collect::<Vec<_>>(), [("src", true)]);
 
     let path = file.to_string_lossy().into_owned();
-    let (meta, text) = remote.read_file(path.clone()).await.unwrap();
+    let (meta, text) = remote.read_file(path.clone(), false).await.unwrap();
     assert!(meta.bom && !meta.readonly);
     assert_eq!(text, big);
 
@@ -1593,7 +1593,55 @@ async fn remote_edit_round_trip_over_connection() {
     remote.write_file(path.clone(), "mine".into(), false, Some(saved.hash), true).await.unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine");
 
-    assert!(remote.read_file(work.to_string_lossy().into_owned()).await.unwrap_err().to_string().contains("目录"));
+    assert!(remote.read_file(work.to_string_lossy().into_owned(), false).await.unwrap_err().to_string().contains("目录"));
+
+    std::fs::remove_dir_all(&work).ok();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
+/// 远程编辑第二阶段走真连接：搜索、文件列表、新建、改名、查状态、Git 状态和 Git 版本
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_edit_ops_over_connection() {
+    use p2pcli_core::remote_ops::{EditReply, EditRequest};
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("ops-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("ops-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+
+    let work = temp_dir("ops-work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(work.join("src/lib.rs"), "fn needle() {}\n").unwrap();
+    let root = work.to_string_lossy().into_owned();
+
+    let EditReply::Search { result } = remote.edit(EditRequest::Search { root: root.clone(), query: "needle".into(), regex: false, case_sensitive: false, whole_word: false }).await.unwrap() else { panic!() };
+    assert_eq!(result.files.len(), 1);
+    assert_eq!((result.files[0].matches[0].line, result.files[0].matches[0].col), (1, 4));
+
+    let new_file = work.join("src/new.rs").to_string_lossy().into_owned();
+    assert_eq!(remote.edit(EditRequest::CreateFile { path: new_file.clone() }).await.unwrap(), EditReply::Done);
+    let renamed = work.join("src/renamed.rs").to_string_lossy().into_owned();
+    remote.edit(EditRequest::Rename { from: new_file.clone(), to: renamed.clone() }).await.unwrap();
+    let EditReply::Files { list } = remote.edit(EditRequest::ListFiles { root: root.clone() }).await.unwrap() else { panic!() };
+    assert_eq!(list.files, ["src/lib.rs", "src/renamed.rs"]);
+    let EditReply::Stats { stats } = remote.edit(EditRequest::Stat { paths: vec![new_file, renamed] }).await.unwrap() else { panic!() };
+    assert!(stats[0].is_none() && stats[1].is_some());
+
+    // 有 git 时：状态和最新提交里的版本
+    let git = |args: &[&str]| std::process::Command::new("git").arg("-C").arg(&work).args(args).output().is_ok_and(|o| o.status.success());
+    if git(&["init", "-q", "-b", "main"]) && git(&["-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "x"]) {
+        git(&["add", "src/lib.rs"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "-m", "lib"]);
+        std::fs::write(work.join("src/lib.rs"), "fn changed() {}\n").unwrap();
+        let EditReply::Git { status: Some(status) } = remote.edit(EditRequest::GitStatus { root: root.clone() }).await.unwrap() else { panic!() };
+        assert!(status.entries.iter().any(|e| e.path == "src/lib.rs" && e.status == " M"), "{status:?}");
+        let (meta, text) = remote.read_file(work.join("src/lib.rs").to_string_lossy().into_owned(), true).await.unwrap();
+        assert_eq!(text, "fn needle() {}\n");
+        assert!(meta.readonly);
+    }
 
     std::fs::remove_dir_all(&work).ok();
     remote.close();

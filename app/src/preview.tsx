@@ -372,9 +372,12 @@ if (s === "agents") {
   step("waiting", 4000);
   step("idle", 9000);
 }
-// 代码编辑器的假文件：s=launcher-editor-conflict 时打开 README 3 秒后“被 AI 改掉”，这时再保存会冲突
+// 代码编辑器的假文件：s=launcher-editor-conflict 时打开 README 3 秒后“被 AI 改掉”。
+// head 是 Git 最新提交里的内容（没有 head 的是未跟踪文件），仓库根目录是 /Users/demo/Projects/demo
+type PreviewFile = { text: string; binary?: boolean; readonly?: boolean; bom?: boolean; head?: string; mtime?: number };
+const previewRepo = "/Users/demo/Projects/demo";
 const previewDirs = new Set(["/Users/demo/Projects/demo/src/empty"]);
-const previewFs = new Map<string, { text: string; binary?: boolean; readonly?: boolean; bom?: boolean }>([
+const previewFs = new Map<string, PreviewFile>([
   ["/Users/demo/Projects/demo/README.md", { text: "# Demo\n\n远程编辑预览。\n\n- 在左边点文件打开\n- ⌘S 保存\n" }],
   ["/Users/demo/Projects/demo/package.json", { text: '{\n  "name": "demo",\n  "version": "1.0.0",\n  "scripts": { "dev": "vite" }\n}\n' }],
   ["/Users/demo/Projects/demo/src/main.ts", { text: 'import { greet } from "./util";\n\n// 中文注释，标点不会被框起来\nconst name: string = "P2PCLI";\nconsole.log(greet(name));\n' }],
@@ -385,8 +388,61 @@ const previewFs = new Map<string, { text: string; binary?: boolean; readonly?: b
   ["/Users/demo/Projects/demo/.gitignore", { text: "node_modules\ndist\n" }],
 ]);
 function previewHash(text: string) { let h = 0; for (const c of text) h = (h * 31 + c.charCodeAt(0)) | 0; return String(h); }
-function previewMeta(path: string, file: { text: string; readonly?: boolean; bom?: boolean }) {
-  return { path, hash: previewHash(file.text), size: file.text.length, bom: !!file.bom, readonly: !!file.readonly, mtime: Date.now() };
+function previewMeta(path: string, file: PreviewFile) {
+  return { path, hash: previewHash(file.text), size: file.text.length, bom: !!file.bom, readonly: !!file.readonly, mtime: file.mtime ?? 1 };
+}
+// 除了 main.ts（改过）和 server.rs（新加的，未跟踪），Git 里的版本和现在一样
+for (const [path, file] of previewFs) {
+  if (path.endsWith("server.rs")) continue;
+  file.head = path.endsWith("main.ts") ? file.text.replace("// 中文注释，标点不会被框起来\n", "") : file.text;
+}
+function previewUnder(path: string, dir: string) { return path === dir || path.startsWith(dir + "/"); }
+function previewEdit(request: any) {
+  switch (request.op) {
+    case "search": {
+      let pattern = request.regex ? request.query : request.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (request.whole_word) pattern = `\\b(?:${pattern})\\b`;
+      const re = new RegExp(pattern, request.case_sensitive ? "g" : "gi");
+      const files = [...previewFs].filter(([p, f]) => previewUnder(p, request.root) && !f.binary).map(([path, f]) => ({
+        path,
+        matches: f.text.split(/\r?\n/).flatMap((line, i) => [...line.matchAll(re)].filter((m) => m[0]).map((m) => ({
+          line: i + 1, col: m.index! + 1, len: m[0].length, preview: line.trimStart(), preview_col: m.index! - (line.length - line.trimStart().length),
+        }))),
+      })).filter((f) => f.matches.length).sort((a, b) => a.path.localeCompare(b.path));
+      return { kind: "search", result: { files, truncated: false } };
+    }
+    case "list_files":
+      return { kind: "files", list: { root: request.root, files: [...previewFs.keys()].filter((p) => previewUnder(p, request.root)).map((p) => p.slice(request.root.length + 1)).sort(), truncated: false } };
+    case "stat":
+      return { kind: "stats", stats: request.paths.map((p: string) => {
+        const file = previewFs.get(p);
+        return file ? { size: file.text.length, mtime: file.mtime ?? 1, dir: false } : previewDirs.has(p) ? { size: 0, mtime: 1, dir: true } : null;
+      }) };
+    case "create_file":
+      if (previewFs.has(request.path)) throw new Error(`新建文件失败 ${request.path}: File exists (os error 17)`);
+      previewFs.set(request.path, { text: "" });
+      return { kind: "done" };
+    case "create_dir":
+      previewDirs.add(request.path);
+      return { kind: "done" };
+    case "rename": {
+      if (previewFs.has(request.to) || previewDirs.has(request.to)) throw new Error(`已经有同名的文件或文件夹：${request.to}`);
+      for (const [p, f] of [...previewFs]) if (previewUnder(p, request.from)) { previewFs.delete(p); previewFs.set(request.to + p.slice(request.from.length), f); }
+      for (const d of [...previewDirs]) if (previewUnder(d, request.from)) { previewDirs.delete(d); previewDirs.add(request.to + d.slice(request.from.length)); }
+      return { kind: "done" };
+    }
+    case "delete":
+      for (const p of [...previewFs.keys()]) if (previewUnder(p, request.path)) previewFs.delete(p);
+      for (const d of [...previewDirs]) if (previewUnder(d, request.path)) previewDirs.delete(d);
+      return { kind: "done" };
+    case "git_status": {
+      if (!previewUnder(request.root, previewRepo)) return { kind: "git", status: null };
+      const entries = [...previewFs].filter(([, f]) => f.head !== f.text).map(([p, f]) => ({ path: p.slice(previewRepo.length + 1), status: f.head === undefined ? "??" : " M" }));
+      const prefix = request.root === previewRepo ? "" : request.root.slice(previewRepo.length + 1) + "/";
+      return { kind: "git", status: { top: previewRepo, prefix, branch: "main", entries } };
+    }
+  }
+  throw new Error("unknown op");
 }
 let previewAiEdited = false;
 const attachments = new Map<number, { sessionId: string; status: any; output: any }>();
@@ -674,9 +730,13 @@ mockIPC(
         const file = previewFs.get(String(args.path));
         if (!file) throw new Error(`打不开文件 ${args.path}: No such file or directory (os error 2)`);
         if (file.binary) throw new Error("这是二进制文件，不能在编辑器里打开");
+        if (args.head) {
+          if (file.head === undefined) throw new Error("这个文件不在 Git 的最新提交里");
+          return { meta: { ...previewMeta(String(args.path), { text: file.head }), readonly: true }, text: file.head };
+        }
         if (s === "launcher-editor-conflict" && args.path.endsWith("README.md") && !previewAiEdited) {
           previewAiEdited = true;
-          setTimeout(() => { file.text += "\n（AI 刚刚在对方电脑上改了这一行）\n"; }, 3000);
+          setTimeout(() => { file.text += "\n（AI 刚刚在对方电脑上改了这一行）\n"; file.mtime = Date.now(); }, 3000);
         }
         return { meta: previewMeta(String(args.path), file), text: file.text };
       }
@@ -685,10 +745,13 @@ mockIPC(
         const path = String(args.path);
         const file = previewFs.get(path);
         if (!args.force && file && args.expected !== previewHash(file.text)) throw new Error("conflict: 文件在对方电脑上已被修改");
-        const next = { ...(file ?? {}), text: String(args.text) };
+        const next = { ...(file ?? {}), text: String(args.text), mtime: Date.now() };
         previewFs.set(path, next);
         return previewMeta(path, next);
       }
+      case "edit_op":
+        await new Promise((r) => setTimeout(r, 150));
+        return previewEdit(args.request);
       case "change_dir": {
         await new Promise((r) => setTimeout(r, 200));
         const session = terminalSessions.find((x) => x.id === args.sessionId);

@@ -139,6 +139,37 @@ export interface FileMeta {
   mtime: number | null;
 }
 export interface OpenedFile { meta: FileMeta; text: string }
+/** 远程编辑第二阶段：搜索、找文件、看文件变没变、文件操作、Git 状态 */
+export type EditRequest =
+  | { op: "search"; root: string; query: string; regex: boolean; case_sensitive: boolean; whole_word: boolean }
+  | { op: "list_files"; root: string }
+  | { op: "stat"; paths: string[] }
+  | { op: "create_file"; path: string }
+  | { op: "create_dir"; path: string }
+  | { op: "rename"; from: string; to: string }
+  | { op: "delete"; path: string }
+  | { op: "git_status"; root: string };
+/** 列号、长度按 UTF-16 算，列号从 1 开始；preview_col 是匹配在预览里的位置，从 0 开始 */
+export interface SearchMatch { line: number; col: number; len: number; preview: string; preview_col: number }
+export interface SearchResult { files: { path: string; matches: SearchMatch[] }[]; truncated: boolean }
+export interface FileList { root: string; files: string[]; truncated: boolean }
+export interface FileStat { size: number; mtime: number | null; dir: boolean }
+/** status 是 git status --porcelain 的两个字母，比如 " M"、"A "、"??"；path 相对 top，分隔符是 / */
+/** prefix：请求的目录相对仓库根目录的位置（如 "app/src/"），按它把 entries 换算成文件树里的路径 */
+export interface GitStatus { top: string; prefix: string; branch: string | null; entries: { path: string; status: string }[] }
+export type EditReply =
+  | { kind: "search"; result: SearchResult }
+  | { kind: "files"; list: FileList }
+  | { kind: "stats"; stats: (FileStat | null)[] }
+  | { kind: "done" }
+  | { kind: "git"; status: GitStatus | null };
+
+async function edit<K extends EditReply["kind"]>(connId: number, request: EditRequest, kind: K): Promise<Extract<EditReply, { kind: K }>> {
+  const reply = await invoke<EditReply>("edit_op", { connId, request });
+  if (reply.kind !== kind) throw new Error(`unexpected reply: ${reply.kind}`);
+  return reply as Extract<EditReply, { kind: K }>;
+}
+
 /** 保存时文件被别人改过，后端报的错以它开头 */
 export const CONFLICT_PREFIX = "conflict:";
 
@@ -444,7 +475,18 @@ export const api = {
   changeDir: (connId: number, sessionId: string, path: string) => invoke<void>("change_dir", { connId, sessionId, path }),
   /** 远程编辑：列出目录里的子目录和文件 */
   listEntries: (connId: number, path: string) => invoke<EntryListing>("list_entries", { connId, path }),
-  readFile: (connId: number, path: string) => invoke<OpenedFile>("read_file", { connId, path }),
+  /** head 为真时读 Git 最新提交里的版本（对比用） */
+  readFile: (connId: number, path: string, head = false) => invoke<OpenedFile>("read_file", { connId, path, head }),
+  searchFiles: async (connId: number, root: string, query: string, options: { regex: boolean; caseSensitive: boolean; wholeWord: boolean }) =>
+    (await edit(connId, { op: "search", root, query, regex: options.regex, case_sensitive: options.caseSensitive, whole_word: options.wholeWord }, "search")).result,
+  listFiles: async (connId: number, root: string) => (await edit(connId, { op: "list_files", root }, "files")).list,
+  statFiles: async (connId: number, paths: string[]) => (await edit(connId, { op: "stat", paths }, "stats")).stats,
+  createFile: (connId: number, path: string) => edit(connId, { op: "create_file", path }, "done"),
+  createDir: (connId: number, path: string) => edit(connId, { op: "create_dir", path }, "done"),
+  renamePath: (connId: number, from: string, to: string) => edit(connId, { op: "rename", from, to }, "done"),
+  /** 移到废纸篓/回收站 */
+  deletePath: (connId: number, path: string) => edit(connId, { op: "delete", path }, "done"),
+  gitStatus: async (connId: number, root: string) => (await edit(connId, { op: "git_status", root }, "git")).status,
   /** expected 是打开时的哈希；对不上会报 conflict:，force 直接覆盖 */
   writeFile: (connId: number, path: string, text: string, bom: boolean, expected: string | null, force = false) =>
     invoke<FileMeta>("write_file", { connId, path, text, bom, expected, force }),
