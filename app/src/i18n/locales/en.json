@@ -1039,5 +1039,8 @@
   "git 运行超时（可能在等输入密码），请在终端里执行": "git timed out (it may be waiting for a password). Run it in the terminal",
   "现在不在任何分支上，没法推送": "Not on any branch, so there's nothing to push",
   "这个仓库没有配置远程仓库": "This repository has no remote configured",
-  "拉取": "Pull"
+  "拉取": "Pull",
+  "设备工具": "Device tools",
+  "在单独的窗口里打开代码编辑器，直接编辑这台设备上的文件": "Open the code editor in its own window to edit files on this device directly",
+  "{{device}} — 代码编辑器": "{{device}} — Code editor"
 }
