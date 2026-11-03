@@ -580,7 +580,8 @@ export default function App() {
       }
       closeEditor(endpointId);
     }
-    if (tab && !rest.some((tab) => tab.connId === tab.connId))
+    // 这条连接上没有别的标签了就断开；会话页还开着时留给它，返回时它自己会断
+    if (tab && !rest.some((other) => other.connId === tab.connId) && sessionTarget?.connId !== tab.connId)
       api.disconnect(tab.connId).catch((e) => toast.error(String(e)));
     setTabs(rest);
     if (activeKey === key)
