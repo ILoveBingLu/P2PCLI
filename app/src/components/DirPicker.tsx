@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Popover } from "@heroui/react";
 import { useTranslation } from "react-i18next";
-import { ArrowUp, CornerDownLeft, Folder, House, LoaderCircle } from "lucide-react";
+import { ArrowUp, CornerDownLeft, FileCode2, Folder, House, LoaderCircle } from "lucide-react";
 import { api, type DirListing } from "../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,12 +17,14 @@ function sameListing(a: DirListing | null, b: DirListing) {
  * 只在终端停在空闲提示符时能切；跑着程序（包括命令行 AI）时只能看，免得 cd 被当成输入发给程序。
  */
 // 状态栏随会话轮询整页重渲染，属性都是原始值，没变就不用跟着重画列表
-export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPath, canChange, blockedReason }: {
+export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPath, canChange, blockedReason, onOpenEditor }: {
   connId: number;
   sessionId: string;
   currentPath: string | null;
   canChange: boolean;
   blockedReason: string;
+  /** 在代码编辑器里打开正在看的目录 */
+  onOpenEditor?: (path: string) => void;
 }) {
   // memo 会挡住父组件跟着换语言的重渲染，这里自己订阅一下
   useTranslation();
@@ -164,6 +166,10 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
           </div>
           {error && <div className="dir-picker-error" role="alert">{error}</div>}
           <div className="dir-picker-foot">
+            {onOpenEditor && <Button size="xs" variant="ghost" isDisabled={!listing} title={t("在代码编辑器里打开这个目录")}
+              onPress={() => { if (listing) { onOpenEditor(listing.path); setOpen(false); } }}>
+              <FileCode2 />{t("在编辑器中打开")}
+            </Button>}
             <span className="dir-picker-hint">{canChange ? (atCurrent ? t("终端已在这个目录") : t("⌘/Ctrl + 回车 也可切换")) : blockedReason}</span>
             <Button size="xs" isDisabled={!canChange || !listing || atCurrent || changing || loading}
               onPress={() => listing && void change(listing.path)}>

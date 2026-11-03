@@ -13,6 +13,8 @@ pub const COLLABORATION_V1: &str = crate::collaboration::model::CAPABILITY;
 pub const AGENT_MESSAGE_V1: &str = "agent_message_v1";
 /// 状态栏点路径选目录：列子目录、把会话切过去
 pub const DIR_PICKER_V1: &str = "dir_picker_v1";
+/// 远程编辑：列出目录里的文件、读写文本文件
+pub const REMOTE_EDIT_V1: &str = "remote_edit_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -111,6 +113,23 @@ pub enum Msg {
     /// 会话停在空闲提示符时，在里面执行 cd 切到这个目录
     ChangeDir { session_id: String, path: String },
     DirChanged,
+    /// 远程编辑：列出目录里的子目录和文件
+    ListEntries { path: String },
+    Entries { listing: crate::remote_fs::EntryListing },
+    /// 打开文本文件：回 FileOpened，后面跟内容的原始字节帧（UTF-8，不含 BOM），流结束就是读完
+    ReadFile { path: String },
+    FileOpened { meta: crate::remote_fs::FileMeta },
+    /// 保存文本文件：后面跟 size 字节内容的原始字节帧；expected 是打开时的哈希，对不上就报冲突
+    WriteFile {
+        path: String,
+        size: u64,
+        bom: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    FileSaved { meta: crate::remote_fs::FileMeta },
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,

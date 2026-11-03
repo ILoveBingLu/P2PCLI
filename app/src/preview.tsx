@@ -372,6 +372,23 @@ if (s === "agents") {
   step("waiting", 4000);
   step("idle", 9000);
 }
+// 代码编辑器的假文件：s=launcher-editor-conflict 时打开 README 3 秒后“被 AI 改掉”，这时再保存会冲突
+const previewDirs = new Set(["/Users/demo/Projects/demo/src/empty"]);
+const previewFs = new Map<string, { text: string; binary?: boolean; readonly?: boolean; bom?: boolean }>([
+  ["/Users/demo/Projects/demo/README.md", { text: "# Demo\n\n远程编辑预览。\n\n- 在左边点文件打开\n- ⌘S 保存\n" }],
+  ["/Users/demo/Projects/demo/package.json", { text: '{\n  "name": "demo",\n  "version": "1.0.0",\n  "scripts": { "dev": "vite" }\n}\n' }],
+  ["/Users/demo/Projects/demo/src/main.ts", { text: 'import { greet } from "./util";\n\n// 中文注释，标点不会被框起来\nconst name: string = "P2PCLI";\nconsole.log(greet(name));\n' }],
+  ["/Users/demo/Projects/demo/src/util.ts", { text: "export function greet(name: string) {\r\n  return `hello ${name}`;\r\n}\r\n" }],
+  ["/Users/demo/Projects/demo/src/server.rs", { text: "fn main() {\n    println!(\"hello\");\n}\n" }],
+  ["/Users/demo/Projects/demo/logo.png", { text: "", binary: true }],
+  ["/Users/demo/Projects/demo/.env", { text: "TOKEN=xxx\n", readonly: true }],
+  ["/Users/demo/Projects/demo/.gitignore", { text: "node_modules\ndist\n" }],
+]);
+function previewHash(text: string) { let h = 0; for (const c of text) h = (h * 31 + c.charCodeAt(0)) | 0; return String(h); }
+function previewMeta(path: string, file: { text: string; readonly?: boolean; bom?: boolean }) {
+  return { path, hash: previewHash(file.text), size: file.text.length, bom: !!file.bom, readonly: !!file.readonly, mtime: Date.now() };
+}
+let previewAiEdited = false;
 const attachments = new Map<number, { sessionId: string; status: any; output: any }>();
 const shellPrompt = "me@preview ~/Projects/demo % ";
 const shellDrafts = new Map<number, string>();
@@ -639,6 +656,38 @@ mockIPC(
           ? ["P2PCLI", "demo", "website", "notes app", "it's quoted", ".archive"]
           : ["Projects", "Documents", "Downloads", "locked", ".config", ".ssh"];
         return { path, parent: path === "/" ? null : path.slice(0, path.lastIndexOf("/")) || "/", dirs, truncated: false };
+      }
+      case "list_entries": {
+        await new Promise((r) => setTimeout(r, 150));
+        const path = String(args.path || "/Users/demo/Projects/demo").replace(/\/+$/, "") || "/";
+        const children = [...previewFs.keys()].filter((p) => p.startsWith(path + "/") && !p.slice(path.length + 1).includes("/"));
+        const dirs = new Set([...previewFs.keys()].filter((p) => p.startsWith(path + "/")).map((p) => p.slice(path.length + 1).split("/")[0]));
+        if (!dirs.size && !children.length && !previewDirs.has(path)) throw new Error(`打不开目录 ${path}: No such file or directory (os error 2)`);
+        const files = new Set(children.map((p) => p.slice(path.length + 1)));
+        const entries = [...dirs].filter((name) => !files.has(name)).map((name) => ({ name, dir: true, size: 0 }))
+          .concat([...files].map((name) => ({ name, dir: false, size: previewFs.get(path + "/" + name)!.text.length })));
+        entries.sort((a, b) => Number(a.dir) === Number(b.dir) ? Number(a.name.startsWith(".")) - Number(b.name.startsWith(".")) || a.name.localeCompare(b.name) : Number(b.dir) - Number(a.dir));
+        return { path, parent: path === "/" ? null : path.slice(0, path.lastIndexOf("/")) || "/", entries, truncated: false };
+      }
+      case "read_file": {
+        await new Promise((r) => setTimeout(r, 250));
+        const file = previewFs.get(String(args.path));
+        if (!file) throw new Error(`打不开文件 ${args.path}: No such file or directory (os error 2)`);
+        if (file.binary) throw new Error("这是二进制文件，不能在编辑器里打开");
+        if (s === "launcher-editor-conflict" && args.path.endsWith("README.md") && !previewAiEdited) {
+          previewAiEdited = true;
+          setTimeout(() => { file.text += "\n（AI 刚刚在对方电脑上改了这一行）\n"; }, 3000);
+        }
+        return { meta: previewMeta(String(args.path), file), text: file.text };
+      }
+      case "write_file": {
+        await new Promise((r) => setTimeout(r, 250));
+        const path = String(args.path);
+        const file = previewFs.get(path);
+        if (!args.force && file && args.expected !== previewHash(file.text)) throw new Error("conflict: 文件在对方电脑上已被修改");
+        const next = { ...(file ?? {}), text: String(args.text) };
+        previewFs.set(path, next);
+        return previewMeta(path, next);
       }
       case "change_dir": {
         await new Promise((r) => setTimeout(r, 200));
