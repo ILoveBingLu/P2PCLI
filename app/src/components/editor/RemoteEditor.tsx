@@ -951,7 +951,7 @@ function installHint(family: string) {
     case "rust": return t("在对方电脑上运行 rustup component add rust-analyzer，或者在 VS Code、Cursor 里装 rust-analyzer 插件。");
     case "go": return t("在对方电脑上运行 go install golang.org/x/tools/gopls@latest。");
     case "python": return t("在对方电脑上运行 pip install basedpyright（或 npm i -g pyright）。");
-    case "typescript": return t("在对方电脑上运行 npm i -g typescript-language-server，项目里还要装 typescript。");
+    case "typescript": return t("在项目里装 typescript 7 或更新的版本（自带语言服务）；用更早的版本时，在对方电脑上运行 npm i -g typescript-language-server。");
     case "c": return t("在对方电脑上装 clangd（Mac 装了 Xcode 命令行工具就有）。");
     case "swift": return t("在对方电脑上装 Xcode 或 Swift 工具链，里面带 sourcekit-lsp。");
     case "ruby": return t("在对方电脑上运行 gem install ruby-lsp。");
