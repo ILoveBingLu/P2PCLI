@@ -9,6 +9,7 @@ import { useCollaboration } from "./CollaborationContext";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 import "../collaboration-links.css";
+import { t } from "@/i18n";
 
 interface Point { x: number; y: number }
 interface Drag { source: CollaborationEndpoint; start: Point; end: Point; pointer: number | null }
@@ -194,7 +195,7 @@ export function CollaborationPorts({ children }: { children: ReactNode }) {
     },
   }}>
     {children}
-    {(activeLine || lines.length > 0) && createPortal(<svg className="collab-wire" role="group" aria-label="协作关系与传输"
+    {(activeLine || lines.length > 0) && createPortal(<svg className="collab-wire" role="group" aria-label={t("协作关系与传输")}
       data-dragging={!!drag || undefined}>
       <defs>
         <marker id={markerId} viewBox="0 0 8 8" refX="5" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
@@ -205,12 +206,12 @@ export function CollaborationPorts({ children }: { children: ReactNode }) {
         const highlighted = hoveredLine === wire.id || wire.links.some(touches) || wire.selected;
         const dimmed = !!(focused || hoveredLine) && !highlighted;
         const names = `${collab.deviceName(wire.links[0].source.deviceId)} ↔ ${collab.deviceName(wire.links[0].destination.deviceId)}`;
-        const availability = wire.available ? "当前可用" : wire.availableCount ? `${wire.availableCount} 条可用` : "离线或会话不可用";
-        const status = wire.records.length ? `${wire.records.length} 条协作关系 · ${availability}` : wire.selected ? "任务关系" : "活动连接";
+        const availability = wire.available ? t("当前可用") : wire.availableCount ? t("{{availableCount}} 条可用", { availableCount: wire.availableCount }) : t("离线或会话不可用");
+        const status = wire.records.length ? t("{{length}} 条协作关系 · {{availability}}", { length: wire.records.length, availability }) : wire.selected ? t("任务关系") : t("活动连接");
         const pending = collab.tasks.filter((item) => item.state === "queued" &&
           wire.links.some((link) => relationKey(link) === relationKey(taskWire(item, collab.sessions, collab.overview?.endpoint_id ?? ""))));
-        const label = [names, status, ...pending.slice(0, 2).map((item) => `待领取：${item.spec.title}`), ...wire.activities.slice(0, 4).map((item) => item.label),
-          ...(wire.activities.length > 4 ? [`另有 ${wire.activities.length - 4} 项活动`] : [])].join("\n");
+        const label = [names, status, ...pending.slice(0, 2).map((item) => t("待领取：{{title}}", { title: item.spec.title })), ...wire.activities.slice(0, 4).map((item) => item.label),
+          ...(wire.activities.length > 4 ? [t("另有 {{value}} 项活动", { value: wire.activities.length - 4 })] : [])].join("\n");
         const pulses = new Map<string, { activity: WireActivity; reverse: boolean }>();
         for (const activity of wire.activities) {
           const start = pointFor(activity.source);
@@ -262,13 +263,13 @@ export function CollaborationAnchor({ endpoint, children, disabled = false }: {
   const collab = useCollaboration();
   const source = ports?.drag?.source;
   const valid = source ? canLink(source, endpoint) : false;
-  const label = `${source ? "连接到" : "协作连线"} ${endpointLabel(endpoint)}`;
+  const label = `${source ? t("连接到") : t("协作连线")} ${endpointLabel(endpoint)}`;
   return <div className="collab-anchor" data-collab-endpoint={JSON.stringify(endpoint)} data-collab-disabled={disabled || undefined}
     onMouseEnter={() => ports?.focus(endpoint)} onMouseLeave={() => ports?.focus(null)}
     data-collab-key={endpointKey(endpoint)} data-link-source={source && endpointKey(source) === endpointKey(endpoint) || undefined}
     data-link-target={source && valid && !disabled || undefined}>
     <div className="collab-anchor-content">{children}</div>
-    <Tooltip content={disabled ? "设备离线或会话状态未确认" : label}>
+    <Tooltip content={disabled ? t("设备离线或会话状态未确认") : label}>
       <TooltipTrigger<"button"> render={(props) => <button {...props} type="button" className="collab-port"
         aria-label={label} aria-pressed={source ? endpointKey(source) === endpointKey(endpoint) : false}
         disabled={disabled || collab.busy || !!collab.link}
@@ -285,14 +286,14 @@ export function CollaborationSidebarStatus() {
   return <div className="collab-sidebar-status" data-linking={collab.linking || undefined}>
     <Button variant={collab.open ? "secondary" : "ghost"} className="collab-sidebar-toggle"
       onPress={() => collab.setOpen(!collab.open)}>
-      <Network /><span>协作</span><small>{collab.error ? "未同步" : collab.loading ? "同步中" : tasks.length ? `${tasks.length} 项` : "暂无任务"}</small>
+      <Network /><span>{t("协作")}</span><small>{collab.error ? t("未同步") : collab.loading ? t("同步中") : tasks.length ? t("{{length}} 项", { length: tasks.length }) : t("暂无任务")}</small>
     </Button>
-    {collab.linking && <div className="collab-link-status" role="status"><span>选择协作目标</span>
-      <Button variant="ghost" size="icon-sm" aria-label="取消连线" title="取消连线" onPress={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))}><X /></Button>
+    {collab.linking && <div className="collab-link-status" role="status"><span>{t("选择协作目标")}</span>
+      <Button variant="ghost" size="icon-sm" aria-label={t("取消连线")} title={t("取消连线")} onPress={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))}><X /></Button>
     </div>}
     {selected && <Button variant="ghost" className="collab-sidebar-task" aria-pressed
       onPress={() => collab.setOpen(true)}>
-      <span>{selected.spec.title}</span><small>{taskStateLabels[selected.state]}</small>
+      <span>{selected.spec.title}</span><small>{taskStateLabels()[selected.state]}</small>
     </Button>}
   </div>;
 }

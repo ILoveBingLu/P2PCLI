@@ -337,6 +337,26 @@ struct Overview {
     inbox_dir: String,
 }
 
+/// UI language from the process environment: LC_ALL, then LC_MESSAGES, then LANG.
+/// C and POSIX are not a user language. macOS and Windows GUI apps often leave
+/// these unset; the webview language is the fallback in that case.
+#[tauri::command]
+fn system_locale() -> Option<String> {
+    for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        let Ok(value) = std::env::var(key) else { continue };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let lower = value.to_ascii_lowercase();
+        if lower == "c" || lower == "posix" || lower.starts_with("c.") {
+            continue;
+        }
+        return Some(value.to_string());
+    }
+    None
+}
+
 #[tauri::command]
 fn overview(state: State<'_, AppState>) -> Overview {
     let node = state.node();
@@ -1326,6 +1346,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            system_locale,
             overview,
             collab_request,
             collab_deliveries,

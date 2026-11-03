@@ -4,6 +4,7 @@ import type { AgentApproval as Approval } from "../api";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { toast } from "./ui/toast";
+import { t } from "@/i18n";
 
 /** 单次确认的选项。由父级用 approval.id 作为 key，下一轮请求不会继承提交状态。 */
 export function AgentApproval({ approval, name, onChoose, onTerminal }: {
@@ -24,16 +25,16 @@ export function AgentApproval({ approval, name, onChoose, onTerminal }: {
     catch (e) { setError(String(e)); toast.error(String(e)); }
     // 成功或结果不明时都不重发同一个确认；等待被控端返回新快照。
   };
-  return <Card className="agent-approval" role="region" aria-label={`${name} 等待确认`}>
+  return <Card className="agent-approval" role="region" aria-label={t("{{name}} 等待确认", { name })}>
     <div className="agent-approval-heading">
       <ShieldQuestion className="size-4" aria-hidden="true" />
-      <span>{name} · 等待确认</span>
-      <Button variant="ghost" size="icon-xs" aria-label="在终端中处理确认" title="在终端中处理" onPress={onTerminal}>
+      <span>{name} {t("· 等待确认")}</span>
+      <Button variant="ghost" size="icon-xs" aria-label={t("在终端中处理确认")} title={t("在终端中处理")} onPress={onTerminal}>
         <TerminalSquare className="size-3.5" />
       </Button>
     </div>
     <div className="agent-approval-context">{approval.context}</div>
-    <ul className="agent-approval-options" aria-label="确认选项">
+    <ul className="agent-approval-options" aria-label={t("确认选项")}>
       {approval.options.map((option) => <li key={option.id}>
         <Button variant="ghost" className="agent-approval-option" isDisabled={pending !== null}
           onPress={() => void choose(option.id)}>
@@ -44,6 +45,6 @@ export function AgentApproval({ approval, name, onChoose, onTerminal }: {
       </li>)}
     </ul>
     {error ? <p className="agent-approval-feedback" role="alert">{error}</p>
-      : pending !== null && <p className="agent-approval-feedback" role="status">{sent ? "已提交，等待 AI 响应…" : "正在提交…"}</p>}
+      : pending !== null && <p className="agent-approval-feedback" role="status">{sent ? t("已提交，等待 AI 响应…") : t("正在提交…")}</p>}
   </Card>;
 }

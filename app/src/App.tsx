@@ -49,7 +49,7 @@ import { AgentTabTitle } from "./components/Agent";
 import { GlobalContextMenu } from "./components/GlobalContextMenu";
 import { AgentComposer, isMac } from "./components/AgentComposer";
 import { AgentLauncher } from "./components/AgentLauncher";
-import { AgentSettingsBar, CLAUDE_EFFORTS, CLAUDE_MODELS, choiceLabel, modeChoices, type AgentSetting } from "./components/AgentSettingsBar";
+import { AgentSettingsBar, CLAUDE_MODELS, choiceLabel, claudeEfforts, modeChoices, type AgentSetting } from "./components/AgentSettingsBar";
 import {
   ApproveDialog,
   DiagDialog,
@@ -78,6 +78,7 @@ import {
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { RemarksProvider } from "./components/Remarks";
+import { t } from "@/i18n";
 
 interface Tab {
   key: number;
@@ -168,7 +169,7 @@ export default function App() {
           setRequests((r) => r.filter((x) => x.id !== ev.id));
           setFileRequests((r) => r.filter((x) => x.id !== ev.id));
         }
-        if (ev.type === "files_received") toast.success(`收到 ${ev.from_name} 发来的 ${ev.files} 个文件`);
+        if (ev.type === "files_received") toast.success(t("收到 {{from_name}} 发来的 {{files}} 个文件", { from_name: ev.from_name, files: ev.files }));
         refresh();
       }),
       listen<FileRequest>("file-request", (e) => {
@@ -180,8 +181,8 @@ export default function App() {
         const { conn_id, reason } = e.payload;
         setSessionTarget((target) => target?.connId === conn_id ? null : target);
         setTabs((ts) =>
-          ts.map((t) =>
-            t.connId === conn_id ? { ...t, state: "closed", note: reason } : t,
+          ts.map((tab) =>
+            tab.connId === conn_id ? { ...tab, state: "closed", note: reason } : tab,
           ),
         );
       }),
@@ -193,7 +194,7 @@ export default function App() {
     };
   }, [refresh]);
 
-  const activeTab = tabs.find((t) => t.key === activeKey) ?? null;
+  const activeTab = tabs.find((tab) => tab.key === activeKey) ?? null;
   useEffect(() => {
     setActiveKey((key) => key !== null && !tabs.some((tab) => tab.key === key) ? tabs.at(-1)?.key ?? null : key);
   }, [tabs]);
@@ -203,15 +204,15 @@ export default function App() {
     (endpointId, sessionId) => !showSettings && !sessionTarget &&
       activeTab?.info.endpoint_id === endpointId && activeTab.sessionId === sessionId,
     (endpointId, sessionId) => {
-      const tab = tabs.find((t) => t.info.endpoint_id === endpointId && t.sessionId === sessionId && t.state !== "closed");
+      const tab = tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.sessionId === sessionId && tab.state !== "closed");
       return tab ? () => { setShowSettings(false); setShowCollaboration(false); setSessionTarget(null); setActiveKey(tab.key); } : null;
     },
   );
   /** 标签、底部栏和侧边栏使用同一份实时快照，不再各自猜测当前状态。 */
-  const tabAgent = (t: Tab) => {
-    const snapshot = liveSessions[t.connId];
-    if (!t.sessionId || t.state === "closed" || !snapshot?.sessions || snapshot.error) return null;
-    return snapshot.sessions.find((s) => s.id === t.sessionId)?.agent ?? null;
+  const tabAgent = (tab: Tab) => {
+    const snapshot = liveSessions[tab.connId];
+    if (!tab.sessionId || tab.state === "closed" || !snapshot?.sessions || snapshot.error) return null;
+    return snapshot.sessions.find((s) => s.id === tab.sessionId)?.agent ?? null;
   };
   const activeAgent = activeTab?.state === "open" && !showSettings && !sessionTarget ? tabAgent(activeTab) : null;
   const hideComposer = (hidden: boolean) => {
@@ -262,9 +263,9 @@ export default function App() {
           if (mode === start) break;
         }
         if (mode !== id)
-          toast.notice(`切不到${label}`, {
+          toast.notice(t("切不到{{label}}", { label }), {
             warning: true,
-            description: kind === "claude" && id === "bypassPermissions" ? "启动 Claude Code 时没加 --dangerously-skip-permissions，这一档不在轮换里" : "终端里看看现在是什么情况",
+            description: kind === "claude" && id === "bypassPermissions" ? t("启动 Claude Code 时没加 --dangerously-skip-permissions，这一档不在轮换里") : t("终端里看看现在是什么情况"),
           });
       } else {
         handle.paste(`/${what} ${id}`);
@@ -274,9 +275,9 @@ export default function App() {
         const done = (s: AgentSettings | null) => (what === "model" ? model(s?.model) : s?.effort === id);
         if (!(await until(done, 4000))) {
           const name = tabAgent(tab)?.name ?? "AI";
-          toast.notice(what === "model" ? `没切到 ${choiceLabel(CLAUDE_MODELS, id)?.split("/").pop()}` : `思考强度没切到${choiceLabel(CLAUDE_EFFORTS, id)}`, {
+          toast.notice(what === "model" ? t("没切到 {{value}}", { value: choiceLabel(CLAUDE_MODELS, id)?.split("/").pop() }) : t("思考强度没切到{{value}}", { value: choiceLabel(claudeEfforts(), id) }), {
             warning: true,
-            description: `终端里看看 ${name} 的提示，可能这个账号或模型不支持`,
+            description: t("终端里看看 {{name}} 的提示，可能这个账号或模型不支持", { name }),
           });
           handle.focus();
         }
@@ -346,9 +347,9 @@ export default function App() {
   const addTab = (connId: number, info: RemoteInfo, code: string | null, sessionId?: string, keepConnection = false) => {
     if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
       void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
-    const existing = sessionId ? tabs.find((t) => t.info.endpoint_id === info.endpoint_id && t.sessionId === sessionId && (t.state === "open" || t.state === "opening")) : null;
+    const existing = sessionId ? tabs.find((tab) => tab.info.endpoint_id === info.endpoint_id && tab.sessionId === sessionId && (tab.state === "open" || tab.state === "opening")) : null;
     if (existing) {
-      if (!keepConnection && existing.connId !== connId && !tabs.some((t) => t.connId === connId))
+      if (!keepConnection && existing.connId !== connId && !tabs.some((tab) => tab.connId === connId))
         void api.disconnect(connId).catch((e) => toast.error(String(e)));
       setActiveKey(existing.key); setSessionTarget(null); setShowSettings(false); return;
     }
@@ -357,7 +358,7 @@ export default function App() {
     setShowSettings(false);
     const key = tabSeq.current++;
     setTabs((ts) => [
-      ...ts.filter((t) => !sessionId || t.info.endpoint_id !== info.endpoint_id || t.sessionId !== sessionId),
+      ...ts.filter((tab) => !sessionId || tab.info.endpoint_id !== info.endpoint_id || tab.sessionId !== sessionId),
       { key, connId, info, code, state: "opening", note: null, sessionId },
     ]);
     setActiveKey(key);
@@ -371,7 +372,7 @@ export default function App() {
     setShowCollaboration(false);
     for (const draft of drafts) pendingCollaborationDrafts.current.delete(endpointKey(draft.endpoint));
     const signal = onboardingController.current.signal;
-    toast.notice(`正在接入 ${drafts.length} 个会话`, { description: "等待会话登记确认；需要授权时会在目标会话中提示。" });
+    toast.notice(t("正在接入 {{length}} 个会话", { length: drafts.length }), { description: t("等待会话登记确认；需要授权时会在目标会话中提示。") });
     const requests = drafts.map((draft) => {
       const key = `${draft.endpoint.deviceId}:${draft.requestId}`;
       const record = () => {
@@ -379,7 +380,7 @@ export default function App() {
         try {
           rememberRelation({ ownerId: draft.ownerId, coordinatorId: draft.coordinatorId, projectId: draft.projectId },
             { source: draft.source, destination: draft.endpoint });
-        } catch { toast.error("会话已接入，但连线记录未能保存"); }
+        } catch { toast.error(t("会话已接入，但连线记录未能保存")); }
       };
       const existing = onboardingInFlight.current.get(key);
       if (existing) return existing.then(record);
@@ -397,7 +398,7 @@ export default function App() {
           };
         },
         send: () => {
-          if (!draft.endpoint.agentKind) throw new Error("未识别目标 AI，未发送接入请求");
+          if (!draft.endpoint.agentKind) throw new Error(t("未识别目标 AI，未发送接入请求"));
           return api.sendAgentMessage(connId, draft.endpoint.terminalId!, draft.endpoint.agentKind, draft.requestId, draft.prompt);
         },
         wait: () => new Promise<void>((resolve) => window.setTimeout(resolve, 2000)),
@@ -408,11 +409,11 @@ export default function App() {
     void Promise.allSettled(requests).then((results) => {
       if (signal.aborted) return;
       const failed = results.flatMap((result, index) => result.status === "rejected" ?
-        [`${drafts[index].endpoint.sessionName ?? "会话"}：${String(result.reason)}`] : []);
-      if (!failed.length) toast.success(`${results.length} 个会话已接入协作`);
-      else toast.notice(`已确认接入 ${results.length - failed.length}/${results.length} 个会话`, {
+        [`${drafts[index].endpoint.sessionName ?? t("会话")}：${String(result.reason)}`] : []);
+      if (!failed.length) toast.success(t("{{length}} 个会话已接入协作", { length: results.length }));
+      else toast.notice(t("已确认接入 {{value}}/{{length}} 个会话", { value: results.length - failed.length, length: results.length }), {
         warning: true, description: failed.join("\n"),
-        action: { label: "查看协作", onPress: () => setShowCollaboration(true) },
+        action: { label: t("查看协作"), onPress: () => setShowCollaboration(true) },
       });
       refresh();
     }).finally(() => {
@@ -442,25 +443,25 @@ export default function App() {
       if (drafts.length) openCollaborationDrafts(connId, info, code, drafts);
       else addTab(connId, info, code, pending.sessionId ?? undefined);
     } else {
-      if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((t) => t.connId === sessionTarget.connId))
+      if (sessionTarget && sessionTarget.connId !== connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
         void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
       setSessionTarget({ connId, info, code });
       if (pending?.clear) {
         if (pending.endpointId !== info.endpoint_id || !pending.sessionId) {
-          toast.error("连接的设备与待清除会话不一致，未执行清除");
+          toast.error(t("连接的设备与待清除会话不一致，未执行清除"));
         } else {
           const sessionId = pending.sessionId;
           void api.endTerminal(connId, sessionId).then(() => {
             sessionEnded(info.endpoint_id, sessionId);
             refresh();
-            toast.success("会话已清除");
-          }).catch((error) => toast.error(`清除会话失败：${String(error)}`));
+            toast.success(t("会话已清除"));
+          }).catch((error) => toast.error(t("清除会话失败：{{error}}", { error: String(error) })));
         }
       }
     }
     setShowSettings(false);
     refresh();
-    toast.success("已连接 " + info.name);
+    toast.success(t("已连接 {{name}}", { name: info.name }));
   };
 
   const connection = useConnection({ onConnected, onOpenChange: setShowConnect });
@@ -478,7 +479,7 @@ export default function App() {
       const nearby = await api.scanNearby();
       setOv((current) => current ? { ...current, nearby } : current);
     } catch (error) {
-      toast.error(`扫描失败：${String(error)}`);
+      toast.error(t("扫描失败：{{error}}", { error: String(error) }));
     } finally {
       scanPending.current = false;
       setScanningNearby(false);
@@ -492,14 +493,14 @@ export default function App() {
     clearedSessions.current.set(endpointId, cleared);
     setOv((current) => current && withoutClearedSessions(current, clearedSessions.current));
     setSessionsRev((v) => v + 1);
-    setTabs((current) => current.filter((t) => t.info.endpoint_id !== endpointId || t.sessionId !== id));
+    setTabs((current) => current.filter((tab) => tab.info.endpoint_id !== endpointId || tab.sessionId !== id));
     void api.refreshDevices().catch(() => { /* 下轮常规探测会继续同步缓存。 */ });
   };
 
   const closeTab = (key: number) => {
-    const tab = tabs.find((t) => t.key === key);
-    const rest = tabs.filter((t) => t.key !== key);
-    if (tab && !rest.some((t) => t.connId === tab.connId))
+    const tab = tabs.find((tab) => tab.key === key);
+    const rest = tabs.filter((tab) => tab.key !== key);
+    if (tab && !rest.some((tab) => tab.connId === tab.connId))
       api.disconnect(tab.connId).catch((e) => toast.error(String(e)));
     setTabs(rest);
     if (activeKey === key)
@@ -508,17 +509,17 @@ export default function App() {
 
   const setTabState = (key: number, status: TermStatus) => {
     setTabs((ts) =>
-      ts.map((t) => {
-        if (t.key !== key || t.state === "closed") return t;
+      ts.map((tab) => {
+        if (tab.key !== key || tab.state === "closed") return tab;
         if (status.type === "exited")
           return {
-            ...t,
+            ...tab,
             state: "exited",
-            note:
-              "终端视图已结束" +
-              (status.code != null ? "（退出码 " + status.code + "）" : ""),
+            note: status.code != null
+              ? t("终端视图已结束（退出码 {{code}}）", { code: status.code })
+              : t("终端视图已结束"),
           };
-        return { ...t, state: "closed", note: status.reason ?? "已脱离会话" };
+        return { ...tab, state: "closed", note: status.reason ?? t("已脱离会话") };
       }),
     );
   };
@@ -526,9 +527,9 @@ export default function App() {
   /** 拖进来的文件发给哪台设备：正在看的终端，或者正在看的会话页；终端里的还要在发完后把路径填进去，
    *  拖到 AI 输入框上的填进输入框 */
   const dropTarget = (at?: { x: number; y: number }): { info: RemoteInfo; termId?: number; draftKey?: number } | { blocked: string } => {
-    if (showSettings) return { blocked: "先回到终端，再把文件拖进来" };
+    if (showSettings) return { blocked: t("先回到终端，再把文件拖进来") };
     if (at && document.elementFromPoint(at.x, at.y)?.closest(".collab-drawer, .collab-management-dialog, .collab-link-dialog"))
-      return { blocked: "请把文件拖到目标终端" };
+      return { blocked: t("请把文件拖到目标终端") };
     if (sessionTarget) return { info: sessionTarget.info };
     if (activeTab && (activeTab.state === "open" || activeTab.state === "opening")) {
       const box = composerRef.current?.closest(".agent-composer")?.getBoundingClientRect();
@@ -537,7 +538,7 @@ export default function App() {
       if (!composerHidden && box && x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return { info: activeTab.info, draftKey: activeTab.key };
       return { info: activeTab.info, termId: activeTab.termId };
     }
-    return { blocked: "先打开一台设备的终端，再把文件拖进来" };
+    return { blocked: t("先打开一台设备的终端，再把文件拖进来") };
   };
   const dropTargetRef = useRef(dropTarget);
   dropTargetRef.current = dropTarget;
@@ -555,7 +556,7 @@ export default function App() {
       // 小文件可能在登记回填目标前就传完，主动读一次确保路径能进入草稿。
       void api.transfers().then(setTransfers).catch(() => {});
     } catch (error) {
-      toast.error(`上传失败：${String(error)}`);
+      toast.error(t("上传失败：{{error}}", { error: String(error) }));
     }
   };
 
@@ -577,7 +578,7 @@ export default function App() {
         if (target.termId != null || target.draftKey != null)
           pendingInsert.current.set(id, { termId: target.termId, draftKey: target.draftKey, platform: target.info.platform });
       } catch (error) {
-        toast.error(`发不了：${String(error)}`);
+        toast.error(t("发不了：{{error}}", { error: String(error) }));
       }
     }).then((u) => { if (disposed) u(); else unlisten = u; }).catch(() => {});
     return () => { disposed = true; unlisten?.(); };
@@ -586,11 +587,11 @@ export default function App() {
   // 拖进终端的文件发完了：把对方电脑上的路径填进那个终端，像本机拖文件进终端一样
   useEffect(() => {
     for (const [id, target] of pendingInsert.current) {
-      const t = transfers.find((x) => x.id === id);
-      if (!t || t.finished_at == null) continue;
+      const tab = transfers.find((x) => x.id === id);
+      if (!tab || tab.finished_at == null) continue;
       pendingInsert.current.delete(id);
-      if (t.state !== "done" || !t.paths.length) continue;
-      const quoted = t.paths.map((p) => shellQuote(p, target.platform)).join(" ") + " ";
+      if (tab.state !== "done" || !tab.paths.length) continue;
+      const quoted = tab.paths.map((p) => shellQuote(p, target.platform)).join(" ") + " ";
       if (target.draftKey != null) {
         const key = target.draftKey;
         setDrafts((d) => ({ ...d, [key]: (d[key] ? d[key].replace(/\s*$/, " ") : "") + quoted }));
@@ -637,16 +638,16 @@ export default function App() {
   }
   const prepareCollaboration = (drafts: CollaborationDraft[]) => {
     const endpoint = drafts[0]?.endpoint;
-    if (!endpoint || drafts.some((draft) => !draft.endpoint.terminalId)) throw new Error("请先选择目标 AI 会话");
-    if (drafts.some((draft) => draft.endpoint.deviceId !== endpoint.deviceId)) throw new Error("接入会话必须属于同一台设备");
-    if (connection.busy) throw new Error("设备正在连接，请稍后重试");
+    if (!endpoint || drafts.some((draft) => !draft.endpoint.terminalId)) throw new Error(t("请先选择目标 AI 会话"));
+    if (drafts.some((draft) => draft.endpoint.deviceId !== endpoint.deviceId)) throw new Error(t("接入会话必须属于同一台设备"));
+    if (connection.busy) throw new Error(t("设备正在连接，请稍后重试"));
     const local = ov?.local;
     const target = endpoint.deviceId === ov?.endpoint_id && local ? { connId: local.conn_id, info: local.info, code: null } :
       sessionTarget?.info.endpoint_id === endpoint.deviceId ? sessionTarget :
       tabs.find((tab) => tab.info.endpoint_id === endpoint.deviceId && tab.state !== "closed");
     const nearby = ov?.nearby.find((device) => device.endpoint_id === endpoint.deviceId && device.online);
     const recent = ov?.recent.find((device) => device.endpoint_id === endpoint.deviceId);
-    if (!target && !nearby && !recent) throw new Error("此设备还未连接，请先连接设备");
+    if (!target && !nearby && !recent) throw new Error(t("此设备还未连接，请先连接设备"));
     pendingCollaborationDrafts.current = new Map(drafts.map((draft) => [endpointKey(draft.endpoint), draft]));
     pendingOpen.current = null;
     if (target) {
@@ -684,8 +685,8 @@ export default function App() {
             <Button
               variant={showCollaboration ? "secondary" : "ghost"}
               size="icon-sm"
-              aria-label="协作"
-              title="跨设备协作"
+              aria-label={t("协作")}
+              title={t("跨设备协作")}
               onPress={() => { setShowSettings(false); setShowCollaboration((value) => !value); }}
             >
               <Network />
@@ -749,11 +750,11 @@ export default function App() {
         {overviewError && (
           <div className="workspace-notice">
             <Alert variant="destructive">
-              <AlertTitle>无法读取设备信息</AlertTitle>
+              <AlertTitle>{t("无法读取设备信息")}</AlertTitle>
               <AlertDescription>
                 {overviewError}
                 <Button variant="outline" size="sm" onClick={refresh}>
-                  重试
+                  {t("重试")}
                 </Button>
               </AlertDescription>
             </Alert>
@@ -771,11 +772,11 @@ export default function App() {
             onRefresh={() => setSessionsRev((rev) => rev + 1)}
             onChangeSessions={(sessions) => updateLiveSessions(sessionTarget.connId, sessions)}
             openSessions={new Set(tabs
-              .filter((t) => t.info.endpoint_id === sessionTarget.info.endpoint_id && (t.state === "open" || t.state === "opening") && t.sessionId)
-              .map((t) => t.sessionId!))}
+              .filter((tab) => tab.info.endpoint_id === sessionTarget.info.endpoint_id && (tab.state === "open" || tab.state === "opening") && tab.sessionId)
+              .map((tab) => tab.sessionId!))}
             onOpen={(id) => addTab(sessionTarget.connId, sessionTarget.info, sessionTarget.code, id)}
             onBack={() => {
-              if (!tabs.some((t) => t.connId === sessionTarget.connId))
+              if (!tabs.some((tab) => tab.connId === sessionTarget.connId))
                 void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
               setSessionTarget(null);
             }}
@@ -791,34 +792,32 @@ export default function App() {
             <div className="terminal-toolbar">
               <Tabs.ListContainer className="terminal-list-container">
                 <Tabs.List
-                  aria-label="工作区标签"
+                  aria-label={t("工作区标签")}
                   className="terminal-tab-list"
                 >
-                  <Tabs.Tab id="home" aria-label="首页" className="terminal-home-tab">
+                  <Tabs.Tab id="home" aria-label={t("首页")} className="terminal-home-tab">
                     <House aria-hidden="true" />
                   </Tabs.Tab>
-                  {tabs.map((t) => (
+                  {tabs.map((tab) => (
                     <Tabs.Tab
-                      id={String(t.key)}
-                      aria-label={t.info.name}
+                      id={String(tab.key)}
+                      aria-label={tab.info.name}
                       className="terminal-tab-trigger"
-                      key={t.key}
+                      key={tab.key}
                       render={(domProps) => (
                         <div
                           className={cn(
                             "terminal-tab",
-                            t.key === activeKey && "is-active",
+                            tab.key === activeKey && "is-active",
                           )}
                         >
                           <div {...(domProps as ComponentProps<"div">)} />
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            aria-label={
-                              "关闭终端 " + t.info.name + " #" + t.key
-                            }
-                            title="关闭标签，保留后台会话"
-                            onPress={() => closeTab(t.key)}
+                            aria-label={t("关闭终端 {{name}} #{{key}}", { name: tab.info.name, key: tab.key })}
+                            title={t("关闭标签，保留后台会话")}
+                            onPress={() => closeTab(tab.key)}
                           >
                             <X />
                           </Button>
@@ -829,12 +828,12 @@ export default function App() {
                         <span
                           className="status-dot"
                           data-kind={
-                            t.state === "open" || t.state === "opening"
-                              ? (paths[t.connId]?.kind ?? "unknown")
+                            tab.state === "open" || tab.state === "opening"
+                              ? (paths[tab.connId]?.kind ?? "unknown")
                               : "off"
                           }
                         />
-                        <AgentTabTitle name={t.info.name} agent={tabAgent(t)} />
+                        <AgentTabTitle name={tab.info.name} agent={tabAgent(tab)} />
                       </span>
                     </Tabs.Tab>
                   ))}
@@ -844,8 +843,8 @@ export default function App() {
                   variant="ghost"
                   size="icon-sm"
                   className="terminal-new-tab"
-                  aria-label={activeTab && activeTab.state !== "closed" ? "新建终端" : "新建连接"}
-                  title={activeTab && activeTab.state !== "closed" ? "在当前设备上新建终端" : "新建连接"}
+                  aria-label={activeTab && activeTab.state !== "closed" ? t("新建终端") : t("新建连接")}
+                  title={activeTab && activeTab.state !== "closed" ? t("在当前设备上新建终端") : t("新建连接")}
                   onClick={() => activeTab && activeTab.state !== "closed"
                     ? addTab(activeTab.connId, activeTab.info, activeTab.code)
                     : setShowConnect(true)}
@@ -853,7 +852,7 @@ export default function App() {
                   <Plus />
                 </Button>
               {activeTab && activeTab.state !== "closed" && (
-                <Button variant="ghost" size="icon-sm" aria-label="远程会话" title="查看和恢复远程会话" onClick={() => setSessionTarget(activeTab)}>
+                <Button variant="ghost" size="icon-sm" aria-label={t("远程会话")} title={t("查看和恢复远程会话")} onClick={() => setSessionTarget(activeTab)}>
                   <History />
                 </Button>
               )}
@@ -869,89 +868,89 @@ export default function App() {
                   onConnect={() => setShowConnect(true)}
                 />
               </Tabs.Panel>
-              {tabs.map((t) => (
+              {tabs.map((tab) => (
                 <Tabs.Panel
                   shouldForceMount
-                  key={t.key}
-                  id={String(t.key)}
+                  key={tab.key}
+                  id={String(tab.key)}
                   className="terminal-panel"
-                  hidden={t.key !== activeKey}
+                  hidden={tab.key !== activeKey}
                 >
                   <TerminalView
-                    connId={t.connId}
-                    sessionId={t.sessionId}
-                    tmuxWheel={t.info.platform !== "windows"}
-                    active={!showSettings && !sessionTarget && t.key === activeKey}
+                    connId={tab.connId}
+                    sessionId={tab.sessionId}
+                    tmuxWheel={tab.info.platform !== "windows"}
+                    active={!showSettings && !sessionTarget && tab.key === activeKey}
                     onReady={(termId, sessionId) =>
                       setTabs((ts) =>
                         ts.map((x) =>
-                          x.key === t.key && x.state === "opening"
+                          x.key === tab.key && x.state === "opening"
                             ? { ...x, state: "open", sessionId, termId }
                             : x,
                         ),
                       )
                     }
-                    onStatus={(s) => setTabState(t.key, s)}
-                    onPromptReady={(ready) => setPromptReady((current) => current[t.key] === ready ? current : { ...current, [t.key]: ready })}
+                    onStatus={(s) => setTabState(tab.key, s)}
+                    onPromptReady={(ready) => setPromptReady((current) => current[tab.key] === ready ? current : { ...current, [tab.key]: ready })}
                     onHandle={(handle) => {
-                      if (handle) termHandles.current.set(t.key, handle);
-                      else termHandles.current.delete(t.key);
+                      if (handle) termHandles.current.set(tab.key, handle);
+                      else termHandles.current.delete(tab.key);
                     }}
                   />
-                  {t.state === "open" && t.sessionId && (
-                    <AgentLauncher key={`${t.connId}:${t.sessionId}`} connId={t.connId} sessionId={t.sessionId}
-                      active={!showSettings && !sessionTarget && t.key === activeKey}
-                      visible={!showSettings && !sessionTarget && t.key === activeKey && !!promptReady[t.key]
-                        && !liveSessions[t.connId]?.error && !tabAgent(t)
-                        && liveSessions[t.connId]?.sessions?.find((s) => s.id === t.sessionId)?.details?.shell_ready === true}
-                      canLaunch={() => termHandles.current.get(t.key)?.canLaunch() ?? false}
-                      onFocus={() => termHandles.current.get(t.key)?.focus()}
+                  {tab.state === "open" && tab.sessionId && (
+                    <AgentLauncher key={`${tab.connId}:${tab.sessionId}`} connId={tab.connId} sessionId={tab.sessionId}
+                      active={!showSettings && !sessionTarget && tab.key === activeKey}
+                      visible={!showSettings && !sessionTarget && tab.key === activeKey && !!promptReady[tab.key]
+                        && !liveSessions[tab.connId]?.error && !tabAgent(tab)
+                        && liveSessions[tab.connId]?.sessions?.find((s) => s.id === tab.sessionId)?.details?.shell_ready === true}
+                      canLaunch={() => termHandles.current.get(tab.key)?.canLaunch() ?? false}
+                      onFocus={() => termHandles.current.get(tab.key)?.focus()}
                       onLaunched={() => {
-                        setPromptReady((current) => ({ ...current, [t.key]: false }));
+                        setPromptReady((current) => ({ ...current, [tab.key]: false }));
                         setSessionsRev((rev) => rev + 1);
                       }} />
                   )}
-                  {t.state === "opening" && (
+                  {tab.state === "opening" && (
                     <div className="terminal-loading" role="status">
                       <LoaderCircle className="animate-spin" />
-                      正在打开终端…
+                      {t("正在打开终端…")}
                     </div>
                   )}
-                  {(t.state === "closed" || t.state === "exited") && (
+                  {(tab.state === "closed" || tab.state === "exited") && (
                     <div className="term-overlay">
                       <Card className="max-w-md">
                         <CardHeader>
                           <CardTitle>
-                            {t.state === "exited" ? "已脱离终端" : "连接已断开"}
+                            {tab.state === "exited" ? t("已脱离终端") : t("连接已断开")}
                           </CardTitle>
                         </CardHeader>
                         <CardContent>
                           <p className="text-muted-foreground wrap-break-word">
-                            {t.note}
-                            <span className="mt-2 block text-xs">关闭标签不会结束后台会话。会话列表中可恢复仍在运行的会话。</span>
+                            {tab.note}
+                            <span className="mt-2 block text-xs">{t("关闭标签不会结束后台会话。会话列表中可恢复仍在运行的会话。")}</span>
                           </p>
                         </CardContent>
                         <CardFooter className="justify-center gap-2">
                           <Button
-                            onClick={() => t.state === "closed"
-                              ? void connection.doConnect(t.code ?? t.info.endpoint_id, "")
-                              : setSessionTarget(t)}
+                            onClick={() => tab.state === "closed"
+                              ? void connection.doConnect(tab.code ?? tab.info.endpoint_id, "")
+                              : setSessionTarget(tab)}
                           >
-                            恢复会话
+                            {t("恢复会话")}
                           </Button>
-                          {t.state === "exited" && (
+                          {tab.state === "exited" && (
                             <Button
-                              onClick={() => addTab(t.connId, t.info, t.code)}
+                              onClick={() => addTab(tab.connId, tab.info, tab.code)}
                             >
                               <Plus data-icon="inline-start" />
-                              新建终端
+                              {t("新建终端")}
                             </Button>
                           )}
                           <Button
                             variant="outline"
-                            onClick={() => closeTab(t.key)}
+                            onClick={() => closeTab(tab.key)}
                           >
-                            关闭标签
+                            {t("关闭标签")}
                           </Button>
                         </CardFooter>
                       </Card>
@@ -976,7 +975,7 @@ export default function App() {
                 }}
                 onUpload={uploadToComposer}
                 onChoose={async (approvalId, optionId) => {
-                  if (!activeTab.sessionId || activeTab.state !== "open") throw new Error("会话已断开");
+                  if (!activeTab.sessionId || activeTab.state !== "open") throw new Error(t("会话已断开"));
                   try { await api.chooseAgentOption(activeTab.connId, activeTab.sessionId, approvalId, optionId); }
                   finally { setSessionsRev((rev) => rev + 1); }
                 }}
@@ -1048,8 +1047,8 @@ export default function App() {
               <span className="text-sm">{dropHint.blocked}</span>
             ) : (
               <>
-                <strong className="text-sm">松开发给 {dropHint.name}</strong>
-                <span className="text-xs text-muted-foreground">文件放在对方的下载文件夹里，拖进终端的会把路径填进去</span>
+                <strong className="text-sm">{t("松开发给")} {dropHint.name}</strong>
+                <span className="text-xs text-muted-foreground">{t("文件放在对方的下载文件夹里，拖进终端的会把路径填进去")}</span>
               </>
             )}
           </div>

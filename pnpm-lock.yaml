@@ -32,6 +32,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      i18next:
+        specifier: ^26.6.0
+        version: 26.6.0(typescript@7.0.2)
       lucide-react:
         specifier: ^1.61.0
         version: 1.61.0(@types/react@19.3.0)(react@19.3.1)
@@ -41,6 +44,9 @@ importers:
       react-dom:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
+      react-i18next:
+        specifier: ^17.1.10
+        version: 17.1.10(i18next@26.6.0(typescript@7.0.2))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)
       tailwind-merge:
         specifier: ^3.7.0
         version: 3.7.0
@@ -769,6 +775,17 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
+  html-parse-stringify@4.0.1:
+    resolution: {integrity: sha512-0zHsZJrK7S3K2aucXWL6ycoYJ/iNtIcFHC/nYQgFklPtrv5LpJctIiSCroWZWeuoXvuyFdzp6KzjJQ+OT5MfFw==}
+
+  i18next@26.6.0:
+    resolution: {integrity: sha512-jpb1n5386s9mbBLNF6tSNIVhbBUUNiNeDyjWte+uxHP/Wr+CEy7WBM8q29TkfQ46VbwKeJFYdQJK3pSUhLp4CQ==}
+    peerDependencies:
+      typescript: ^5 || ^6 || ^7
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   input-otp@1.5.0:
     resolution: {integrity: sha512-3AcfdW1sNG0FmSA5hHMBXG7jNW5CdcdKs8ln8JOmn6S2SRkoXoJx+2UwC+ZvjflfnOdHJx0SfQ9/YjlxVYLtGQ==}
     peerDependencies:
@@ -985,6 +1002,22 @@ packages:
     resolution: {integrity: sha512-Y0bARz53lhEC1NMCASs0/j+faB/zqt3R8hpvg1e8+61ZVJ4UL0UdC4cBbXfZMcIuhrfgeILTLe+ZeBCavQPtKQ==}
     peerDependencies:
       react: ^19.3.1
+
+  react-i18next@17.1.10:
+    resolution: {integrity: sha512-XuUuA/rxukE4hXuR//PN308DuSQkWqKNNWBUj0dDTR087l3+6WLid3NC/w55ALrXA/dtWb7lychJ4rQLR3DCDg==}
+    peerDependencies:
+      i18next: '>= 26.2.0'
+      react: '>= 16.8.0'
+      react-dom: '*'
+      react-native: '*'
+      typescript: ^5 || ^6 || ^7
+    peerDependenciesMeta:
+      react-dom:
+        optional: true
+      react-native:
+        optional: true
+      typescript:
+        optional: true
 
   react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
@@ -1625,6 +1658,12 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
+  html-parse-stringify@4.0.1: {}
+
+  i18next@26.6.0(typescript@7.0.2):
+    optionalDependencies:
+      typescript: 7.0.2
+
   input-otp@1.5.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1):
     dependencies:
       react: 19.3.1
@@ -1797,6 +1836,17 @@ snapshots:
     dependencies:
       react: 19.3.1
       scheduler: 0.28.0
+
+  react-i18next@17.1.10(i18next@26.6.0(typescript@7.0.2))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2):
+    dependencies:
+      '@babel/runtime': 7.29.10
+      html-parse-stringify: 4.0.1
+      i18next: 26.6.0(typescript@7.0.2)
+      react: 19.3.1
+      use-sync-external-store: 1.7.0(react@19.3.1)
+    optionalDependencies:
+      react-dom: 19.3.1(react@19.3.1)
+      typescript: 7.0.2
 
   react-is@16.13.1: {}
 

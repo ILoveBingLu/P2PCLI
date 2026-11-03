@@ -1,9 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Popover } from "@heroui/react";
+import { useTranslation } from "react-i18next";
 import { ArrowUp, CornerDownLeft, Folder, House, LoaderCircle } from "lucide-react";
 import { api, type DirListing } from "../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { t, tr } from "@/i18n";
 
 function sameListing(a: DirListing | null, b: DirListing) {
   return a != null && a.path === b.path && a.parent === b.parent && a.truncated === b.truncated &&
@@ -22,6 +24,8 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
   canChange: boolean;
   blockedReason: string;
 }) {
+  // memo 会挡住父组件跟着换语言的重渲染，这里自己订阅一下
+  useTranslation();
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<DirListing | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,7 +51,7 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
       // 内容没变就留着旧对象，不然几千行又得整个重画一遍
       if (!sameListing(listing, next)) setListing(next);
     } catch (e) {
-      if (id === request.current) setError(String(e));
+      if (id === request.current) setError(tr(String(e)));
     } finally {
       if (id === request.current) setLoading(false);
     }
@@ -92,7 +96,7 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
       await api.changeDir(connId, sessionId, path);
       setOpen(false);
     } catch (e) {
-      setError(String(e));
+      setError(tr(String(e)));
     } finally {
       setChanging(false);
     }
@@ -131,39 +135,39 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
 
   return (
     <Popover isOpen={open} onOpenChange={setOpen}>
-      <Button variant="ghost" size="xs" className="terminal-status-dir-button" aria-label={`当前目录：${currentPath ?? "用户目录"}，点击选择目录`} title="选择目录">
+      <Button variant="ghost" size="xs" className="terminal-status-dir-button" aria-label={t("当前目录：{{path}}，点击选择目录", { path: currentPath ?? t("用户目录") })} title={t("选择目录")}>
         <Folder /><span className="truncate">{currentPath ?? "~"}</span>
       </Button>
       <Popover.Content placement="top start" offset={8} className="dir-picker">
-        <Popover.Dialog aria-label="选择目录" className="flex min-h-0 flex-col">
+        <Popover.Dialog aria-label={t("选择目录")} className="flex min-h-0 flex-col">
           <div className="dir-picker-head">
-            <Button variant="ghost" size="icon-xs" aria-label="上一级" title="上一级（删除键）"
+            <Button variant="ghost" size="icon-xs" aria-label={t("上一级")} title={t("上一级（删除键）")}
               isDisabled={!listing?.parent || loading} onPress={() => listing?.parent && void browse(listing.parent)}>
               <ArrowUp />
             </Button>
-            <Button variant="ghost" size="icon-xs" aria-label="用户目录" title="用户目录"
+            <Button variant="ghost" size="icon-xs" aria-label={t("用户目录")} title={t("用户目录")}
               isDisabled={loading} onPress={() => void browse("")}>
               <House />
             </Button>
             <span className="dir-picker-path" title={here}><bdi>{here}</bdi></span>
-            {loading && <LoaderCircle className="dir-picker-spin animate-spin" aria-label="读取中" />}
+            {loading && <LoaderCircle className="dir-picker-spin animate-spin" aria-label={t("读取中")} />}
           </div>
           <div className="dir-picker-filter">
-            <Input autoFocus value={filter} placeholder="筛选子目录" aria-label="筛选子目录"
+            <Input autoFocus value={filter} placeholder={t("筛选子目录")} aria-label={t("筛选子目录")}
               onChange={(e) => { setFilter(e.target.value); setActive(0); }} onKeyDown={onKeyDown} />
           </div>
-          <div ref={listRef} className="dir-picker-list" role="listbox" aria-label="子目录">
-            {listing ? rows : loading && <div className="dir-picker-empty">读取中…</div>}
+          <div ref={listRef} className="dir-picker-list" role="listbox" aria-label={t("子目录")}>
+            {listing ? rows : loading && <div className="dir-picker-empty">{t("读取中…")}</div>}
             {listing && shown.length === 0 && !loading &&
-              <div className="dir-picker-empty">{filter ? "没有匹配的子目录" : "没有子目录"}</div>}
-            {listing?.truncated && <div className="dir-picker-empty">子目录太多，只列出了前 {listing.dirs.length} 个，可以输入名字筛选</div>}
+              <div className="dir-picker-empty">{filter ? t("没有匹配的子目录") : t("没有子目录")}</div>}
+            {listing?.truncated && <div className="dir-picker-empty">{t("子目录太多，只列出了前 {{shown}} 个，可以输入名字筛选", { shown: listing.dirs.length })}</div>}
           </div>
           {error && <div className="dir-picker-error" role="alert">{error}</div>}
           <div className="dir-picker-foot">
-            <span className="dir-picker-hint">{canChange ? (atCurrent ? "终端已在这个目录" : "⌘/Ctrl + 回车 也可切换") : blockedReason}</span>
+            <span className="dir-picker-hint">{canChange ? (atCurrent ? t("终端已在这个目录") : t("⌘/Ctrl + 回车 也可切换")) : blockedReason}</span>
             <Button size="xs" isDisabled={!canChange || !listing || atCurrent || changing || loading}
               onPress={() => listing && void change(listing.path)}>
-              {changing ? <LoaderCircle className="dir-picker-spin animate-spin" /> : <CornerDownLeft />}切换到这里
+              {changing ? <LoaderCircle className="dir-picker-spin animate-spin" /> : <CornerDownLeft />}{t("切换到这里")}
             </Button>
           </div>
         </Popover.Dialog>

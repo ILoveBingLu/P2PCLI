@@ -15,21 +15,62 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { OverlayScroll } from "./OverlayScroll";
 import { PlatformIcon } from "./PlatformIcon";
 import { type useUpdater } from "./useUpdater";
+import { applyLocaleChoice, intlLocale, storedLocaleChoice, t, tr, type LocaleChoice } from "@/i18n";
 
 /** 牵线服务器选“自定义”时的取值，预设项的取值就是它的地址 */
 const CUSTOM_SERVER = "custom";
 
+/** 界面语言立刻生效，不跟下面的“保存设置”走 */
+function LanguageField() {
+  const [choice, setChoice] = useState<LocaleChoice>(() => storedLocaleChoice());
+  return (
+    <RadioGroup
+      value={choice}
+      onChange={(value) => {
+        const next = value as LocaleChoice;
+        setChoice(next);
+        void applyLocaleChoice(next);
+      }}
+    >
+      <FieldLabel>{t("界面语言")}</FieldLabel>
+      <Radio value="system">
+        <Radio.Content className="gap-3 text-sm">
+          <Radio.Control><Radio.Indicator /></Radio.Control>
+          {t("跟随系统")}
+        </Radio.Content>
+      </Radio>
+      <Radio value="zh-CN">
+        <Radio.Content className="gap-3 text-sm">
+          <Radio.Control><Radio.Indicator /></Radio.Control>
+          {t("简体中文")}
+        </Radio.Content>
+      </Radio>
+      <Radio value="en">
+        <Radio.Content className="gap-3 text-sm">
+          <Radio.Control><Radio.Indicator /></Radio.Control>
+          {t("English")}
+        </Radio.Content>
+      </Radio>
+      <FieldDescription>
+        {t("跟随系统时，中文环境用简体中文，其他环境用英文。")}
+      </FieldDescription>
+    </RadioGroup>
+  );
+}
+
 /** 左边菜单的分类，右边标题也用这个名字 */
-const SECTIONS = [
-  { id: "general", label: "连接设置", icon: Globe2 },
-  { id: "proxy", label: "代理设置", icon: Network },
-  { id: "files", label: "文件传输", icon: ArrowDownUp },
-  { id: "agents", label: "AI 启动", icon: Bot },
-  { id: "aihint", label: "多机互动", icon: BookOpen },
-  { id: "trusted", label: "受信设备", icon: ShieldCheck },
-  { id: "permissions", label: "系统权限", icon: LockKeyhole },
-  { id: "about", label: "关于", icon: Info },
-];
+function settingsSections() {
+  return [
+    { id: "general", label: t("连接设置"), icon: Globe2 },
+    { id: "proxy", label: t("代理设置"), icon: Network },
+    { id: "files", label: t("文件传输"), icon: ArrowDownUp },
+    { id: "agents", label: t("AI 启动"), icon: Bot },
+    { id: "aihint", label: t("多机互动"), icon: BookOpen },
+    { id: "trusted", label: t("受信设备"), icon: ShieldCheck },
+    { id: "permissions", label: t("系统权限"), icon: LockKeyhole },
+    { id: "about", label: t("关于"), icon: Info },
+  ];
+}
 
 export function SettingsPage({
   ov,
@@ -63,7 +104,7 @@ export function SettingsPage({
   const [permissionsLoading, setPermissionsLoading] = useState(true);
   const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
   const mac = ov.platform === "macos";
-  const sections = mac ? SECTIONS : SECTIONS.filter((section) => section.id !== "permissions");
+  const sections = (mac ? settingsSections() : settingsSections().filter((section) => section.id !== "permissions"));
   useEffect(() => {
     api.cliStatus().then(setCli).catch(() => {});
   }, []);
@@ -71,7 +112,7 @@ export function SettingsPage({
     setInstallingCli(true);
     try {
       setCli(await api.installCli());
-      toast.success("命令行工具装好了，新开的终端窗口里就能用");
+      toast.success(t("命令行工具装好了，新开的终端窗口里就能用"));
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -95,7 +136,7 @@ export function SettingsPage({
     try {
       setPermissions(await api.systemPermissions());
     } catch (e) {
-      toast.error(`读取系统权限失败：${String(e)}`);
+      toast.error(t("读取系统权限失败：{{e}}", { e: String(e) }));
     } finally {
       setPermissionsLoading(false);
     }
@@ -144,7 +185,7 @@ export function SettingsPage({
         : serverChoice === settings.default_server ? null : serverChoice;
       await api.saveSettings(server, name, relay, proxyEnabled ? proxy : null, lanVisible, agentCommands);
       onChanged();
-      toast.success("设置已保存并立即应用");
+      toast.success(t("设置已保存并立即应用"));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -156,7 +197,7 @@ export function SettingsPage({
     try {
       await (paired ? api.removePaired(id) : api.removeTrusted(id));
       onChanged();
-      toast.success(paired ? "已移除配对设备" : "已移除受信设备");
+      toast.success(paired ? t("已移除配对设备") : t("已移除受信设备"));
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -171,10 +212,10 @@ export function SettingsPage({
       setPermissions(next);
       const updated = next.find((item) => item.id === permission.id);
       if (updated?.status === "denied") {
-        toast.error("系统仍未允许这项权限，请在系统设置中打开。");
+        toast.error(t("系统仍未允许这项权限，请在系统设置中打开。"));
       }
     } catch (e) {
-      toast.error(`申请权限失败：${String(e)}`);
+      toast.error(t("申请权限失败：{{e}}", { e: String(e) }));
     } finally {
       setPermissionBusy(null);
     }
@@ -191,8 +232,8 @@ export function SettingsPage({
     <section className="settings-page" aria-labelledby="settings-title">
       <Tabs orientation="vertical" selectedKey={tab} onSelectionChange={(key) => setTab(String(key))} className="settings-tabs">
         <nav className="settings-nav">
-          <h1 id="settings-title" className="settings-nav-title">设置</h1>
-          <Tabs.List aria-label="设置分类">
+          <h1 id="settings-title" className="settings-nav-title">{t("设置")}</h1>
+          <Tabs.List aria-label={t("设置分类")}>
             {sections.map(({ id, label, icon: Icon }) => (
               <Tabs.Tab key={id} id={id}>
                 <Icon />
@@ -211,16 +252,17 @@ export function SettingsPage({
                 {loading ? (
                   <div className="loading-state" role="status">
                     <LoaderCircle className="animate-spin" />
-                    正在读取设置…
+                    {t("正在读取设置…")}
                   </div>
                 ) : !settings ? (
                   <Button variant="outline" onClick={load}>
-                    重新加载设置
+                    {t("重新加载设置")}
                   </Button>
                 ) : (
                   <FieldGroup className="gap-5">
+                    <LanguageField />
                     <Field data-disabled={saving}>
-                      <FieldLabel htmlFor="device-name">设备名称</FieldLabel>
+                      <FieldLabel htmlFor="device-name">{t("设备名称")}</FieldLabel>
                       <Input
                         id="device-name"
                         variant="secondary"
@@ -230,7 +272,7 @@ export function SettingsPage({
                         disabled={saving}
                       />
                       <FieldDescription>
-                        对方看到的名称，留空使用电脑名称。
+                        {t("对方看到的名称，留空使用电脑名称。")}
                       </FieldDescription>
                     </Field>
                     <RadioGroup
@@ -238,26 +280,26 @@ export function SettingsPage({
                       onChange={setServerChoice}
                       isDisabled={saving}
                     >
-                      <FieldLabel>牵线服务器</FieldLabel>
+                      <FieldLabel>{t("牵线服务器")}</FieldLabel>
                       {settings.server_presets.map((p) => (
                         <Radio key={p.address} value={p.address}>
                           <Radio.Content className="gap-3 text-sm">
                             <Radio.Control><Radio.Indicator /></Radio.Control>
-                            {p.label}
-                            {p.address === settings.default_server && <Badge variant="secondary">默认</Badge>}
+                            {tr(p.label)}
+                            {p.address === settings.default_server && <Badge variant="secondary">{t("默认")}</Badge>}
                           </Radio.Content>
                           <Description className="pl-7 text-xs text-muted-foreground">
-                            {p.note}。<span className="font-mono">{p.address}</span>
+                            {tr(p.note)}{intlLocale().startsWith("zh") ? "。" : ". "}<span className="font-mono">{p.address}</span>
                           </Description>
                         </Radio>
                       ))}
                       <Radio value={CUSTOM_SERVER}>
                         <Radio.Content className="gap-3 text-sm">
                           <Radio.Control><Radio.Indicator /></Radio.Control>
-                          自定义
+                          {t("自定义")}
                         </Radio.Content>
                         <Description className="pl-7 text-xs text-muted-foreground">
-                          填自己部署的牵线服务器：公钥@IP或域名:端口 走 UDP，wss://域名 走 WebSocket。
+                          {t("填自己部署的牵线服务器：公钥@IP或域名:端口 走 UDP，wss://域名 走 WebSocket。")}
                         </Description>
                       </Radio>
                     </RadioGroup>
@@ -265,10 +307,10 @@ export function SettingsPage({
                       <Field data-disabled={saving} className="-mt-2 pl-7">
                         <Input
                           id="server-address"
-                          aria-label="自定义牵线服务器地址"
+                          aria-label={t("自定义牵线服务器地址")}
                           variant="secondary"
                           value={customServer}
-                          placeholder="公钥@IP:端口 或 wss://域名"
+                          placeholder={t("公钥@IP:端口 或 wss://域名")}
                           onChange={(e) => { setCustomServer(e.target.value); }}
                           spellCheck={false}
                           autoComplete="off"
@@ -277,7 +319,7 @@ export function SettingsPage({
                       </Field>
                     )}
                     <Field data-disabled={saving}>
-                      <FieldLabel htmlFor="relay-address">中继服务器</FieldLabel>
+                      <FieldLabel htmlFor="relay-address">{t("中继服务器")}</FieldLabel>
                       <Input
                         id="relay-address"
                         variant="secondary"
@@ -290,16 +332,16 @@ export function SettingsPage({
                         disabled={saving}
                       />
                       <FieldDescription>
-                        直连失败时转发加密数据，多个地址用逗号分隔。
+                        {t("直连失败时转发加密数据，多个地址用逗号分隔。")}
                       </FieldDescription>
                     </Field>
                     <Checkbox isSelected={lanVisible} onChange={setLanVisible} isDisabled={saving}>
                       <Checkbox.Content className="gap-3 text-sm">
                         <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
-                        在局域网中显示本机
+                        {t("在局域网中显示本机")}
                       </Checkbox.Content>
                       <Description className="pl-7 text-xs text-muted-foreground">
-                        同一网络里的其他 P2PCLI 能看到本机名称，点一下就能发起连接，仍然要配对密码和你的同意。在公共 Wi-Fi 上可以关掉。
+                        {t("同一网络里的其他 P2PCLI 能看到本机名称，点一下就能发起连接，仍然要配对密码和你的同意。在公共 Wi-Fi 上可以关掉。")}
                       </Description>
                     </Checkbox>
                   </FieldGroup>
@@ -307,27 +349,27 @@ export function SettingsPage({
               </Tabs.Panel>
               <Tabs.Panel id="proxy">
                 {loading ? (
-                  <div className="loading-state" role="status"><LoaderCircle className="animate-spin" />正在读取设置…</div>
+                  <div className="loading-state" role="status"><LoaderCircle className="animate-spin" />{t("正在读取设置…")}</div>
                 ) : !settings ? (
-                  <Button variant="outline" onClick={load}>重新加载设置</Button>
+                  <Button variant="outline" onClick={load}>{t("重新加载设置")}</Button>
                 ) : (
                   <FieldGroup className="gap-5">
                     <Checkbox isSelected={proxyEnabled} onChange={(enabled) => { setProxyEnabled(enabled); }} isDisabled={saving}>
                       <Checkbox.Content className="gap-3 text-sm">
                         <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
-                        使用 HTTP 代理
+                        {t("使用 HTTP 代理")}
                       </Checkbox.Content>
                       <Description className="pl-7 text-xs text-muted-foreground">
-                        用于 WebSocket 牵线和 HTTP(S) 中继连接，点对点直连不经过代理。
+                        {t("用于 WebSocket 牵线和 HTTP(S) 中继连接，点对点直连不经过代理。")}
                       </Description>
                     </Checkbox>
                     <Field data-disabled={saving || !proxyEnabled}>
-                      <FieldLabel htmlFor="proxy-address">代理地址</FieldLabel>
+                      <FieldLabel htmlFor="proxy-address">{t("代理地址")}</FieldLabel>
                       <Input id="proxy-address" variant="secondary" value={proxy}
                         placeholder="http://127.0.0.1:7890"
                         onChange={(e) => { setProxy(e.target.value); }}
                         disabled={saving || !proxyEnabled} spellCheck={false} autoComplete="off" />
-                      <FieldDescription>填写 HTTP 或混合代理端口，使用 http:// 开头；暂不支持 SOCKS5 和账号密码认证。关闭后直接连接。</FieldDescription>
+                      <FieldDescription>{t("填写 HTTP 或混合代理端口，使用 http:// 开头；暂不支持 SOCKS5 和账号密码认证。关闭后直接连接。")}</FieldDescription>
                     </Field>
                   </FieldGroup>
                 )}
@@ -335,56 +377,55 @@ export function SettingsPage({
               <Tabs.Panel id="files">
                 <FieldGroup className="gap-6">
                   <Field>
-                    <FieldLabel>收到的文件放在</FieldLabel>
+                    <FieldLabel>{t("收到的文件放在")}</FieldLabel>
                     <div className="flex min-w-0 items-center gap-2">
                       <code className="min-w-0 flex-1 truncate rounded-md bg-muted-surface px-2 py-1.5 text-xs" title={ov.inbox_dir}>{ov.inbox_dir}</code>
                       <Button variant="outline" size="sm" onClick={() => void api.openFolder(ov.inbox_dir).catch((e) => toast.error(String(e)))}>
                         <FolderOpen data-icon="inline-start" />
-                        打开
+                        {t("打开")}
                       </Button>
                     </div>
                     <FieldDescription>
-                      按发送的设备分文件夹，重名的自动加编号，不会覆盖。配对过的设备、你连过的设备发来的直接收；别的设备发来要你点同意。
+                      {t("按发送的设备分文件夹，重名的自动加编号，不会覆盖。配对过的设备、你连过的设备发来的直接收；别的设备发来要你点同意。")}
                     </FieldDescription>
                   </Field>
                   <Field>
-                    <FieldLabel>发文件</FieldLabel>
+                    <FieldLabel>{t("发文件")}</FieldLabel>
                     <FieldDescription>
-                      在左边设备上右键选发送文件；或者把文件拖进某台设备的终端窗口，发完会把文件在对方电脑上的路径填进终端，正在用的 AI 直接就能读。
+                      {t("在左边设备上右键选发送文件；或者把文件拖进某台设备的终端窗口，发完会把文件在对方电脑上的路径填进终端，正在用的 AI 直接就能读。")}
                     </FieldDescription>
                   </Field>
                   <Field>
-                    <FieldLabel>命令行工具 p2pcli</FieldLabel>
+                    <FieldLabel>{t("命令行工具 p2pcli")}</FieldLabel>
                     <FieldDescription>
-                      终端里的 AI 也能用它在设备之间传文件、拉文件、跑命令，要 P2PCLI 开着。
-                      跑命令、拉文件和推到指定目录用的是和开终端一样的认证：先在界面里连过一次，对方没勾受信时每次连接要它点同意。
+                      {t("终端里的 AI 也能用它在设备之间传文件、拉文件、跑命令，要 P2PCLI 开着。\n                      跑命令、拉文件和推到指定目录用的是和开终端一样的认证：先在界面里连过一次，对方没勾受信时每次连接要它点同意。")}
                     </FieldDescription>
                     <pre className="overflow-x-auto rounded-md bg-muted-surface px-3 py-2 text-xs leading-relaxed [font-variant-ligatures:none]">{[
-                      "p2pcli devices                      列出设备、在线和延迟",
-                      "p2pcli send 设备名 文件...            发文件或文件夹，打印对方电脑上的路径",
-                      "p2pcli send 设备名 文件... --to 目录   放到对方电脑的这个目录，同名盖掉",
-                      "p2pcli pull 设备名 对方的路径...       把对方电脑上的文件拉到当前目录（--to 换目录）",
-                      "p2pcli exec 设备名 -- 命令            在对方电脑上跑一条命令，退出码带回来",
-                      "p2pcli inbox                        看最近收到的文件",
-                      "p2pcli devices --json               加 --json 输出给程序和 AI 读",
+                      t("p2pcli devices                      列出设备、在线和延迟"),
+                      t("p2pcli send 设备名 文件...            发文件或文件夹，打印对方电脑上的路径"),
+                      t("p2pcli send 设备名 文件... --to 目录   放到对方电脑的这个目录，同名盖掉"),
+                      t("p2pcli pull 设备名 对方的路径...       把对方电脑上的文件拉到当前目录（--to 换目录）"),
+                      t("p2pcli exec 设备名 -- 命令            在对方电脑上跑一条命令，退出码带回来"),
+                      t("p2pcli inbox                        看最近收到的文件"),
+                      t("p2pcli devices --json               加 --json 输出给程序和 AI 读"),
                     ].join("\n")}</pre>
                     <div className="flex flex-wrap items-center gap-2">
                       <SquareTerminal className="size-4 text-muted-foreground" />
                       <span className="min-w-0 flex-1 text-xs text-muted-foreground">
                         {!cli
-                          ? "正在检查…"
+                          ? t("正在检查…")
                           : !cli.bundled
-                            ? "开发版没有带命令行工具，正式安装包里才有。"
+                            ? t("开发版没有带命令行工具，正式安装包里才有。")
                             : cli.installed && cli.on_path
-                              ? `已装好：${cli.path}，终端里直接用 p2pcli。`
+                              ? t("已装好：{{path}}，终端里直接用 p2pcli。", { path: cli.path })
                               : cli.installed
-                                ? `已装在 ${cli.path}，但这个目录还不在终端的 PATH 里，可以用完整路径，或者点右边加进去。`
-                                : "还没装到终端里。"}
+                                ? t("已装在 {{path}}，但这个目录还不在终端的 PATH 里，可以用完整路径，或者点右边加进去。", { path: cli.path })
+                                : t("还没装到终端里。")}
                       </span>
                       {cli?.bundled && !(cli.installed && cli.on_path) && (
                         <Button size="sm" variant="outline" onClick={() => void installCli()} disabled={installingCli}>
                           {installingCli ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Download data-icon="inline-start" />}
-                          {cli.installed ? "加到 PATH" : "安装"}
+                          {cli.installed ? t("加到 PATH") : t("安装")}
                         </Button>
                       )}
                     </div>
@@ -395,22 +436,22 @@ export function SettingsPage({
                 <FieldGroup className="gap-5">
                   <Alert>
                     <AlertDescription>
-                      为这台电脑上的每种 AI 设置默认启动命令。其他设备连接本机后点击启动胶囊时会使用它；命令只保存在本机，不会传给连接方。留空并保存即可恢复自动检测到的默认命令。
+                      {t("为这台电脑上的每种 AI 设置默认启动命令。其他设备连接本机后点击启动胶囊时会使用它；命令只保存在本机，不会传给连接方。留空并保存即可恢复自动检测到的默认命令。")}
                     </AlertDescription>
                   </Alert>
                   <div className="flex items-center gap-2">
-                    <p className="detail-note mr-auto">可填写完整路径、环境变量和启动参数。命令会交给本机终端 Shell 执行，请勿把令牌或密码写在这里。</p>
+                    <p className="detail-note mr-auto">{t("可填写完整路径、环境变量和启动参数。命令会交给本机终端 Shell 执行，请勿把令牌或密码写在这里。")}</p>
                     <Button variant="ghost" size="sm" onClick={() => void loadAgents(true)} disabled={agentsLoading || saving}>
-                      <RefreshCw data-icon="inline-start" className={agentsLoading ? "animate-spin" : undefined} />重新检测
+                      <RefreshCw data-icon="inline-start" className={agentsLoading ? "animate-spin" : undefined} />{t("重新检测")}
                     </Button>
                   </div>
                   {agentsLoading ? (
-                    <div className="loading-state" role="status"><LoaderCircle className="animate-spin" />正在检测本机 AI…</div>
+                    <div className="loading-state" role="status"><LoaderCircle className="animate-spin" />{t("正在检测本机 AI…")}</div>
                   ) : agentsError ? (
                     <Alert variant="destructive"><AlertDescription>{agentsError}</AlertDescription></Alert>
                   ) : agents.length === 0 ? (
                     <Empty>
-                      <EmptyHeader><EmptyMedia variant="icon"><Bot /></EmptyMedia><EmptyTitle>未检测到 AI</EmptyTitle><EmptyDescription>安装到终端 PATH 后点击“重新检测”。</EmptyDescription></EmptyHeader>
+                      <EmptyHeader><EmptyMedia variant="icon"><Bot /></EmptyMedia><EmptyTitle>{t("未检测到 AI")}</EmptyTitle><EmptyDescription>{t("安装到终端 PATH 后点击“重新检测”。")}</EmptyDescription></EmptyHeader>
                     </Empty>
                   ) : agents.map((agent) => (
                     <Field key={agent.kind} data-disabled={saving}>
@@ -422,7 +463,7 @@ export function SettingsPage({
                             const next = { ...current };
                             delete next[agent.kind];
                             return next;
-                          })} disabled={saving}>恢复默认</Button>
+                          })} disabled={saving}>{t("恢复默认")}</Button>
                         )}
                       </div>
                       <Input
@@ -436,10 +477,10 @@ export function SettingsPage({
                         autoComplete="off"
                         maxLength={2048}
                       />
-                      <FieldDescription>默认命令：<code>{agent.command}</code></FieldDescription>
+                      <FieldDescription>{t("默认命令：")}<code>{agent.command}</code></FieldDescription>
                       {agent.kind === "claude" && (
                         <FieldDescription>
-                          需要启动后跳过 AI 工具确认时，可填 <code>claude --dangerously-skip-permissions</code>。保存后普通点击胶囊也会全部放行，仅在可信项目中使用；这不等于 sudo，系统权限仍不变。
+                          {t("需要启动后跳过 AI 工具确认时，可填")} <code>claude --dangerously-skip-permissions</code>{t("。保存后普通点击胶囊也会全部放行，仅在可信项目中使用；这不等于 sudo，系统权限仍不变。")}
                         </FieldDescription>
                       )}
                     </Field>
@@ -451,7 +492,7 @@ export function SettingsPage({
               </Tabs.Panel>
               <Tabs.Panel id="trusted">
                 <p className="detail-note mb-4">
-                  受信设备连接本机时无需密码和确认。移除后，再次连接需要重新授权。
+                  {t("受信设备连接本机时无需密码和确认。移除后，再次连接需要重新授权。")}
                 </p>
                 {ov.trusted.length === 0 ? (
                   <Empty>
@@ -459,9 +500,9 @@ export function SettingsPage({
                       <EmptyMedia variant="icon">
                         <ShieldCheck />
                       </EmptyMedia>
-                      <EmptyTitle>暂无受信设备</EmptyTitle>
+                      <EmptyTitle>{t("暂无受信设备")}</EmptyTitle>
                       <EmptyDescription>
-                        在收到连接请求时，可以选择信任自己的设备。
+                        {t("在收到连接请求时，可以选择信任自己的设备。")}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -492,18 +533,18 @@ export function SettingsPage({
                           ) : (
                             <Trash2 data-icon="inline-start" />
                           )}
-                          移除
+                          {t("移除")}
                         </Button>
                       </div>
                     ))}
                   </div>
                 )}
-                <h3 className="mt-8 mb-1 text-sm font-medium">配对过的设备（{ov.paired.length}）</h3>
+                <h3 className="mt-8 mb-1 text-sm font-medium">{t("配对过的设备（{{count}}）", { count: ov.paired.length })}</h3>
                 <p className="detail-note mb-4">
-                  你同意过一次的设备。它们能在后台看到本机在不在线、延迟多少，以及它自己开在本机上的会话（只有编号、状态，和里面的 AI 在干活还是在等它，看不到目录、程序和屏幕内容）。打开终端照常要配对密码和你的同意，受信设备除外。移除后就看不到了，下次你再同意它连接时会重新加进来。
+                  {t("你同意过一次的设备。它们能在后台看到本机在不在线、延迟多少，以及它自己开在本机上的会话（只有编号、状态，和里面的 AI 在干活还是在等它，看不到目录、程序和屏幕内容）。打开终端照常要配对密码和你的同意，受信设备除外。移除后就看不到了，下次你再同意它连接时会重新加进来。")}
                 </p>
                 {ov.paired.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">暂无配对过的设备。</p>
+                  <p className="text-xs text-muted-foreground">{t("暂无配对过的设备。")}</p>
                 ) : (
                   <div className="trusted-list">
                     {ov.paired.map((device) => (
@@ -526,7 +567,7 @@ export function SettingsPage({
                           ) : (
                             <Trash2 data-icon="inline-start" />
                           )}
-                          移除
+                          {t("移除")}
                         </Button>
                       </div>
                     ))}
@@ -537,20 +578,20 @@ export function SettingsPage({
                 {permissionsLoading ? (
                   <div className="loading-state" role="status">
                     <LoaderCircle className="animate-spin" />
-                    正在读取系统权限…
+                    {t("正在读取系统权限…")}
                   </div>
                 ) : permissions.length === 0 ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon"><LockKeyhole /></EmptyMedia>
-                      <EmptyTitle>没有需要申请的系统权限</EmptyTitle>
-                      <EmptyDescription>当前平台没有发现 P2PCLI 需要单独申请的系统权限。</EmptyDescription>
+                      <EmptyTitle>{t("没有需要申请的系统权限")}</EmptyTitle>
+                      <EmptyDescription>{t("当前平台没有发现 P2PCLI 需要单独申请的系统权限。")}</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 ) : (
                   <FieldGroup className="gap-3">
                     <p className="detail-note">
-                      这些权限只用于 P2PCLI 已启用的功能。打开开关时会先尝试申请；如果之前已经拒绝，需要到系统设置里重新开启。
+                      {t("这些权限只用于 P2PCLI 已启用的功能。打开开关时会先尝试申请；如果之前已经拒绝，需要到系统设置里重新开启。")}
                     </p>
                     {permissions.map((permission) => {
                       const granted = permission.status === "granted";
@@ -559,18 +600,18 @@ export function SettingsPage({
                         <div key={permission.id} className="flex items-start gap-4 rounded-lg border border-border bg-muted-surface p-4">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <strong className="text-sm">{permission.name}</strong>
-                              <span className="text-xs text-muted-foreground">{granted ? "已允许" : permission.status === "denied" ? "未允许" : "未确认"}</span>
+                              <strong className="text-sm">{tr(permission.name)}</strong>
+                              <span className="text-xs text-muted-foreground">{granted ? t("已允许") : permission.status === "denied" ? t("未允许") : t("未确认")}</span>
                             </div>
-                            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{permission.description}</p>
+                            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{tr(permission.description)}</p>
                             {permission.status === "denied" && (
                               <Button variant="link" size="sm" className="mt-2 h-auto px-0" onClick={() => void openSystemSettings(permission)}>
-                                打开系统设置
+                                {t("打开系统设置")}
                               </Button>
                             )}
                           </div>
                           <Switch
-                            aria-label={permission.name}
+                            aria-label={tr(permission.name)}
                             isSelected={granted}
                             isDisabled={busy}
                             onChange={() => void requestPermission(permission)}
@@ -598,7 +639,7 @@ export function SettingsPage({
           {/* 切到别的分类再回来，没保存的修改还在；AI 启动命令与连接配置共用同一份本机设置。 */}
           {(tab === "general" || tab === "proxy" || tab === "agents") && (
             <footer className="settings-footer">
-              <span className="mr-auto text-xs text-muted-foreground">{tab === "agents" ? "保存后立即用于之后的 AI 启动，不会中断现有会话。" : "保存后即时生效。代理、中继或局域网显示变更会重连网络，后台终端会话保留。"}</span>
+              <span className="mr-auto text-xs text-muted-foreground">{tab === "agents" ? t("保存后立即用于之后的 AI 启动，不会中断现有会话。") : t("保存后即时生效。代理、中继或局域网显示变更会重连网络，后台终端会话保留。")}</span>
               <Button
                 onClick={save}
                 disabled={loading || !settings || saving || (proxyEnabled && !proxy.trim()) || (serverChoice === CUSTOM_SERVER && !customServer.trim())}
@@ -606,7 +647,7 @@ export function SettingsPage({
                 {saving ? (
                   <LoaderCircle data-icon="inline-start" className="animate-spin" />
                 ) : <Save data-icon="inline-start" />}
-                保存设置
+                {t("保存设置")}
               </Button>
             </footer>
           )}

@@ -12,6 +12,7 @@ import { toast } from "./components/ui/toast";
 import { terminalResizeFrame } from "./lib/terminalResizeFrame";
 import { emptyShellPrompt, promptGuard } from "./lib/launcherPrompt";
 import { readClipboardText, writeClipboardText } from "./lib/clipboard";
+import { t } from "@/i18n";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -114,23 +115,23 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     const focus = () => { if (termRef.current === term) term.focus(); };
     menu.open(e, [
       {
-        id: "copy", label: "复制", icon: <Copy className="size-4" />, disabled: !selected,
+        id: "copy", label: t("复制"), icon: <Copy className="size-4" />, disabled: !selected,
         onAction: () => {
           void writeClipboardText(selected)
-            .catch((error) => toast.error(`复制失败：${String(error)}`))
+            .catch((error) => toast.error(t("复制失败：{{error}}", { error: String(error) })))
             .finally(focus);
         },
       },
       {
-        id: "paste", label: "粘贴", icon: <ClipboardPaste className="size-4" />, disabled: !inputReady.current,
+        id: "paste", label: t("粘贴"), icon: <ClipboardPaste className="size-4" />, disabled: !inputReady.current,
         onAction: () => {
           void readClipboardText().then((text) => {
             if (termRef.current === term && inputReady.current) term.paste(text);
-          }).catch((error) => toast.error(`粘贴失败：${String(error)}`)).finally(focus);
+          }).catch((error) => toast.error(t("粘贴失败：{{error}}", { error: String(error) }))).finally(focus);
         },
       },
       {
-        id: "select-all", label: "全选", icon: <TextSelect className="size-4" />, separated: true,
+        id: "select-all", label: t("全选"), icon: <TextSelect className="size-4" />, separated: true,
         onAction: () => { term.selectAll(); focus(); },
       },
     ]);
@@ -262,7 +263,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
         // Windows 习惯：有选中时 Ctrl+C 复制，Ctrl+V 粘贴
         if (k === "c" && (e.shiftKey || term.hasSelection())) {
           void writeClipboardText(term.getSelection())
-            .catch((error) => toast.error(`复制失败：${String(error)}`));
+            .catch((error) => toast.error(t("复制失败：{{error}}", { error: String(error) })));
           term.clearSelection();
           return false;
         }
@@ -317,7 +318,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       })
       .catch((err) => {
         if (disposed) return;
-        term.write(`\r\n\x1b[31m打开终端失败：${err}\x1b[0m\r\n`);
+        term.write(`\r\n\x1b[31m${t("打开终端失败：{{err}}", { err })}\x1b[0m\r\n`);
         cb.current.onStatus({ type: "closed", reason: String(err) });
       });
     }, 0);

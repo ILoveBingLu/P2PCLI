@@ -9,6 +9,7 @@ import type { Overview, SessionSummary } from "../api";
 import { InUseIndicator } from "./InUseIndicator";
 import { LocalDevicePopover } from "./LocalDevicePopover";
 import { sidebarShortcut } from "./useSidebar";
+import { t } from "@/i18n";
 
 export function Titlebar({
   ov,
@@ -46,7 +47,7 @@ export function Titlebar({
   return (
     <header
       className={`app-titlebar${nativeMac ? " titlebar-macos" : ""}${nativeWindows ? " titlebar-windows" : ""}`}
-      aria-label="应用标题栏"
+      aria-label={t("应用标题栏")}
     >
       <div className="titlebar-brand titlebar-drag" data-tauri-drag-region>
         <img className="brand-symbol" src={logo} alt="" draggable={false} />
@@ -58,8 +59,8 @@ export function Titlebar({
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label="设置"
-        title="设置"
+        aria-label={t("设置")}
+        title={t("设置")}
         disabled={!settingsEnabled}
         onClick={onSettings}
       >
@@ -70,25 +71,25 @@ export function Titlebar({
         variant={onBack ? "secondary" : "ghost"}
         size={onBack ? "sm" : "icon-sm"}
         className={onBack ? "titlebar-sidebar-toggle gap-1.5 rounded-full px-2.5" : "titlebar-sidebar-toggle"}
-        aria-label={onBack ? "返回工作区" : sidebarOpen ? "收起侧边栏" : "展开侧边栏"}
+        aria-label={onBack ? t("返回工作区") : sidebarOpen ? t("收起侧边栏") : t("展开侧边栏")}
         aria-expanded={onBack ? undefined : sidebarOpen}
         aria-controls={onBack ? undefined : "connection-sidebar"}
-        title={onBack ? "返回工作区" : `${sidebarOpen ? "收起" : "展开"}侧边栏（${sidebarShortcut}）`}
+        title={onBack ? t("返回工作区") : t("{{value}}侧边栏（{{sidebarShortcut}}）", { value: sidebarOpen ? t("收起") : t("展开"), sidebarShortcut })}
         onPress={onBack ?? onToggleSidebar}
       >
-        {onBack ? <><ArrowLeft data-icon="inline-start" /><span>返回</span></> : sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+        {onBack ? <><ArrowLeft data-icon="inline-start" /><span>{t("返回")}</span></> : sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
       </Button>
       <div className="titlebar-spacer titlebar-drag" data-tauri-drag-region />
       <div className="titlebar-actions">
         <InUseIndicator sessions={ov?.sessions ?? []} onKick={onKick} />
-        <Badge variant="outline">{terminalCount} 个终端</Badge>
+        <Badge variant="outline">{terminalCount} {t("个终端")}</Badge>
         {connectionAction}
         <LocalDevicePopover ov={ov} onRefresh={onRefresh} open={localDeviceOpen} onOpenChange={onLocalDeviceOpenChange} />
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="查看网络诊断"
-          title="查看网络诊断"
+          aria-label={t("查看网络诊断")}
+          title={t("查看网络诊断")}
           onClick={onDiag}
         >
           <Wifi />

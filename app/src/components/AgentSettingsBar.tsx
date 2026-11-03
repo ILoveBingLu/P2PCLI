@@ -4,6 +4,7 @@ import { Box, Brain, LoaderCircle, ShieldCheck, type LucideIcon } from "lucide-r
 import type { AgentInfo, AgentSettings } from "../api";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
+import { t } from "@/i18n";
 
 interface Choice {
   id: string;
@@ -19,38 +20,48 @@ export const CLAUDE_MODELS: Choice[] = [
   { id: "fable", label: "Fable" },
 ];
 
-const EFFORT_LABELS: Record<string, string> = { auto: "自动", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高" };
-const effortChoice = (id: string): Choice => ({ id, label: EFFORT_LABELS[id] ?? id, hint: id === "auto" ? "按模型的默认强度" : id });
+function effortLabels(): Record<string, string> {
+  return { auto: t("自动"), minimal: t("最低"), low: t("低"), medium: t("中"), high: t("高"), xhigh: t("很高"), max: t("最高") };
+}
+const effortChoice = (id: string): Choice => ({ id, label: effortLabels()[id] ?? id, hint: id === "auto" ? t("按模型的默认强度") : id });
 
-export const CLAUDE_EFFORTS: Choice[] = [
-  effortChoice("auto"),
-  effortChoice("low"),
-  effortChoice("medium"),
-  effortChoice("high"),
-  effortChoice("xhigh"),
-  { ...effortChoice("max"), hint: "max，有的模型没有" },
-];
+export function claudeEfforts(): Choice[] {
+  return [
+    effortChoice("auto"),
+    effortChoice("low"),
+    effortChoice("medium"),
+    effortChoice("high"),
+    effortChoice("xhigh"),
+    { ...effortChoice("max"), hint: t("max，有的模型没有") },
+  ];
+}
 
 /** 权限模式，顺序照 Shift+Tab 轮换的顺序 */
-const CLAUDE_MODES: Choice[] = [
-  { id: "default", label: "手动确认", hint: "改文件、跑命令都先问你" },
-  { id: "acceptEdits", label: "自动改文件", hint: "改文件不问，跑命令还问" },
-  { id: "plan", label: "只做计划", hint: "只看不改，先拿方案给你" },
-  { id: "auto", label: "自动模式", hint: "它自己判断哪些要问你" },
-  { id: "bypassPermissions", label: "全部放行", hint: "什么都不问；启动时开了才有" },
-];
-const ZCODE_MODES: Choice[] = [
-  { id: "build", label: "正常确认", hint: "只读的直接做，改东西、跑命令先问你" },
-  { id: "edit", label: "自动改文件", hint: "改项目里的文件不问，别的还问" },
-  { id: "yolo", label: "全部放行", hint: "什么都不问" },
-  { id: "plan", label: "只做计划", hint: "只看不改，先拿方案给你" },
-];
-const MODE_LABELS: Record<string, string> = { dontAsk: "不问就拒" };
+function claudeModes(): Choice[] {
+  return [
+    { id: "default", label: t("手动确认"), hint: t("改文件、跑命令都先问你") },
+    { id: "acceptEdits", label: t("自动改文件"), hint: t("改文件不问，跑命令还问") },
+    { id: "plan", label: t("只做计划"), hint: t("只看不改，先拿方案给你") },
+    { id: "auto", label: t("自动模式"), hint: t("它自己判断哪些要问你") },
+    { id: "bypassPermissions", label: t("全部放行"), hint: t("什么都不问；启动时开了才有") },
+  ];
+}
+function zcodeModes(): Choice[] {
+  return [
+    { id: "build", label: t("正常确认"), hint: t("只读的直接做，改东西、跑命令先问你") },
+    { id: "edit", label: t("自动改文件"), hint: t("改项目里的文件不问，别的还问") },
+    { id: "yolo", label: t("全部放行"), hint: t("什么都不问") },
+    { id: "plan", label: t("只做计划"), hint: t("只看不改，先拿方案给你") },
+  ];
+}
+function modeLabels(): Record<string, string> {
+  return { dontAsk: t("不问就拒") };
+}
 
-export const modeChoices = (kind: string) => (kind === "zcode" ? ZCODE_MODES : CLAUDE_MODES);
+export const modeChoices = (kind: string) => (kind === "zcode" ? zcodeModes() : claudeModes());
 
 export const choiceLabel = (choices: Choice[], id: string | null | undefined) =>
-  choices.find((c) => c.id === id)?.label ?? (id ? MODE_LABELS[id] ?? id : null);
+  choices.find((c) => c.id === id)?.label ?? (id ? modeLabels()[id] ?? id : null);
 
 /** 设置条直接点就能切的 AI */
 export const switchable = (kind: string) => kind === "claude" || kind === "zcode";
@@ -58,18 +69,21 @@ export const switchable = (kind: string) => kind === "claude" || kind === "zcode
 export type AgentSetting = "model" | "effort" | "mode";
 
 /** 菜单底下那行：切了以后影响到哪儿，各家规矩不一样 */
-const NOTES: Record<string, Record<AgentSetting, string>> = {
-  claude: {
-    model: "也会成为那台电脑上新开 Claude Code 的默认值",
-    effort: "也会成为那台电脑上新开 Claude Code 的默认值",
-    mode: "只改这个会话，按 Shift+Tab 轮换过去",
-  },
-  zcode: {
-    model: "只改这个会话，默认模型不变",
-    effort: "也会成为那台电脑上新开 ZCode 的默认强度",
-    mode: "也会成为这个目录下新开 ZCode 的默认模式",
-  },
-};
+function settingNotes(kind: string): Record<AgentSetting, string> | undefined {
+  const notes: Record<string, Record<AgentSetting, string>> = {
+    claude: {
+      model: t("也会成为那台电脑上新开 Claude Code 的默认值"),
+      effort: t("也会成为那台电脑上新开 Claude Code 的默认值"),
+      mode: t("只改这个会话，按 Shift+Tab 轮换过去"),
+    },
+    zcode: {
+      model: t("只改这个会话，默认模型不变"),
+      effort: t("也会成为那台电脑上新开 ZCode 的默认强度"),
+      mode: t("也会成为这个目录下新开 ZCode 的默认模式"),
+    },
+  };
+  return notes[kind];
+}
 
 /** 输入框旁边的模型、思考强度、权限模式。Claude Code、ZCode 点了直接切；Codex 的选项随账号变，打开它自己的选择框。
  *  在等你确认时都不让切：这时按的键会被当成选项；模型和强度要等它这一轮干完 */
@@ -99,25 +113,25 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalet
   const waiting = agent.state === "waiting";
   if (agent.kind === "opencode") {
     const disabled = agent.state !== "idle" || switching != null;
-    const reason = waiting ? "先在终端里完成当前确认" : agent.state === "working" ? "等当前任务完成后再切换" : null;
+    const reason = waiting ? t("先在终端里完成当前确认") : agent.state === "working" ? t("等当前任务完成后再切换") : null;
     return (
       <div className="agent-settings">
-        <IconAction label="模型" icon={Box} disabled={disabled}
-          tip={reason ? `模型：${reason}` : "模型：打开 OpenCode 的模型列表"} onPress={() => onPicker("/models")} />
-        <IconAction label="思考强度" icon={Brain} disabled={disabled}
-          tip={reason ? `思考强度：${reason}` : "思考强度：选择当前模型支持的档位"} onPress={() => onPicker("/variants")} />
-        <IconAction label="权限" icon={ShieldCheck} disabled={disabled}
-          tip={reason ? `权限：${reason}` : "权限：打开命令入口，在终端内确认（默认 Ctrl+P）"} onPress={() => onPalette("permissions")} />
+        <IconAction label={t("模型")} icon={Box} disabled={disabled}
+          tip={reason ? t("模型：{{reason}}", { reason }) : t("模型：打开 OpenCode 的模型列表")} onPress={() => onPicker("/models")} />
+        <IconAction label={t("思考强度")} icon={Brain} disabled={disabled}
+          tip={reason ? t("思考强度：{{reason}}", { reason }) : t("思考强度：选择当前模型支持的档位")} onPress={() => onPicker("/variants")} />
+        <IconAction label={t("权限")} icon={ShieldCheck} disabled={disabled}
+          tip={reason ? t("权限：{{reason}}", { reason }) : t("权限：打开命令入口，在终端内确认（默认 Ctrl+P）")} onPress={() => onPalette("permissions")} />
       </div>
     );
   }
   if (agent.kind === "codex") {
     return (
       <div className="agent-settings">
-        <IconAction label="模型和思考强度" icon={Box} disabled={waiting}
-          tip={waiting ? "模型和思考强度：先在终端里完成当前确认" : "模型和思考强度：打开 Codex 的选择菜单"} onPress={() => onPicker("/model")} />
-        <IconAction label="权限" icon={ShieldCheck} disabled={waiting}
-          tip={waiting ? "权限：先在终端里完成当前确认" : "权限：打开 Codex 的权限选择"} onPress={() => onPicker("/permissions")} />
+        <IconAction label={t("模型和思考强度")} icon={Box} disabled={waiting}
+          tip={waiting ? t("模型和思考强度：先在终端里完成当前确认") : t("模型和思考强度：打开 Codex 的选择菜单")} onPress={() => onPicker("/model")} />
+        <IconAction label={t("权限")} icon={ShieldCheck} disabled={waiting}
+          tip={waiting ? t("权限：先在终端里完成当前确认") : t("权限：打开 Codex 的权限选择")} onPress={() => onPicker("/permissions")} />
       </div>
     );
   }
@@ -130,18 +144,18 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalet
     ? models.find((m) => m.id.toLowerCase() === settings.model?.toLowerCase())?.id ?? null
     : CLAUDE_MODELS.find((m) => settings.model?.toLowerCase().startsWith(m.id))?.id ?? null;
   const modelText = zcode ? choiceLabel(models, model) ?? settings.model?.split("/").pop() : settings.model;
-  const efforts = zcode ? (settings.efforts ?? []).map(effortChoice) : CLAUDE_EFFORTS;
-  const notes = NOTES[agent.kind];
+  const efforts = zcode ? (settings.efforts ?? []).map(effortChoice) : claudeEfforts();
+  const notes = settingNotes(agent.kind) ?? { model: "", effort: "", mode: "" };
 
   const busy = switching != null;
-  const blocked = waiting ? `${agent.name} 在等你确认，先在终端里选` : undefined;
-  const lockedByWork = blocked ?? (agent.state === "working" ? "等它这一轮干完再切" : undefined);
+  const blocked = waiting ? t("{{name}} 在等你确认，先在终端里选", { name: agent.name }) : undefined;
+  const lockedByWork = blocked ?? (agent.state === "working" ? t("等它这一轮干完再切") : undefined);
   return (
     <div className="agent-settings">
       <Chip
         icon={Box}
-        title="模型"
-        value={modelText ?? "模型"}
+        title={t("模型")}
+        value={modelText ?? t("模型")}
         choices={models}
         current={model}
         note={notes.model}
@@ -153,8 +167,8 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalet
       {(efforts.length > 0 || !zcode) && (
         <Chip
           icon={Brain}
-          title="思考强度"
-          value={choiceLabel(efforts, settings.effort) ?? "默认"}
+          title={t("思考强度")}
+          value={choiceLabel(efforts, settings.effort) ?? t("默认")}
           choices={efforts}
           current={settings.effort ?? null}
           note={notes.effort}
@@ -166,8 +180,8 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalet
       )}
       <Chip
         icon={ShieldCheck}
-        title="权限模式"
-        value={choiceLabel(modeChoices(agent.kind), settings.mode) ?? "权限"}
+        title={t("权限模式")}
+        value={choiceLabel(modeChoices(agent.kind), settings.mode) ?? t("权限")}
         choices={modeChoices(agent.kind)}
         current={settings.mode ?? null}
         note={notes.mode}

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { api, type ConnectFail, type NearbyDevice, type PathInfo, type RemoteInfo } from "../api";
 import { toast } from "@/components/ui/toast";
+import { t } from "@/i18n";
 
 interface Options {
   onConnected: (connId: number, info: RemoteInfo, code: string | null, path: PathInfo) => void;
@@ -19,17 +20,17 @@ export function useConnection({ onConnected, onOpenChange }: Options) {
   const pwRef = useRef<HTMLInputElement>(null);
   const connecting = useRef(false);
 
-  const doConnect = async (t: string, pw: string, lan: NearbyDevice | null = null) => {
-    if (connecting.current || !t.trim()) return;
+  const doConnect = async (target: string, pw: string, lan: NearbyDevice | null = null) => {
+    if (connecting.current || !target.trim()) return;
     connecting.current = true;
     setBusy(true);
     setError(null);
     setLanTarget(lan);
     try {
-      const c = await api.connect(t.trim(), pw || null, mutual);
+      const c = await api.connect(target.trim(), pw || null, mutual);
       onConnected(c.conn_id, c.info, c.code, c.path);
-      if (mutual && !c.mutual) toast.error("已连上，但没能记下互相信任，对方还不能直接控制本机");
-      if (c.mutual) toast.success(`已和 ${c.info.name} 互相信任，它以后可以直接连本机`);
+      if (mutual && !c.mutual) toast.error(t("已连上，但没能记下互相信任，对方还不能直接控制本机"));
+      if (c.mutual) toast.success(t("已和 {{name}} 互相信任，它以后可以直接连本机", { name: c.info.name }));
       setPassword("");
       setMutual(false);
       setLanTarget(null);
@@ -39,7 +40,7 @@ export function useConnection({ onConnected, onOpenChange }: Options) {
       setError(f.message ?? String(e));
       onOpenChange(true);
       if (f.reject === "need_password" || f.reject === "bad_password") {
-        if (!lan) setTarget(t.replace(/\D/g, ""));
+        if (!lan) setTarget(target.replace(/\D/g, ""));
         window.setTimeout(() => pwRef.current?.focus(), 0);
       }
     } finally {

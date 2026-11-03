@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { taskDestination, taskSource } from "../lib/collaborationLinks";
 import "../collaboration.css";
 import "../collaboration-links.css";
+import { t } from "@/i18n";
 
 export function CollaborationDrawer() {
   const collab = useCollaboration();
@@ -33,7 +34,7 @@ export function CollaborationDrawer() {
       await collab.run(async () => {
         expectCollaboration(await api.collabRequest(collab.target, collab.project!.id, action), "task");
       });
-      toast.success("已保存");
+      toast.success(t("已保存"));
       return true;
     } catch (e) { setError(collaborationErrorText(e)); return false; }
   };
@@ -42,40 +43,40 @@ export function CollaborationDrawer() {
     ...(collab.overview?.nearby ?? []).map((device) => [device.endpoint_id, device.name] as const),
   ]);
   return <>
-    {collab.open && <aside className="collab-drawer" aria-label="协作详情"
+    {collab.open && <aside className="collab-drawer" aria-label={t("协作详情")}
       onKeyDown={(event) => { if (event.key === "Escape" && !collab.link) { event.stopPropagation(); collab.setOpen(false); } }}>
       <header className="collab-drawer-header">
-        {task ? <Button variant="ghost" size="icon-sm" title="所有协作" aria-label="所有协作" onPress={() => collab.selectTask(null)}><ArrowLeft /></Button> : <Network />}
-        <h2>{task ? "协作详情" : "协作"}</h2>
-        <Button variant="ghost" size="icon-sm" title="刷新协作" aria-label="刷新协作" disabled={collab.busy || collab.loading} onPress={collab.refresh}><RefreshCw /></Button>
-        <Button variant="ghost" size="icon-sm" title="高级管理" aria-label="高级管理" onPress={() => collab.setAdvanced(true)}><Settings2 /></Button>
-        <Button ref={closeRef} variant="ghost" size="icon-sm" title="关闭协作详情" aria-label="关闭协作详情" onPress={() => collab.setOpen(false)}><X /></Button>
+        {task ? <Button variant="ghost" size="icon-sm" title={t("所有协作")} aria-label={t("所有协作")} onPress={() => collab.selectTask(null)}><ArrowLeft /></Button> : <Network />}
+        <h2>{task ? t("协作详情") : t("协作")}</h2>
+        <Button variant="ghost" size="icon-sm" title={t("刷新协作")} aria-label={t("刷新协作")} disabled={collab.busy || collab.loading} onPress={collab.refresh}><RefreshCw /></Button>
+        <Button variant="ghost" size="icon-sm" title={t("高级管理")} aria-label={t("高级管理")} onPress={() => collab.setAdvanced(true)}><Settings2 /></Button>
+        <Button ref={closeRef} variant="ghost" size="icon-sm" title={t("关闭协作详情")} aria-label={t("关闭协作详情")} onPress={() => collab.setOpen(false)}><X /></Button>
       </header>
       {(collab.error || error) && <p className="collab-drawer-error" role="alert">{collab.error || error}</p>}
       {task ? <CollaborationTaskDetail task={task} sessions={collab.sessions} target={collab.target}
         compact deviceName={collab.deviceName}
         canDispatch={canDispatch} disabled={collab.busy || collab.loading || !!collab.error} mutate={mutate}
         onBack={() => collab.selectTask(null)} /> : <div className="collab-drawer-scroll">
-        <div className="collab-drawer-filters" role="group" aria-label="任务范围">
-          <Button variant={filter === "active" ? "secondary" : "ghost"} size="sm" aria-pressed={filter === "active"} onPress={() => setFilter("active")}>进行中</Button>
-          <Button variant={filter === "all" ? "secondary" : "ghost"} size="sm" aria-pressed={filter === "all"} onPress={() => setFilter("all")}>全部</Button>
+        <div className="collab-drawer-filters" role="group" aria-label={t("任务范围")}>
+          <Button variant={filter === "active" ? "secondary" : "ghost"} size="sm" aria-pressed={filter === "active"} onPress={() => setFilter("active")}>{t("进行中")}</Button>
+          <Button variant={filter === "all" ? "secondary" : "ghost"} size="sm" aria-pressed={filter === "all"} onPress={() => setFilter("all")}>{t("全部")}</Button>
           <span>{tasks.length}</span>
         </div>
-        {collab.loading ? <div className="collab-empty"><LoaderCircle className="animate-spin" />同步中</div> :
-          tasks.length === 0 ? <div className="collab-empty"><Network />{collab.error ? "协作暂不可用" : "暂无协作任务"}</div> :
+        {collab.loading ? <div className="collab-empty"><LoaderCircle className="animate-spin" />{t("同步中")}</div> :
+          tasks.length === 0 ? <div className="collab-empty"><Network />{collab.error ? t("协作暂不可用") : t("暂无协作任务")}</div> :
           tasks.map((task) => <Button key={task.id} variant="ghost" className="collab-link-task" onPress={() => collab.selectTask(task.id)}>
-            <div><span className="collab-state" data-state={task.state}>{taskStateLabels[task.state]}</span><strong>{task.spec.title}</strong></div>
+            <div><span className="collab-state" data-state={task.state}>{taskStateLabels()[task.state]}</span><strong>{task.spec.title}</strong></div>
             <p>{collab.deviceName(taskSource(task).deviceId)}<ArrowRight />{collab.deviceName(taskDestination(task).deviceId)}</p>
             {task.progress && <small>{task.progress}</small>}
           </Button>)}
         <details className="collab-drawer-scope">
-          <summary>协作范围</summary>
-          <label className="collab-link-field">协调设备<select aria-label="协调设备" value={collab.target ?? ""}
+          <summary>{t("协作范围")}</summary>
+          <label className="collab-link-field">{t("协调设备")}<select aria-label={t("协调设备")} value={collab.target ?? ""}
             disabled={collab.busy || !!collab.link} onChange={(event) => collab.setTarget(event.target.value || null)}>
-            <option value="">本机</option>
+            <option value="">{t("本机")}</option>
             {[...devices].filter(([id]) => id !== collab.overview?.endpoint_id).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
           </select></label>
-          {collab.projects.length > 0 && <label className="collab-link-field">项目<select aria-label="协作项目" value={collab.project?.id ?? ""}
+          {collab.projects.length > 0 && <label className="collab-link-field">{t("项目")}<select aria-label={t("协作项目")} value={collab.project?.id ?? ""}
             disabled={collab.busy || !!collab.link} onChange={(event) => collab.selectProject(event.target.value)}>
             {collab.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select></label>}
@@ -86,7 +87,7 @@ export function CollaborationDrawer() {
     <CollaborationLinkDialog />
     <Dialog open={collab.advanced} onOpenChange={(open) => { collab.setAdvanced(open); if (!open) collab.refresh(); }}>
       <DialogContent className="collab-management-dialog">
-        <DialogHeader><DialogTitle>协作高级管理</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{t("协作高级管理")}</DialogTitle></DialogHeader>
         <Collaboration overview={collab.overview} />
       </DialogContent>
     </Dialog>
