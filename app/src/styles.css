@@ -1989,10 +1989,10 @@ img.agent-icon {
 /* 底部栏的当前目录：点开是对方电脑上的目录列表，选好以后让终端切过去 */
 .terminal-status-dir-button {
   max-width: 100%;
+  min-width: 0;
   height: 20px;
-  gap: 5px;
+  gap: 6px;
   padding: 0 6px;
-  margin-left: -6px;
   border-radius: 6px;
   font-size: inherit;
   font-weight: inherit;
@@ -2003,6 +2003,11 @@ img.agent-icon {
   width: 12px;
   height: 12px;
   flex: none;
+  /* 按钮图标默认往两侧探出 2px，会压住路径开头，也会被左边的裁切吃掉 */
+  margin: 0;
+}
+.terminal-status-dir-button .truncate {
+  min-width: 0;
 }
 .terminal-status-dir-button:hover,
 .terminal-status-dir-button[aria-expanded="true"] {
