@@ -19,7 +19,7 @@ use crate::PROTO_VERSION;
 use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::Files;
 use crate::identity::DeviceInfo;
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
@@ -509,7 +509,7 @@ impl Host {
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
                 capabilities: capabilities.iter().filter(|capability|
-                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1)).cloned().collect(),
+                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1)).cloned().collect(),
             },
         )
         .await?;
@@ -599,6 +599,14 @@ impl Host {
                 Msg::EndTerminal { session_id } => {
                     self.terminals.end(&owner, &session_id).await?;
                     write_msg(&mut send, &Msg::TerminalEnded).await?;
+                }
+                Msg::ListDir { path } => {
+                    let listing = crate::dirs::list(&path).await?;
+                    write_msg(&mut send, &Msg::DirListing { listing }).await?;
+                }
+                Msg::ChangeDir { session_id, path } => {
+                    self.terminals.change_dir(&owner, &session_id, &path).await?;
+                    write_msg(&mut send, &Msg::DirChanged).await?;
                 }
                 Msg::Exec { command, cwd, timeout_secs } => {
                     info!(session, bytes = command.len(), "对面要在本机跑一条命令");

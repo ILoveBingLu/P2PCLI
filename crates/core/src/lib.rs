@@ -10,6 +10,7 @@ pub mod client;
 pub mod collaboration;
 pub mod control;
 pub mod diag;
+pub mod dirs;
 pub mod exec;
 pub mod files;
 pub mod host;

@@ -103,6 +103,16 @@ export interface QuotaWindow {
   resets_at: number | null;
 }
 
+/** 对方电脑上一个目录的子目录 */
+export interface DirListing {
+  path: string;
+  /** 已经是根目录时没有 */
+  parent: string | null;
+  dirs: string[];
+  /** 子目录太多只回了一部分 */
+  truncated: boolean;
+}
+
 export interface OpenedTerminal { term_id: number; session_id: string }
 
 export interface Connected {
@@ -399,6 +409,10 @@ export const api = {
   sendAgentMessage: (connId: number, sessionId: string, kind: string, requestId: string, text: string) =>
     invoke<void>("send_agent_message", { connId, sessionId, kind, requestId, text }),
   endTerminal: (connId: number, sessionId: string) => invoke("end_terminal", { connId, sessionId }),
+  /** 列出对方电脑上某个目录的子目录；path 空着是用户目录 */
+  listDir: (connId: number, path: string) => invoke<DirListing>("list_dir", { connId, path }),
+  /** 会话在空闲提示符时切到这个目录 */
+  changeDir: (connId: number, sessionId: string, path: string) => invoke<void>("change_dir", { connId, sessionId, path }),
   getSettings: () => invoke<SettingsView>("get_settings"),
   systemPermissions: () => invoke<SystemPermission[]>("system_permissions"),
   requestSystemPermission: (permission: string) => invoke<SystemPermission[]>("request_system_permission", { permission }),

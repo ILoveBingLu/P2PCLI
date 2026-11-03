@@ -841,6 +841,16 @@ async fn end_terminal(state: State<'_, AppState>, conn_id: u64, session_id: Stri
 }
 
 #[tauri::command]
+async fn list_dir(state: State<'_, AppState>, conn_id: u64, path: String) -> Result<p2pcli_core::dirs::DirListing, String> {
+    state.remote(conn_id)?.list_dir(path).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn change_dir(state: State<'_, AppState>, conn_id: u64, session_id: String, path: String) -> Result<(), String> {
+    state.remote(conn_id)?.change_dir(session_id, path).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 async fn installed_agents(state: State<'_, AppState>, conn_id: u64, refresh: bool) -> Result<Vec<p2pcli_core::launchers::InstalledAgent>, String> {
     state.remote(conn_id)?.installed_agents(refresh).await.map_err(|e| format!("{e:#}"))
 }
@@ -1362,6 +1372,8 @@ pub fn run() {
             choose_agent_option,
             send_agent_message,
             end_terminal,
+            list_dir,
+            change_dir,
             term_input,
             term_resize,
             term_close,

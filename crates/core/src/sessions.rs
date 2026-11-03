@@ -461,6 +461,26 @@ impl SessionManager {
         Ok(())
     }
 
+    /// 状态栏选好目录后切过去：和启动 AI 一样，只在空闲提示符下输入，不会把 cd 塞给正在跑的程序
+    pub async fn change_dir(&self, owner: &str, id: &str, path: &str) -> Result<()> {
+        let name = Self::name(owner, id)?;
+        let dir = crate::dirs::resolve(path)?;
+        if !tokio::fs::metadata(&dir).await.is_ok_and(|m| m.is_dir()) {
+            bail!("目录不存在：{}", dir.display());
+        }
+        let _gate = self.gate.lock().await;
+        if !self.shell_ready(&name, true).await? {
+            bail!("终端不在空闲提示符，请先完成当前输入或退出正在运行的程序");
+        }
+        let out = self.command(&["display-message", "-p", "-t", &name, "#{pane_current_command}"]).await?;
+        if !out.status.success() { bail!("读取终端的 shell 失败"); }
+        let shell = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let command = crate::dirs::cd_command(&shell, &dir.to_string_lossy())?;
+        self.checked(&["send-keys", "-t", &name, "-l", &command]).await?;
+        self.checked(&["send-keys", "-t", &name, "Enter"]).await?;
+        Ok(())
+    }
+
     /// Observe even detached sessions. Only query; never start, recreate or terminate a server.
     pub async fn check_health(&self) {
         let gate = self.gate.lock().await;
