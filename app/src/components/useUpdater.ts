@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api, type UpdateProgress, type UpdateView } from "../api";
+import { t } from "@/i18n";
 
 /** 启动后过一会儿查一次，之后每 6 小时查一次 */
 const FIRST_CHECK_DELAY = 5_000;
@@ -79,10 +80,10 @@ export function useUpdater() {
 
 /** 下载进度的文字 */
 export function progressText(p: UpdateProgress | null) {
-  if (!p) return "正在准备下载…";
-  if (p.event === "installing") return "下载完成，正在安装，马上重启…";
+  if (!p) return t("正在准备下载…");
+  if (p.event === "installing") return t("下载完成，正在安装，马上重启…");
   const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
   return p.total
-    ? `正在下载 ${Math.floor((p.downloaded / p.total) * 100)}%（${mb(p.downloaded)} / ${mb(p.total)} MB）`
-    : `正在下载 ${mb(p.downloaded)} MB`;
+    ? t("正在下载 {{value}}%（{{value2}} / {{value3}} MB）", { value: Math.floor((p.downloaded / p.total) * 100), value2: mb(p.downloaded), value3: mb(p.total) })
+    : t("正在下载 {{value}} MB", { value: mb(p.downloaded) });
 }

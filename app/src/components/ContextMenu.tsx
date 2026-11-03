@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Dropdown, Label, dropdownVariants } from "@heroui/react";
 import { cn } from "@/lib/utils";
+import { t } from "@/i18n";
 
 // 只用了 Dropdown 的弹层和菜单，没有外面那层 Root，样式要自己套上
 const slots = dropdownVariants();
@@ -90,7 +91,7 @@ export function useContextMenu() {
         >
           <Dropdown.Menu
             className={slots.menu()}
-            aria-label="操作"
+            aria-label={t("操作")}
             autoFocus="first"
             disabledKeys={state.actions.filter((a) => a.disabled).map((a) => a.id)}
             onAction={(key) => {

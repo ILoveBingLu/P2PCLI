@@ -3,6 +3,7 @@ import { ClipboardPaste, Copy, Scissors, TextSelect } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
+import { t } from "@/i18n";
 
 /** 有选区的输入框类型；number、email 这些拿不到 selectionStart */
 const TEXT_TYPES = new Set(["text", "search", "url", "tel", "password"]);
@@ -15,7 +16,7 @@ function editableField(target: EventTarget | null): Field | null {
   return null;
 }
 
-const fail = (what: string) => (error: unknown) => toast.error(`${what}失败：${String(error)}`);
+const fail = (what: string) => (error: unknown) => toast.error(t("{{what}}失败：{{error}}", { what, error: String(error) }));
 
 /** 先发一个粘贴事件，让输入框自己的粘贴处理先接（比如设备码去掉短横线）；没人接再直接插入文字 */
 function pasteInto(el: Field, text: string) {
@@ -41,25 +42,25 @@ function fieldActions(el: Field): MenuAction[] {
   };
   return [
     {
-      id: "cut", label: "剪切", icon: <Scissors className="size-4" />, disabled: !selected || secret || !writable,
+      id: "cut", label: t("剪切"), icon: <Scissors className="size-4" />, disabled: !selected || secret || !writable,
       onAction: () => void writeClipboardText(selected).then(() => {
         restore();
         document.execCommand("delete");
-      }, fail("剪切")),
+      }, fail(t("剪切"))),
     },
     {
-      id: "copy", label: "复制", icon: <Copy className="size-4" />, disabled: !selected || secret,
-      onAction: () => void writeClipboardText(selected).then(restore, fail("复制")),
+      id: "copy", label: t("复制"), icon: <Copy className="size-4" />, disabled: !selected || secret,
+      onAction: () => void writeClipboardText(selected).then(restore, fail(t("复制"))),
     },
     {
-      id: "paste", label: "粘贴", icon: <ClipboardPaste className="size-4" />, disabled: !writable,
+      id: "paste", label: t("粘贴"), icon: <ClipboardPaste className="size-4" />, disabled: !writable,
       onAction: () => void readClipboardText().then((text) => {
         restore();
         pasteInto(el, text);
-      }, fail("粘贴")),
+      }, fail(t("粘贴"))),
     },
     {
-      id: "select-all", label: "全选", icon: <TextSelect className="size-4" />, separated: true, disabled: !el.value,
+      id: "select-all", label: t("全选"), icon: <TextSelect className="size-4" />, separated: true, disabled: !el.value,
       onAction: () => {
         el.focus();
         el.select();
@@ -89,8 +90,8 @@ export function GlobalContextMenu() {
       const text = window.getSelection()?.toString() ?? "";
       if (text.trim())
         open.current(e, [{
-          id: "copy", label: "复制", icon: <Copy className="size-4" />,
-          onAction: () => void writeClipboardText(text).catch(fail("复制")),
+          id: "copy", label: t("复制"), icon: <Copy className="size-4" />,
+          onAction: () => void writeClipboardText(text).catch(fail(t("复制"))),
         }]);
     };
     document.addEventListener("contextmenu", onContextMenu);

@@ -1,6 +1,7 @@
 // 和 Rust 端对应的类型与调用
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { unwrapCollaboration, type CollaborationAction, type CollaborationReply, type CollaborationDelivery } from "./lib/collaboration";
+import { t } from "@/i18n";
 
 export type PathKind = "ipv6" | "ipv4" | "relay" | "local" | "unknown";
 export interface PathInfo {
@@ -432,8 +433,8 @@ export function platformLabel(p: string): string {
 }
 
 export function pathLabel(p: PathInfo | null | undefined): string {
-  if (!p) return "连接中";
-  const name = { ipv6: "IPv6 直连", ipv4: "IPv4 直连", relay: "中继", local: "本机", unknown: "连接中" }[p.kind];
+  if (!p) return t("连接中");
+  const name = { ipv6: t("IPv6 直连"), ipv4: t("IPv4 直连"), relay: t("中继"), local: t("本机"), unknown: t("连接中") }[p.kind];
   return p.rtt_ms != null && p.kind !== "unknown" ? `${name} · ${p.rtt_ms} ms` : name;
 }
 

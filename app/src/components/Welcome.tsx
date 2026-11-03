@@ -10,6 +10,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { t } from "@/i18n";
 
 export function Welcome({
   ov,
@@ -37,33 +38,33 @@ export function Welcome({
         />
         <EmptyHeader>
           <EmptyTitle>
-            <h2>连接远程设备</h2>
+            <h2>{t("连接远程设备")}</h2>
           </EmptyTitle>
           <EmptyDescription>
-            输入设备码和配对密码，开始远程终端会话。
+            {t("输入设备码和配对密码，开始远程终端会话。")}
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <Button variant="ghost" className="text-muted-foreground" onClick={onLocalDevice}>
-              <Monitor data-icon="inline-start" />本机信息
+              <Monitor data-icon="inline-start" />{t("本机信息")}
             </Button>
             <Button onClick={onConnect}>
-              开始连接
+              {t("开始连接")}
               <ArrowRight data-icon="inline-end" />
             </Button>
             <Button variant="ghost" className="text-muted-foreground" onClick={onScanNearby} disabled={scanning}>
               {scanning ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Radar data-icon="inline-start" />}
-              附近设备
+              {t("附近设备")}
             </Button>
           </div>
           {ov?.server.state === "none" && (
             <Alert>
-              <AlertTitle>先配置牵线服务器</AlertTitle>
+              <AlertTitle>{t("先配置牵线服务器")}</AlertTitle>
               <AlertDescription>
-                配置后即可获取设备码。
+                {t("配置后即可获取设备码。")}
                 <Button variant="link" size="sm" onClick={onSettings}>
-                  打开设置
+                  {t("打开设置")}
                   <ArrowRight data-icon="inline-end" />
                 </Button>
               </AlertDescription>

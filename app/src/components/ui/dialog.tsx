@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
+import { t } from "@/i18n";
 
 const DescriptionId = createContext<string | undefined>(undefined);
 export function Dialog({
@@ -52,7 +53,7 @@ export function DialogContent({
       >
         {children}
         <Modal.CloseTrigger
-          aria-label="关闭"
+          aria-label={t("关闭")}
           className="absolute right-4 top-4"
         >
           <X className="size-4" />

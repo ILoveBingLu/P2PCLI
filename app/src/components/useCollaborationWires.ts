@@ -6,6 +6,7 @@ import {
   relationStorageKey, rememberRelation, taskWire, TransferActivityTracker,
   type CollaborationRelation, type WireActivity,
 } from "../lib/collaborationWires";
+import { t } from "@/i18n";
 
 export function useCollaborationWires(overview: Overview | null, project: CollaborationProject | null,
   sessions: CollaborationSession[], tasks: CollaborationTask[], transfers: Transfer[]) {
@@ -58,7 +59,7 @@ export function useCollaborationWires(overview: Overview | null, project: Collab
       for (const task of [...tasks].sort((a, b) => a.created_at - b.created_at).slice(-100)) {
         rememberRelation(scope, taskWire(task, sessions, scope.ownerId), true);
       }
-    } catch { setStorageError("连线记录未能保存"); }
+    } catch { setStorageError(t("连线记录未能保存")); }
   }, [scope, tasks, sessions]);
 
   useEffect(() => {
@@ -94,7 +95,7 @@ export function useCollaborationWires(overview: Overview | null, project: Collab
       } catch {
         if (active) {
           setEvents({ key: scopeKey, items: [] });
-          setEventError("活动状态未同步");
+          setEventError(t("活动状态未同步"));
           cursor = new EventCursor();
         }
       } finally { reading = false; }
@@ -118,7 +119,7 @@ export function useCollaborationWires(overview: Overview | null, project: Collab
     forgetRelation: (id: string) => {
       if (!scope) return false;
       try { hideRelation(scope, id); setStorageError(""); return true; }
-      catch { setStorageError("连线记录未能移除"); return false; }
+      catch { setStorageError(t("连线记录未能移除")); return false; }
     },
   };
 }

@@ -14,6 +14,7 @@ import { useRemarks } from "./Remarks";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 import { CollaborationAnchor, CollaborationSidebarStatus } from "./CollaborationPorts";
+import { t } from "@/i18n";
 
 const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
 /** 本机那一行第一次出现时默认展开，之后听用户的 */
@@ -109,7 +110,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   const deviceIcon = (endpointId: string, platform: string) => (
     <span className="device-icon">
       <PlatformIcon platform={platform} decorative />
-      {connected.has(endpointId) && <><span className="connected-dot" /><span className="sr-only">（已连接）</span></>}
+      {connected.has(endpointId) && <><span className="connected-dot" /><span className="sr-only">{t("（已连接）")}</span></>}
     </span>
   );
   const lanOnline = new Set(nearby.filter((d) => d.online).map((d) => d.endpoint_id));
@@ -136,17 +137,17 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
     } catch (error) { toast.error(String(error)); }
   };
   const copyCode = (code: string) =>
-    void writeClipboardText(code).then(() => toast.success("设备码已复制"), () => toast.error("复制失败"));
+    void writeClipboardText(code).then(() => toast.success(t("设备码已复制")), () => toast.error(t("复制失败")));
   /** 选好文件就在后台发，进度在左下角 */
   const sendTo = async (endpointId: string, folders: boolean) => {
     try {
       const picked = await api.pickPaths(folders);
       if (picked.length) await api.sendFiles(endpointId, picked);
-    } catch (error) { toast.error(`发不了：${String(error)}`); }
+    } catch (error) { toast.error(t("发不了：{{error}}", { error: String(error) })); }
   };
   const sendActions = (endpointId: string, disabled: boolean): MenuAction[] => [
-    { id: "send-files", label: "发送文件…", icon: <FileUp className="size-4" />, disabled, separated: true, onAction: () => void sendTo(endpointId, false) },
-    { id: "send-folder", label: "发送文件夹…", icon: <FolderUp className="size-4" />, disabled, onAction: () => void sendTo(endpointId, true) },
+    { id: "send-files", label: t("发送文件…"), icon: <FileUp className="size-4" />, disabled, separated: true, onAction: () => void sendTo(endpointId, false) },
+    { id: "send-folder", label: t("发送文件夹…"), icon: <FolderUp className="size-4" />, disabled, onAction: () => void sendTo(endpointId, true) },
   ];
 
   // 设备和附近设备的右键菜单；会话行的菜单在 DeviceSessions 里，先接到就不会冒泡到这里
@@ -162,37 +163,37 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       const offline = statuses.get(endpointId)?.state === "offline";
       actions = target
         ? [
-          { id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) },
-          { id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged },
+          { id: "new", label: t("新建会话"), icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) },
+          { id: "refresh", label: t("刷新会话"), icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged },
         ]
         : [
-          { id: "new", label: "新建会话", icon: <Plus className="size-4" />, disabled: busy || offline, onAction: () => connectOpen(device, null) },
-          { id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy || offline, onAction: () => connectDevice(device) },
-          { id: "refresh", label: "刷新状态", icon: <RefreshCw className="size-4" />, onAction: () => void api.refreshDevices() },
+          { id: "new", label: t("新建会话"), icon: <Plus className="size-4" />, disabled: busy || offline, onAction: () => connectOpen(device, null) },
+          { id: "connect", label: t("连接"), icon: <ArrowUpRight className="size-4" />, disabled: busy || offline, onAction: () => connectDevice(device) },
+          { id: "refresh", label: t("刷新状态"), icon: <RefreshCw className="size-4" />, onAction: () => void api.refreshDevices() },
         ];
       actions = [
         ...actions,
-        { id: "remark", label: deviceRemark(device).trim() ? "修改备注" : "添加备注", icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }) },
+        { id: "remark", label: deviceRemark(device).trim() ? t("修改备注") : t("添加备注"), icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }) },
         ...sendActions(endpointId, !target && offline),
-        { id: "copy", label: "复制设备码", icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
-        { id: "forget", label: "从连接历史移除", icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => void forget(endpointId) },
+        { id: "copy", label: t("复制设备码"), icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
+        { id: "forget", label: t("从连接历史移除"), icon: <Trash2 className="size-4" />, danger: true, separated: true, onAction: () => void forget(endpointId) },
       ];
     } else if (kind === "local") {
       if (!localTarget) return;
       actions = [
-        { id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(localTarget) },
-        { id: "refresh", label: "刷新会话", icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged },
+        { id: "new", label: t("新建会话"), icon: <Plus className="size-4" />, onAction: () => onOpenSession(localTarget) },
+        { id: "refresh", label: t("刷新会话"), icon: <RefreshCw className="size-4" />, onAction: onSessionsChanged },
       ];
     } else if (kind === "nearby") {
       const device = nearby.find((d) => d.endpoint_id === endpointId);
       if (!device) return;
       const target = targetFor(endpointId);
       actions = target
-        ? [{ id: "new", label: "新建会话", icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
-        : [{ id: "connect", label: "连接", icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
+        ? [{ id: "new", label: t("新建会话"), icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
+        : [{ id: "connect", label: t("连接"), icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
       actions.push({
           id: "remark",
-          label: deviceRemark(device) ? "修改备注" : "添加备注",
+          label: deviceRemark(device) ? t("修改备注") : t("添加备注"),
           icon: <Pencil className="size-4" />,
           onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }),
       });
@@ -202,11 +203,11 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   };
 
   return (
-    <aside id="connection-sidebar" className="connection-sidebar" data-collapsed={open ? undefined : ""} aria-label="连接历史" onContextMenu={onContextMenu}>
+    <aside id="connection-sidebar" className="connection-sidebar" data-collapsed={open ? undefined : ""} aria-label={t("连接历史")} onContextMenu={onContextMenu}>
       {menu.element}
       <RemarkDialog
         open={!!remarkTarget}
-        title="设备备注"
+        title={t("设备备注")}
         description={remarkTarget?.name ?? ""}
         initialValue={remarkTarget?.remark ?? ""}
         onOpenChange={(next) => !next && setRemarkTarget(null)}
@@ -214,7 +215,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
           if (!remarkTarget) return;
           await remarks.saveDevice(remarkTarget.endpointId, remark);
           onRefresh();
-          toast.success("设备备注已保存");
+          toast.success(t("设备备注已保存"));
         }}
       />
       <div className="connection-sidebar-inner">
@@ -226,7 +227,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
             <Accordion.Heading level={2} id="local-title">
               <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
                 <Monitor className="size-3.5 text-muted-foreground" />
-                <span className="flex-1">本机</span>
+                <span className="flex-1">{t("本机")}</span>
                 <Accordion.Indicator className="size-3.5" />
               </Accordion.Trigger>
             </Accordion.Heading>
@@ -238,15 +239,15 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                     <CollaborationAnchor endpoint={{ deviceId: localId, deviceName: local.info.name }}>
                     <Button slot={null} variant="ghost"
                       className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-lg px-2 py-2 text-xs"
-                      aria-label={`查看本机的会话 ${local.info.name}`}
-                      title="在本机开终端、查看后台会话"
+                      aria-label={t("查看本机的会话 {{name}}", { name: local.info.name })}
+                      title={t("在本机开终端、查看后台会话")}
                       onPress={() => onShowSessions(localTarget)}>
                       {deviceIcon(localId, local.info.platform)}
                       <span className="min-w-0 flex-1 truncate text-left">{local.info.name}</span>
-                      <span className="presence-label" data-kind="local">本机</span>
+                      <span className="presence-label" data-kind="local">{t("本机")}</span>
                     </Button>
                     <Accordion.Trigger className="w-8 min-w-0 flex-none justify-center rounded-lg p-2"
-                      aria-label={`${expanded.has(localId) ? "收起" : "展开"}本机的会话`}>
+                      aria-label={t("{{value}}本机的会话", { value: expanded.has(localId) ? t("收起") : t("展开") })}>
                       <Accordion.Indicator className="size-3.5" />
                     </Accordion.Trigger>
                     </CollaborationAnchor>
@@ -278,7 +279,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         <Accordion.Item id="nearby" className="recent-section">
           <Accordion.Heading level={2} id="nearby-title" className="grid grid-cols-[max-content_1.5rem_minmax(0,1fr)] items-center gap-2">
             <Accordion.Trigger className="col-span-3 col-start-1 row-start-1 grid grid-cols-subgrid min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
-              <span className="flex items-center gap-2"><Radar className="size-3.5 text-muted-foreground" />附近设备</span>
+              <span className="flex items-center gap-2"><Radar className="size-3.5 text-muted-foreground" />{t("附近设备")}</span>
               <span aria-hidden="true" />
               <span className="flex items-center justify-end gap-2">
                 <Badge variant="secondary">{nearby.length}</Badge>
@@ -287,7 +288,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
             </Accordion.Trigger>
             <Button slot={null} variant="ghost" size="icon-sm"
               className="col-start-2 row-start-1 z-10 size-6 min-w-0 text-muted-foreground"
-              title="刷新附近设备" aria-label="刷新附近设备" disabled={scanning}
+              title={t("刷新附近设备")} aria-label={t("刷新附近设备")} disabled={scanning}
               onPress={onScanNearby}>
               <RefreshCw className={scanning ? "size-3 animate-spin" : "size-3"} />
             </Button>
@@ -300,8 +301,8 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                 <CollaborationAnchor endpoint={{ deviceId: device.endpoint_id, deviceName: deviceLabel(device) }} disabled={!device.online}>
                 <Button variant="ghost" disabled={busy || !device.online}
                   className="h-auto w-full min-w-0 justify-start gap-2 rounded-lg px-2 py-2 text-xs font-normal"
-                  aria-label={`${deviceLabel(device)}${connected.has(device.endpoint_id) ? "（已连接）" : device.online ? "" : "（离线）"}`}
-                  title={device.online ? `连接 ${deviceLabel(device)}` : `${deviceLabel(device)} · 离线`} onClick={() => onConnectLan(device)}>
+                  aria-label={`${deviceLabel(device)}${connected.has(device.endpoint_id) ? t("（已连接）") : device.online ? "" : t("（离线）")}`}
+                  title={device.online ? t("连接 {{value}}", { value: deviceLabel(device) }) : t("{{value}} · 离线", { value: deviceLabel(device) })} onClick={() => onConnectLan(device)}>
                   {deviceIcon(device.endpoint_id, device.platform)}
                   <span className="min-w-0 flex-1 truncate text-left">{deviceLabel(device)}</span>
                 </Button>
@@ -311,7 +312,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
             </div>
           ) : (
             <p className="recent-placeholder">
-              暂无附近设备
+              {t("暂无附近设备")}
             </p>
           )}
           </Accordion.Panel>
@@ -320,7 +321,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
           <Accordion.Heading level={2} id="recent-title">
             <Accordion.Trigger className="min-w-0 gap-2 rounded-lg px-2 py-2 text-[13px] text-left">
               <History className="size-3.5 text-muted-foreground" />
-              <span className="flex-1">连接历史</span>
+              <span className="flex-1">{t("连接历史")}</span>
               <Badge variant="secondary">{devices.length}</Badge>
               <Accordion.Indicator className="size-3.5" />
             </Accordion.Trigger>
@@ -343,21 +344,21 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                         disabled={!target && status?.state === "offline"}>
                       <Button slot={null} variant="ghost"
                         className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-lg px-2 py-2 text-xs"
-                        aria-label={`${target ? "查看会话" : "连接"} ${label}`}
+                        aria-label={`${target ? t("查看会话") : t("连接")} ${label}`}
                         disabled={!target && busy}
                         onPress={() => target ? onShowSessions(target) : connectDevice(device)}
                         data-offline={!target && status?.state === "offline" ? "" : undefined}>
                         {deviceIcon(device.endpoint_id, device.platform)}
                         <span className="min-w-0 flex-1 truncate text-left" title={deviceRemark(device).trim() ? `${label} · ${device.name}` : undefined}>{label}</span>
                         {lanOnline.has(device.endpoint_id) && (
-                          <span className="lan-mark" title="在同一个局域网里，连接不经过牵线服务器">
-                            <House aria-hidden="true" /><span className="sr-only">局域网</span>
+                          <span className="lan-mark" title={t("在同一个局域网里，连接不经过牵线服务器")}>
+                            <House aria-hidden="true" /><span className="sr-only">{t("局域网")}</span>
                           </span>
                         )}
                         <PresenceLabel status={status} connected={!!pathTarget} path={pathTarget ? paths[pathTarget.connId] : undefined} />
                       </Button>
                       <Accordion.Trigger className="w-8 min-w-0 flex-none justify-center rounded-lg p-2"
-                        aria-label={`${expanded.has(device.endpoint_id) ? "收起" : "展开"} ${label}的会话`}>
+                        aria-label={t("{{value}} {{label}}的会话", { value: expanded.has(device.endpoint_id) ? t("收起") : t("展开"), label })}>
                         <Accordion.Indicator className="size-3.5" />
                       </Accordion.Trigger>
                       </CollaborationAnchor>
@@ -388,7 +389,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                 );
               })}
             </Accordion>
-          ) : <p className="recent-placeholder">暂无连接历史</p>}
+          ) : <p className="recent-placeholder">{t("暂无连接历史")}</p>}
           </Accordion.Panel>
         </Accordion.Item>
         </Accordion>
@@ -401,19 +402,19 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
 function PresenceLabel({ status, connected, path }: { status?: DeviceStatus; connected: boolean; path?: PathInfo }) {
   if (!connected && status && (status.probing || status.state === "checking")) {
     return (
-      <Tooltip content="正在与设备握手并探测延迟">
+      <Tooltip content={t("正在与设备握手并探测延迟")}>
         <TooltipTrigger<"span"> render={(props) => <span {...props} />}
-          role="status" aria-label="正在探测" className="presence-label" data-kind="checking">
+          role="status" aria-label={t("正在探测")} className="presence-label" data-kind="checking">
           <LoaderCircle className="presence-spinner animate-spin" aria-hidden="true" />
-          <span>探测中…</span>
+          <span>{t("探测中…")}</span>
         </TooltipTrigger>
       </Tooltip>
     );
   }
   if (connected || status?.state === "online") {
     const p = connected ? path : status?.path;
-    const label = connected ? "已连接" : "在线";
-    const tip = `${label} · ${connected ? "终端连接" : "后台探测"} · ${pathLabel(p)}${p?.remote ? ` · ${p.remote}` : ""}`;
+    const label = connected ? t("已连接") : t("在线");
+    const tip = `${label} · ${connected ? t("终端连接") : t("后台探测")} · ${pathLabel(p)}${p?.remote ? ` · ${p.remote}` : ""}`;
     return (
       <Tooltip content={tip}>
         <TooltipTrigger<"span"> render={(props) => <span {...props} />}
@@ -424,11 +425,11 @@ function PresenceLabel({ status, connected, path }: { status?: DeviceStatus; con
     );
   }
   if (!status) return null;
-  if (status.state === "offline") return <span className="presence-label" data-kind="off">离线</span>;
+  if (status.state === "offline") return <span className="presence-label" data-kind="off">{t("离线")}</span>;
   if (status.state === "old_version") return (
-    <Tooltip content="对方的 P2PCLI 版本旧，升级后能显示延迟和会话">
+    <Tooltip content={t("对方的 P2PCLI 版本旧，升级后能显示延迟和会话")}>
       <TooltipTrigger<"span"> render={(props) => <span {...props} />}
-        role="presentation" tabIndex={-1} className="presence-label">需更新</TooltipTrigger>
+        role="presentation" tabIndex={-1} className="presence-label">{t("需更新")}</TooltipTrigger>
     </Tooltip>
   );
   return null;

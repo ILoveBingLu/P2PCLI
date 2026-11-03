@@ -3,6 +3,7 @@ import { api, type AgentState, type Overview } from "../api";
 import { toast } from "@/components/ui/toast";
 import { QUOTA_ALERT, quotaWindowLabel, resetText } from "./Agent";
 import { sessionTitles } from "./sessionText";
+import { t } from "@/i18n";
 
 const focused = () => document.visibilityState === "visible" && document.hasFocus();
 
@@ -12,7 +13,7 @@ function notify(title: string, body: string, warning: boolean, show: (() => void
     void api.notify(title, body).catch(() => {});
     return;
   }
-  toast.notice(title, { description: body, warning, action: show ? { label: "查看", onPress: show } : undefined });
+  toast.notice(title, { description: body, warning, action: show ? { label: t("查看"), onPress: show } : undefined });
 }
 
 /** 远程会话里的 AI 停下来等你确认、干完活、或者账号额度快用完时提醒你。
@@ -38,7 +39,7 @@ export function useAgentAlerts(
     for (const device of ov.devices) {
       if (device.state !== "online" || !device.sessions_live) continue;
       const titles = sessionTitles(device.sessions);
-      const deviceName = ov.recent.find((r) => r.endpoint_id === device.endpoint_id)?.name ?? "远程设备";
+      const deviceName = ov.recent.find((r) => r.endpoint_id === device.endpoint_id)?.name ?? t("远程设备");
       for (const session of device.sessions) {
         if (!session.agent) continue;
         const agent = session.agent;
@@ -49,7 +50,7 @@ export function useAgentAlerts(
           quotaAlerted.current.add(quotaKey);
           const label = quotaWindowLabel(w.minutes);
           notify(
-            level === 100 ? `${agent.name} ${label}额度用完了` : `${agent.name} ${label}额度用了 ${Math.round(w.used_percent)}%`,
+            level === 100 ? t("{{name}} {{label}}额度用完了", { name: agent.name, label }) : t("{{name}} {{label}}额度用了 {{value}}%", { name: agent.name, label, value: Math.round(w.used_percent) }),
             `${deviceName} · ${resetText(w.resets_at)}`,
             true,
             null,
@@ -65,7 +66,7 @@ export function useAgentAlerts(
 
         if (focused() && latest.current.viewing(device.endpoint_id, session.id)) continue;
         notify(
-          now === "waiting" ? `${agent.name} 在等你确认` : `${agent.name} 干完了`,
+          now === "waiting" ? t("{{name}} 在等你确认", { name: agent.name }) : t("{{name}} 干完了", { name: agent.name }),
           // 侧边栏里叫“Claude Code · 会话 2”的，提醒里也带上“会话 2”，对得上是哪一个
           [deviceName, titles.get(session.id)?.slice(agent.name.length + " · ".length)].filter(Boolean).join(" · "),
           now === "waiting",
