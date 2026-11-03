@@ -1,6 +1,6 @@
 // 编辑器的几个附属界面：起名对话框、全项目搜索、按名字快速打开
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { CaseSensitive, ChevronDown, ChevronRight, File, LoaderCircle, Regex, Search, WholeWord } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronRight, CircleX, File, Info, LoaderCircle, Regex, Search, TriangleAlert, WholeWord } from "lucide-react";
 import { api, type FileList, type SearchResult } from "../../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { cn } from "@/lib/utils";
 import { t, tr } from "@/i18n";
 import { baseName, fuzzyScore, joinPath, nameProblem, relativeTo, sepOf } from "./paths";
+import type { FileProblems, FoundSymbol, LspManager } from "./lsp";
 
 /** 新建文件、新建文件夹、重命名时输入名字 */
 export function NameDialog({ title, description, initial, confirm, onSubmit, onClose }: {
@@ -233,6 +234,126 @@ export function QuickOpen({ connId, root, cache, onCache, onOpen, onClose }: {
             </button>
           ))}
           {list?.truncated && <div className="remote-editor-note">{t("文件太多，只读取了一部分")}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 语言服务报的所有问题：没打开的文件也在里面，点一条跳过去 */
+export function ProblemsPanel({ problems, root, onOpen }: {
+  problems: FileProblems[];
+  root: string | null;
+  onOpen: (target: SearchTarget) => void;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  if (!problems.length) {
+    return <div className="remote-editor-search">
+      <div className="remote-editor-note">{t("没有发现问题。打开代码文件后，语言服务会在这里列出整个项目的错误和警告。")}</div>
+    </div>;
+  }
+  return (
+    <div className="remote-editor-search">
+      <div className="remote-editor-search-results">
+        {problems.map((file) => {
+          const open = !collapsed.has(file.path);
+          const rel = root ? relativeTo(file.path, root) : file.path;
+          return <div key={file.path}>
+            <button type="button" className="remote-editor-search-file" title={file.path}
+              onClick={() => setCollapsed((c) => { const n = new Set(c); if (open) n.add(file.path); else n.delete(file.path); return n; })}>
+              {open ? <ChevronDown className="chevron" /> : <ChevronRight className="chevron" />}<File />
+              <span className="truncate">{baseName(file.path)}</span>
+              <span className="remote-editor-search-dir truncate">{rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : ""}</span>
+              <span className="remote-editor-search-count">{file.problems.length}</span>
+            </button>
+            {open && file.problems.map((p, i) => (
+              <button key={i} type="button" className={cn("remote-editor-problem", `is-${p.severity}`)}
+                title={[p.message, p.source && `${p.source}${p.code ? `(${p.code})` : ""}`].filter(Boolean).join("\n")}
+                onClick={() => onOpen({ path: file.path, line: p.line, col: p.col, len: 0 })}>
+                {p.severity === "error" ? <CircleX /> : p.severity === "warning" ? <TriangleAlert /> : <Info />}
+                <span className="truncate">{p.message.split("\n")[0]}</span>
+                <span className="remote-editor-search-dir">{p.line}:{p.col}</span>
+              </button>
+            ))}
+          </div>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** LSP 的符号种类，显示成一两个字母 */
+const SYMBOL_LETTERS: Record<number, string> = {
+  2: "M", 3: "N", 4: "P", 5: "C", 6: "m", 7: "p", 8: "f", 9: "c", 10: "E", 11: "I", 12: "ƒ", 13: "v", 14: "K", 22: "e", 23: "S", 26: "T",
+};
+
+/** ⌘T：在整个项目里按名字找函数、类型；问的是对方电脑上的语言服务，打字停一下再问 */
+export function SymbolSearch({ manager, root, onOpen, onClose }: {
+  manager: LspManager | null;
+  root: string | null;
+  onOpen: (target: SearchTarget) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<FoundSymbol[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const available = !!manager?.canSearchSymbols();
+
+  useEffect(() => {
+    if (!manager || !available || !query.trim()) { setFound(null); return; }
+    let cancelled = false;
+    const listeners: (() => void)[] = [];
+    const token = {
+      get isCancellationRequested() { return cancelled; },
+      onCancellationRequested(listener: () => void) { listeners.push(listener); return { dispose() {} }; },
+    };
+    const timer = window.setTimeout(() => {
+      setBusy(true);
+      manager.symbols(query.trim(), token).then((list) => {
+        if (!cancelled) { setFound(list); setActive(0); }
+      }).finally(() => { if (!cancelled) setBusy(false); });
+    }, 200);
+    return () => { cancelled = true; window.clearTimeout(timer); listeners.forEach((l) => l()); };
+  }, [query, manager, available]);
+
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  const items = found ?? [];
+  const open = (item: FoundSymbol) => {
+    onOpen({ path: item.path, line: item.line, col: item.col, len: item.name.length });
+    onClose();
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(i + 1, items.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); if (items[active]) open(items[active]); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
+  };
+
+  return (
+    <div className="remote-editor-quickopen-backdrop" onPointerDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="remote-editor-quickopen" role="dialog" aria-label={t("按名字找符号")}>
+        <Input autoFocus value={query} placeholder={t("输入函数、类型的名字")} aria-label={t("按名字找符号")}
+          onChange={(e) => setQuery(e.target.value)} onKeyDown={onKeyDown} />
+        <div ref={listRef} className="remote-editor-quickopen-list" role="listbox">
+          {!available && <div className="remote-editor-note">{t("先打开一个代码文件，等语言服务启动后才能按名字找符号。")}</div>}
+          {available && busy && !found && <div className="remote-editor-note"><LoaderCircle className="inline size-3 animate-spin" /> {t("正在查找…")}</div>}
+          {available && found && !items.length && <div className="remote-editor-note">{t("没有匹配的符号")}</div>}
+          {items.map((item, i) => {
+            const rel = root ? relativeTo(item.path, root) : item.path;
+            return (
+              <button key={`${item.path}:${item.line}:${item.col}:${item.name}`} type="button" role="option" aria-selected={i === active} data-index={i}
+                className="remote-editor-quickopen-item" onMouseMove={() => setActive(i)} onClick={() => open(item)} title={`${item.path}:${item.line}`}>
+                <span className="remote-editor-symbol-kind">{SYMBOL_LETTERS[item.kind] ?? "·"}</span>
+                <span className="truncate">{item.name}</span>
+                <span className="remote-editor-search-dir truncate">{[item.container, `${rel}:${item.line}`].filter(Boolean).join(" · ")}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

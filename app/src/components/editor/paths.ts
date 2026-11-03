@@ -110,3 +110,27 @@ export function fuzzyScore(query: string, path: string): number | null {
   else if (name.includes(q)) score += 10;
   return score - path.length * 0.01;
 }
+
+/** 去掉路径里的 . 和 ..（不碰真实文件系统） */
+export function normalizePath(path: string) {
+  const sep = sepOf(path);
+  const out: string[] = [];
+  for (const part of path.split(/[\\/]/)) {
+    if (part === "." || (part === "" && out.length > 0)) continue;
+    if (part === "..") {
+      // 根目录（"" 或 C:）不能再往上
+      if (out.length > 1) out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  const joined = out.join(sep);
+  return joined === "" ? sep : /^[A-Za-z]:$/.test(joined) ? joined + sep : joined;
+}
+
+/** 终端里出现的路径：绝对路径直接用，相对路径按终端当前目录算；不知道当前目录时返回空 */
+export function resolvePath(raw: string, base: string | null | undefined): string | null {
+  if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/")) return normalizePath(raw);
+  if (!base) return null;
+  return normalizePath(joinPath(base, raw.replace(/[\\/]/g, sepOf(base))));
+}

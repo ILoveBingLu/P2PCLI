@@ -432,8 +432,14 @@ function previewLspStart(family: string, output: any) {
           textDocumentSync: { openClose: true, change: 2, save: {} },
           completionProvider: { triggerCharacters: ["."], resolveProvider: false },
           hoverProvider: true, definitionProvider: true, referencesProvider: true, documentFormattingProvider: true,
+          renameProvider: { prepareProvider: true }, documentSymbolProvider: true, workspaceSymbolProvider: true,
+          codeActionProvider: { resolveProvider: true }, executeCommandProvider: { commands: ["demo.fillTodo"] },
           signatureHelpProvider: { triggerCharacters: ["(", ","] },
         } } });
+        // 项目检查：没打开的文件也报问题，问题面板里能看到
+        if (family === "typescript") setTimeout(() => send({ method: "textDocument/publishDiagnostics", params: { uri: "file://" + previewRepo + "/src/util.ts", diagnostics: [
+          { range: { start: { line: 0, character: 16 }, end: { line: 0, character: 21 } }, severity: 2, source: "ts", code: 6133, message: "'greet' is declared but never used in this module." },
+        ] } }), 800);
         // 启动后先“索引”两秒，状态栏显示进度
         [[300, { kind: "begin", title: "Indexing", percentage: 0 }], [1200, { kind: "report", message: "42/97 (std)", percentage: 43 }], [2500, { kind: "end" }]].forEach(([at, value]) =>
           setTimeout(() => send({ method: "$/progress", params: { token: "index", value } }), at as number));
@@ -483,6 +489,54 @@ function previewLspStart(family: string, output: any) {
         send({ id: m.id, result: family === "typescript" ? { signatures: [{ label: "greet(name: string): string", parameters: [{ label: "name: string" }], documentation: "跟 name 打招呼" }], activeSignature: 0, activeParameter: 0 } : null });
         break;
       case "textDocument/formatting": send({ id: m.id, result: [] }); break;
+      case "textDocument/prepareRename": {
+        const { word, start, end } = wordAt(p.textDocument.uri, p.position);
+        send({ id: m.id, result: word ? { range: { start: { line: p.position.line, character: start }, end: { line: p.position.line, character: end } }, placeholder: word } : null });
+        break;
+      }
+      case "textDocument/rename": {
+        // 只会改 greet：util.ts 的定义和 main.ts 的两处
+        const { word } = wordAt(p.textDocument.uri, p.position);
+        if (word !== "greet") { send({ id: m.id, error: { code: -32600, message: "只能重命名 greet（预览）" } }); break; }
+        const at = (line: number, character: number) => ({ range: { start: { line, character }, end: { line, character: character + 5 } }, newText: p.newName });
+        send({ id: m.id, result: { changes: {
+          ["file://" + previewRepo + "/src/util.ts"]: [at(0, 16)],
+          ["file://" + previewRepo + "/src/main.ts"]: [at(0, 9), at(4, 12)],
+        } } });
+        break;
+      }
+      case "textDocument/codeAction": {
+        const nope = (p.context?.diagnostics ?? []).find((d: any) => /nope/.test(d.message));
+        const actions: any[] = [];
+        if (nope) actions.push({ title: "把 nope 换成 0", kind: "quickfix", isPreferred: true, diagnostics: [nope], data: { uri: p.textDocument.uri, range: nope.range } });
+        actions.push({ title: "在这里写个 TODO", command: "demo.fillTodo", arguments: [p.textDocument.uri, p.range.start.line] });
+        send({ id: m.id, result: actions });
+        break;
+      }
+      case "codeAction/resolve":
+        send({ id: m.id, result: { ...p, edit: { changes: { [p.data.uri]: [{ range: p.data.range, newText: "0" }] } } } });
+        break;
+      case "workspace/executeCommand": {
+        const [uri, line] = p.arguments;
+        send({ id: m.id, result: null });
+        // 执行命令时反过来让编辑器改文件
+        send({ id: 9000 + line, method: "workspace/applyEdit", params: { edit: { changes: { [uri]: [{ range: { start: { line, character: 0 }, end: { line, character: 0 } }, newText: "// TODO 预览插入\n" }] } } } });
+        break;
+      }
+      case "textDocument/documentSymbol":
+        send({ id: m.id, result: family === "rust"
+          ? [{ name: "main", kind: 12, detail: "fn()", range: { start: { line: 0, character: 0 }, end: { line: 4, character: 1 } }, selectionRange: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } }]
+          : [{ name: "name", kind: 14, range: { start: { line: 3, character: 0 }, end: { line: 3, character: 30 } }, selectionRange: { start: { line: 3, character: 6 }, end: { line: 3, character: 10 } } }] });
+        break;
+      case "workspace/symbol": {
+        const all = [
+          { name: "greet", kind: 12, containerName: "util", location: { uri: "file://" + previewRepo + "/src/util.ts", range: { start: { line: 0, character: 16 }, end: { line: 0, character: 21 } } } },
+          { name: "main", kind: 12, location: { uri: "file://" + previewRepo + "/src/server.rs", range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } } },
+          { name: "name", kind: 14, containerName: "main", location: { uri: "file://" + previewRepo + "/src/main.ts", range: { start: { line: 3, character: 6 }, end: { line: 3, character: 10 } } } },
+        ];
+        send({ id: m.id, result: all.filter((x) => x.name.includes(String(p.query).toLowerCase()) && x.location.uri.endsWith(family === "rust" ? ".rs" : ".ts")) });
+        break;
+      }
       case "shutdown": send({ id: m.id, result: null }); break;
       case "exit": previewLsps.delete(id); setTimeout(() => output.onmessage({ kind: "closed", reason: null }), 50); break;
       default: if (m.id !== undefined && m.method) send({ id: m.id, result: null });
@@ -893,6 +947,7 @@ mockIPC(
         ((window as any).__outs ??= []).push(args.output);
         // tmux attach 使用外层备用屏幕，即使内层 pane 停在普通 Shell。
         const screen = s.startsWith("approval-") ? `\x1b[?1049h${previewApproval.context.replaceAll("\n", "\r\n")}\r\n\r\n${previewApproval.options.map((option) => `${option.id === 0 ? "❯" : " "} ${option.id + 1}. ${option.label}`).join("\r\n")}\r\nEnter to confirm · Esc to cancel\r\n`
+          : s === "launcher-links" ? "\x1b[?1049h" + "\x1b[1;31merror[E0425]\x1b[0m: cannot find value `nope` in this scope\r\n  --> src/server.rs:3:5\r\n   |\r\n改了 src/util.ts，顺手看了 README.md\r\n\r\n" + shellPrompt
           : s.startsWith("launcher") ? "\x1b[?1049h" + shellPrompt : session.agent?.kind === "opencode"
           ? "\x1b[1;36mOpenCode\x1b[0m\r\n\r\nBuild · 模型由当前供应商配置提供\r\n\r\n这是界面预览；控制按键记录在浏览器控制台。\r\n"
           : sample;

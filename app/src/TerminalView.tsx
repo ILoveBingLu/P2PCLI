@@ -3,6 +3,7 @@ import { useEffect, useRef, type MouseEvent } from "react";
 import { ClipboardPaste, Copy, TextSelect } from "lucide-react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
+import { findPathLinks, type TerminalPathLink } from "./terminalLinks";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
@@ -84,6 +85,8 @@ interface Props {
   onReady: (termId: number, sessionId: string) => void;
   onHandle?: (handle: TerminalHandle | null) => void;
   onPromptReady?: (ready: boolean) => void;
+  /** 终端里的文件路径被 ⌘/Ctrl+点击 */
+  onOpenPath?: (link: TerminalPathLink) => void;
   /** 对面的会话在 tmux 里（macOS、Linux）：滚轮交给它翻历史。Windows 的 psmux 没验证过，还是 xterm 自己的做法 */
   tmuxWheel?: boolean;
 }
@@ -95,14 +98,14 @@ const WHEEL_LINES = 3;
 /** 中键按下再松开：对面在复制模式就退出，不在就什么都不做 */
 const LEAVE_COPY_MODE = "\x1b[<1;1;1M\x1b[<1;1;1m";
 
-export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle, onPromptReady, tmuxWheel = false }: Props) {
+export function TerminalView({ connId, sessionId, active, onStatus, onReady, onHandle, onPromptReady, onOpenPath, tmuxWheel = false }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const resizeFrameRef = useRef<ReturnType<typeof terminalResizeFrame> | null>(null);
   const inputReady = useRef(false);
   const menu = useContextMenu();
-  const cb = useRef({ onStatus, onReady, onHandle, onPromptReady });
-  cb.current = { onStatus, onReady, onHandle, onPromptReady };
+  const cb = useRef({ onStatus, onReady, onHandle, onPromptReady, onOpenPath });
+  cb.current = { onStatus, onReady, onHandle, onPromptReady, onOpenPath };
 
   const openContextMenu = (e: MouseEvent<HTMLDivElement>) => {
     // 在捕获阶段拦截，避免 xterm 的隐藏输入框弹出 WebView 原生菜单。
@@ -166,6 +169,35 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     }
     termRef.current = term;
     window.__ptTest?.terms.push(term);
+    // 编译报错、AI 输出里的 src/main.rs:42:5 这类路径：⌘/Ctrl+点击在编辑器里打开（和 VS Code 一样，普通点击照常选文字）
+    const links = term.registerLinkProvider({
+      provideLinks(row, callback) {
+        if (!cb.current.onOpenPath) return callback(undefined);
+        const line = term.buffer.active.getLine(row - 1);
+        if (!line) return callback(undefined);
+        // 中文这类宽字符占两格：记下每个字符在第几格
+        let text = "";
+        const cells: number[] = [];
+        for (let x = 0; x < line.length; x++) {
+          const cell = line.getCell(x);
+          if (!cell || cell.getWidth() === 0) continue;
+          const chars = cell.getChars() || " ";
+          for (let i = 0; i < chars.length; i++) cells.push(x + 1);
+          text += chars;
+        }
+        const found = findPathLinks(text).map((link) => ({
+          range: { start: { x: cells[link.start], y: row }, end: { x: cells[link.end - 1], y: row } },
+          text: text.slice(link.start, link.end),
+          decorations: { pointerCursor: true, underline: true },
+          hover: () => { el.title = t("⌘/Ctrl+点击在编辑器里打开"); },
+          leave: () => { el.title = ""; },
+          activate: (event: globalThis.MouseEvent) => {
+            if (event.metaKey || event.ctrlKey) cb.current.onOpenPath?.({ path: link.path, line: link.line, col: link.col });
+          },
+        }));
+        callback(found.length ? found : undefined);
+      },
+    });
     fitTerminal(term, el);
     const resizeFrame = terminalResizeFrame(term, el);
     resizeFrameRef.current = resizeFrame;
@@ -358,6 +390,7 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
       if (resizeFrameRef.current === resizeFrame) resizeFrameRef.current = null;
       subs.forEach((s) => s.dispose());
       if (termId != null) invoke("term_close", { termId });
+      links.dispose();
       term.dispose();
     };
   // sessionId identifies this attachment at mount; onReady publishes the assigned ID.

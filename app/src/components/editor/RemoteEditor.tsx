@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   ArrowUp, ChevronDown, ChevronRight, CircleAlert, Copy, File, FilePlus, Files, Folder, FolderOpen, FolderPlus, GitBranch, GitCompare,
-  House, LoaderCircle, Pencil, RefreshCw, Save, Search, TextSearch, Trash2, TriangleAlert, X, Zap, ZapOff,
+  CircleX, House, LoaderCircle, Pencil, RefreshCw, Save, SaveAll, Search, TextSearch, Trash2, TriangleAlert, X, Zap, ZapOff,
 } from "lucide-react";
 import { api, CONFLICT_PREFIX, type EntryListing, type FileList, type FileMeta, type GitStatus } from "../../api";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { t, tr } from "@/i18n";
 import { languageFor, monaco } from "./monaco";
 import { baseName, dirName, gitMarks, isUnder, joinPath, movePath, type GitKind } from "./paths";
-import { NameDialog, QuickOpen, SearchPanel, type SearchTarget } from "./EditorPanels";
+import { NameDialog, ProblemsPanel, QuickOpen, SearchPanel, SymbolSearch, type SearchTarget } from "./EditorPanels";
 import { LspManager, type LspStatus } from "./lsp";
 
 type Eol = "LF" | "CRLF";
@@ -97,12 +97,14 @@ const editorOptions = (): monaco.editor.IEditorOptions & monaco.editor.IGlobalEd
  * 网络再慢也不影响打字。保存时核对打开时的哈希，文件被终端里的 AI 等改过就提示冲突，不悄悄盖掉；
  * 开着时每隔几秒看一眼对方电脑上的文件、目录和 Git 状态，没改过的文件自动换成最新内容。
  */
-export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, active, onDirty, onClose }: {
+export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, openRequest, active, onDirty, onClose }: {
   /** 断开时为空：保留打开的文件和未保存的修改，重新连上后接着用 */
   connId: number | null;
   root: string;
   /** 外面（目录选择、工具栏）要求换根目录时加一 */
   rootSeq: number;
+  /** 外面（终端里点了文件路径）要求打开某个文件并跳到某行；seq 变了才算新的要求 */
+  openRequest?: { path: string; line: number; col: number; seq: number };
   active: boolean;
   onDirty: (count: number) => void;
   onClose: () => void;
@@ -113,7 +115,8 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [rootError, setRootError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [side, setSide] = useState<"files" | "search">("files");
+  const [side, setSide] = useState<"files" | "search" | "problems">("files");
+  const [symbolSearch, setSymbolSearch] = useState(false);
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -239,6 +242,9 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
     // Monaco 拿到焦点时按键不会冒泡到外面，快捷键在这里也注册一份
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => setQuickOpen(true));
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => setSide("search"));
+    instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyM, () => setSide("problems"));
+    instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyT, () => setSymbolSearch(true));
+    instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyS, () => void saveAll());
     editor.current = instance;
     const manager = new LspManager({
       connId: () => connRef.current,
@@ -252,6 +258,12 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       open: (path, range) => {
         setSelected(path);
         void openFile(path, { path, line: range.startLineNumber, col: range.startColumn, len: range.startLineNumber === range.endLineNumber ? range.endColumn - range.startColumn : 0 });
+      },
+      openForEdit: async (path) => {
+        const known = loaded.current.get(path);
+        if (known) return known.model;
+        await openFile(path, undefined, false);
+        return loaded.current.get(path)?.model ?? null;
       },
       changed: () => setLspTick((n) => n + 1),
     });
@@ -278,6 +290,15 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
     lspConn.current = connId;
     lsp.current?.reset();
   }, [connId]);
+
+  // 终端里点了文件路径
+  const handledOpen = useRef(0);
+  useEffect(() => {
+    if (!openRequest || openRequest.seq === handledOpen.current) return;
+    handledOpen.current = openRequest.seq;
+    setSelected(openRequest.path);
+    void openFile(openRequest.path, { path: openRequest.path, line: openRequest.line, col: openRequest.col, len: 0 });
+  }, [openRequest]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeFile = files.find((f) => f.path === activePath) ?? null;
 
@@ -320,10 +341,15 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
 
   useEffect(() => { onDirty(files.filter((f) => f.dirty).length); }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openFile = async (path: string, target?: SearchTarget) => {
+  /** 正在读的文件：后台打开（重命名、快速修复）要等它读完拿模型 */
+  const opening = useRef(new Map<string, Promise<void>>());
+
+  /** activate 为假时在后台打开：加标签但不切过去 */
+  const openFile = async (path: string, target?: SearchTarget, activate = true) => {
     if (target) pendingReveal.current.set(path, target);
     const existing = filesRef.current.find((f) => f.path === path);
     if (existing) {
+      if (!activate) return opening.current.get(path);
       // 已经开着又正显示着：模型不会换，直接跳
       if (target && activeRef.current === path && existing.state === "ready" && editor.current && !diffRef.current) {
         pendingReveal.current.delete(path);
@@ -333,7 +359,14 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       void recheck(path);
       return;
     }
-    setActivePath(path);
+    if (activate) setActivePath(path);
+    filesRef.current = [...filesRef.current, { path, name: baseName(path), state: "loading", dirty: false, saving: false, conflict: false, remoteChanged: false, gone: false, eol: "LF", mixed: false }];
+    const load = loadFile(path);
+    opening.current.set(path, load);
+    try { await load; } finally { opening.current.delete(path); }
+  };
+
+  const loadFile = async (path: string) => {
     const name = baseName(path);
     setFiles((list) => [...list, { path, name, state: "loading", dirty: false, saving: false, conflict: false, remoteChanged: false, gone: false, eol: "LF", mixed: false }]);
     const conn = connRef.current;
@@ -531,6 +564,12 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       if (message.includes(CONFLICT_PREFIX)) update(path, { saving: false, conflict: true });
       else update(path, { saving: false, saveError: tr(message) });
     }
+  };
+
+  /** 重命名、快速修复会一次改好几个文件：一起保存 */
+  const saveAll = async () => {
+    const dirty = filesRef.current.filter((f) => f.dirty && f.state === "ready" && !f.saving && !f.meta?.readonly);
+    await Promise.all(dirty.map((f) => save(f.path)));
   };
 
   const reload = async (path: string) => {
@@ -768,6 +807,9 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
     const mod = e.metaKey || e.ctrlKey;
     if (mod && !e.shiftKey && e.key.toLowerCase() === "p") { e.preventDefault(); setQuickOpen(true); }
     else if (mod && e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); setSide("search"); }
+    else if (mod && e.shiftKey && e.key.toLowerCase() === "m") { e.preventDefault(); setSide("problems"); }
+    else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); setSymbolSearch(true); }
+    else if (mod && e.altKey && e.code === "KeyS") { e.preventDefault(); void saveAll(); }
   };
 
   const parent = root != null ? dirs[root]?.listing?.parent ?? null : null;
@@ -776,6 +818,9 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
   const changedElsewhere = activeFile && (activeFile.conflict || activeFile.remoteChanged) && !activeFile.gone;
   const activeModel = activeFile?.state === "ready" ? loaded.current.get(activeFile.path)?.model : undefined;
   const lspStatus = activeFile && activeModel && !activeModel.isDisposed() ? lsp.current?.status(activeFile.path, activeModel.getLanguageId()) ?? null : null;
+  const problems = lsp.current?.problems() ?? [];
+  const errorCount = problems.reduce((n, f) => n + f.problems.filter((p) => p.severity === "error").length, 0);
+  const warningCount = problems.reduce((n, f) => n + f.problems.filter((p) => p.severity === "warning").length, 0);
 
   return (
     <section className="remote-editor" aria-label={t("代码编辑器")} onKeyDown={onKeyDown}>
@@ -789,6 +834,8 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
           onPress={() => setQuickOpen(true)}><Search /></Button>
         <Button variant="ghost" size="icon-xs" aria-label={t("刷新文件列表")} title={t("刷新文件列表")} isDisabled={!online || root == null}
           onPress={refreshTree}><RefreshCw /></Button>
+        {dirtyCount > 1 && <Button variant="ghost" size="icon-xs" aria-label={t("全部保存")} title={t("全部保存 {{count}} 个文件（⌘/Ctrl+Alt+S）", { count: dirtyCount })}
+          isDisabled={!online} onPress={() => void saveAll()}><SaveAll /></Button>}
         <Button variant="ghost" size="icon-xs" aria-label={t("关闭编辑器")} title={t("关闭编辑器")} onPress={() => {
           if (dirtyCount) {
             setConfirm({
@@ -810,6 +857,10 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
               onClick={() => setSide("files")} title={t("文件")}><Files />{t("文件")}</button>
             <button type="button" role="tab" aria-selected={side === "search"} className={cn(side === "search" && "is-active")}
               onClick={() => setSide("search")} title={t("在文件中搜索（⌘/Ctrl+Shift+F）")}><TextSearch />{t("搜索")}</button>
+            <button type="button" role="tab" aria-selected={side === "problems"} className={cn(side === "problems" && "is-active")}
+              onClick={() => setSide("problems")} title={t("语言服务报的问题（⌘/Ctrl+Shift+M）")}>
+              <CircleX />{t("问题")}{errorCount + warningCount > 0 && <span className="remote-editor-count">{errorCount + warningCount}</span>}
+            </button>
             <span className="grow" />
             {side === "files" && <>
               <Button variant="ghost" size="icon-xs" aria-label={t("新建文件")} title={t("新建文件")} isDisabled={!online || root == null}
@@ -845,6 +896,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
             })}
           </nav>
           {side === "search" && <SearchPanel connId={connId} root={root} onOpen={(target) => void openFile(target.path, target)} />}
+          {side === "problems" && <ProblemsPanel problems={problems} root={root} onOpen={(target) => { setSelected(target.path); void openFile(target.path, target); }} />}
         </div>
         <div className="remote-editor-main">
           {files.length > 0 && <div className="remote-editor-tabs" role="tablist" aria-label={t("打开的文件")}>
@@ -896,6 +948,10 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
           </div>
           {(activeFile?.state === "ready" || git) && <footer className="remote-editor-status">
             {git?.branch && <span className="remote-editor-branch" title={t("Git 分支")}><GitBranch />{git.branch}</span>}
+            {errorCount + warningCount > 0 && <button type="button" className="remote-editor-problem-count" onClick={() => setSide("problems")}
+              title={t("{{errors}} 个错误，{{warnings}} 个警告（⌘/Ctrl+Shift+M）", { errors: errorCount, warnings: warningCount })}>
+              <CircleX />{errorCount}<TriangleAlert />{warningCount}
+            </button>}
             {activeFile?.state === "ready" && <>
               <span>{languageLabel(activeFile.name)}</span>
               <span>{activeFile.meta?.bom ? "UTF-8 BOM" : "UTF-8"}</span>
@@ -918,6 +974,9 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
           </footer>}
         </div>
       </div>
+      {symbolSearch && <SymbolSearch manager={lsp.current} root={root}
+        onOpen={(target) => { setSelected(target.path); void openFile(target.path, target); }}
+        onClose={() => { setSymbolSearch(false); editor.current?.focus(); }} />}
       {quickOpen && root != null && <QuickOpen connId={connId} root={root} cache={fileCache} onCache={setFileCache}
         onOpen={(path) => { setSelected(path); void openFile(path); }} onClose={() => { setQuickOpen(false); editor.current?.focus(); }} />}
       {naming && <NameDialog
