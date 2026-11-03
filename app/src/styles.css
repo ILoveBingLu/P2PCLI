@@ -2134,10 +2134,11 @@ img.agent-icon {
   transform: translateY(-50%);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 4px;
+  gap: 4px;
+  padding: 5px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  /* 两头全圆的胶囊形，按钮也是圆的 */
+  border-radius: 999px;
   background: color-mix(in srgb, var(--sidebar) 88%, transparent);
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.35);
   opacity: 0.6;
@@ -2145,6 +2146,7 @@ img.agent-icon {
 }
 .terminal-dock:hover,
 .terminal-dock:focus-within { opacity: 1; }
+.terminal-dock .terminal-dock-button { border-radius: 999px; }
 /* 代码编辑器的单独窗口：编辑器铺满整个窗口 */
 .editor-window {
   display: flex;
