@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -114,7 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into()],
         },
     )
     .await?;
@@ -421,6 +421,41 @@ impl RemoteHost {
         }
     }
 
+    /// 对方电脑上正在监听的端口（端口转发时挑用）
+    pub async fn list_ports(&self) -> Result<Vec<crate::ports::ListeningPort>> {
+        if self.is_local() {
+            return crate::ports::listening().await;
+        }
+        self.require_port_forward()?;
+        match self.session_request(Msg::ListPorts).await? {
+            Msg::Ports { ports } => Ok(ports),
+            other => bail!("意外的回复：{other:?}"),
+        }
+    }
+
+    /// 连对方电脑 localhost 上的端口，得到一条原样传 TCP 字节的通道
+    pub async fn open_port(&self, port: u16) -> Result<Tunnel> {
+        if self.is_local() {
+            return Ok(Tunnel::Local(crate::ports::connect_local(port).await?));
+        }
+        self.require_port_forward()?;
+        let (send, mut recv) = self.open_stream(&Msg::ForwardPort { port }).await?;
+        match timeout(Duration::from_secs(15), read_msg(&mut recv)).await.map_err(|_| anyhow!("对方没有响应"))?? {
+            Msg::PortOpened => Ok(Tunnel::Quic(send, recv)),
+            Msg::Error { message } => bail!("{message}"),
+            other => bail!("意外的回复：{other:?}"),
+        }
+    }
+
+    fn require_port_forward(&self) -> Result<()> {
+        if let Link::Net { capabilities, .. } = &self.link
+            && !capabilities.iter().any(|c| c == PORT_FORWARD_V1)
+        {
+            bail!("对方的 P2PCLI 版本较旧，不支持端口转发，请更新对方的 P2PCLI");
+        }
+        Ok(())
+    }
+
     fn require_capability(&self, capability: &str) -> Result<()> {
         if let Link::Net { capabilities, .. } = &self.link
             && !capabilities.iter().any(|c| c == capability)
@@ -619,6 +654,26 @@ fn describe_close(e: iroh::endpoint::ConnectionError) -> String {
         E::LocallyClosed => "连接已关闭".into(),
         E::TimedOut => "网络中断，连接超时".into(),
         other => format!("连接断开：{other}"),
+    }
+}
+
+/// 端口转发的一条通道：远程设备是 QUIC 流，本机自己直接是 TCP 连接
+pub enum Tunnel {
+    Quic(SendStream, RecvStream),
+    Local(tokio::net::TcpStream),
+}
+
+impl Tunnel {
+    /// 和本机这头的 TCP 连接原样对拷，直到一边关掉
+    pub async fn pipe(self, tcp: tokio::net::TcpStream) -> Result<()> {
+        match self {
+            Tunnel::Quic(mut send, recv) => {
+                let result = crate::ports::pipe(tcp, tokio::io::join(recv, &mut send)).await;
+                let _ = send.finish();
+                result
+            }
+            Tunnel::Local(stream) => crate::ports::pipe(tcp, stream).await,
+        }
     }
 }
 

@@ -19,6 +19,7 @@ pub mod lan;
 pub mod lsp;
 pub mod node;
 pub mod path;
+pub mod ports;
 pub mod presence;
 pub mod proto;
 pub mod proxy;

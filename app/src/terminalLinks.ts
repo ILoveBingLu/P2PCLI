@@ -33,3 +33,33 @@ export function findPathLinks(text: string): FoundLink[] {
   }
   return out;
 }
+
+/** 终端里本机地址的网址（开发服务器启动时打印的 http://localhost:5173/ 这种） */
+export interface FoundUrl {
+  /** 对方电脑上的端口 */
+  port: number;
+  /** / 开头，带查询和锚点 */
+  path: string;
+  https: boolean;
+  start: number;
+  end: number;
+}
+
+// 只认本机地址：别的网址不在这里打开（软件不替终端输出打开任意网址）
+const LOCAL_URL = /\b(https?):\/\/(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1?\])(?::(\d{1,5}))?(\/[^\s"'<>`]*)?/g;
+
+export function findLocalUrls(text: string): FoundUrl[] {
+  const out: FoundUrl[] = [];
+  for (const m of text.matchAll(LOCAL_URL)) {
+    const https = m[1] === "https";
+    const port = Number(m[2] ?? (https ? 443 : 80));
+    if (!port || port > 65535) continue;
+    // 句末的标点、右括号不算网址
+    let path = m[3] ?? "/";
+    const trimmed = path.replace(/[)\].,;:!?。，；：！？）]+$/, "");
+    const cut = path.length - trimmed.length;
+    path = trimmed || "/";
+    out.push({ port, path, https, start: m.index!, end: m.index! + m[0].length - cut });
+  }
+  return out;
+}

@@ -398,6 +398,8 @@ for (const [path, file] of previewFs) {
   file.head = path.endsWith("main.ts") ? file.text.replace("// 中文注释，标点不会被框起来\n", "") : file.text;
 }
 function previewUnder(path: string, dir: string) { return path === dir || path.startsWith(dir + "/"); }
+const previewForwards: { id: number; conn_id: number; remote_port: number; local_port: number; connections: number }[] = [];
+let previewForwardSeq = 0;
 // 假的语言服务：Rust 和 TypeScript 文件有补全、悬停、报错、跳转，其他语言当成对方没装
 const previewLsps = new Map<number, (message: any) => void>();
 let previewLspSeq = 0;
@@ -900,6 +902,30 @@ mockIPC(
       case "edit_op":
         await new Promise((r) => setTimeout(r, 150));
         return previewEdit(args.request);
+      case "list_ports":
+        await new Promise((r) => setTimeout(r, 300));
+        return [{ port: 5173, process: "node", pid: 4242 }, { port: 8000, process: "python3", pid: 4300 }, { port: 5432, process: "postgres", pid: 88 }];
+      case "forward_port": {
+        await new Promise((r) => setTimeout(r, 300));
+        const existing = previewForwards.find((f) => f.conn_id === args.connId && f.remote_port === args.remotePort);
+        if (existing) return existing;
+        if (args.remotePort === 9) throw new Error("对方电脑上这个端口没有服务在监听");
+        // 本机 5173 假装被占用了，换成 5174
+        const local = args.remotePort === 5173 ? 5174 : Number(args.remotePort);
+        const forward = { id: ++previewForwardSeq, conn_id: Number(args.connId), remote_port: Number(args.remotePort), local_port: local, connections: 0 };
+        previewForwards.push(forward);
+        return forward;
+      }
+      case "stop_forward":
+        previewForwards.splice(previewForwards.findIndex((f) => f.id === args.id), 1);
+        return;
+      case "port_forwards":
+        return previewForwards.map((f) => ({ ...f, connections: f.remote_port === 5173 ? 3 : 0 }));
+      case "open_forward":
+      case "open_localhost":
+        console.log("[preview] 打开浏览器", cmd, JSON.stringify(args));
+        (window as any).__previewOpened = [...((window as any).__previewOpened ?? []), { cmd, ...args }];
+        return;
       case "lsp_start":
         await new Promise((r) => setTimeout(r, 400));
         return previewLspStart(String(args.language), args.messages);
@@ -947,7 +973,7 @@ mockIPC(
         ((window as any).__outs ??= []).push(args.output);
         // tmux attach 使用外层备用屏幕，即使内层 pane 停在普通 Shell。
         const screen = s.startsWith("approval-") ? `\x1b[?1049h${previewApproval.context.replaceAll("\n", "\r\n")}\r\n\r\n${previewApproval.options.map((option) => `${option.id === 0 ? "❯" : " "} ${option.id + 1}. ${option.label}`).join("\r\n")}\r\nEnter to confirm · Esc to cancel\r\n`
-          : s === "launcher-links" ? "\x1b[?1049h" + "\x1b[1;31merror[E0425]\x1b[0m: cannot find value `nope` in this scope\r\n  --> src/server.rs:3:5\r\n   |\r\n改了 src/util.ts，顺手看了 README.md\r\n\r\n" + shellPrompt
+          : s === "launcher-links" ? "\x1b[?1049h" + "\x1b[1;31merror[E0425]\x1b[0m: cannot find value `nope` in this scope\r\n  --> src/server.rs:3:5\r\n   |\r\n改了 src/util.ts，顺手看了 README.md\r\n\r\n  VITE v8.3.5  ready in 260 ms\r\n  ➜  Local:   http://localhost:5173/\r\n\r\n" + shellPrompt
           : s.startsWith("launcher") ? "\x1b[?1049h" + shellPrompt : session.agent?.kind === "opencode"
           ? "\x1b[1;36mOpenCode\x1b[0m\r\n\r\nBuild · 模型由当前供应商配置提供\r\n\r\n这是界面预览；控制按键记录在浏览器控制台。\r\n"
           : sample;

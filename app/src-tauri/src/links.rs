@@ -15,6 +15,25 @@ pub fn open(url: &str) -> Result<(), String> {
     if !is_project_url(url) {
         return Err("不是这个项目的链接，不打开".into());
     }
+    launch(url)
+}
+
+/// 打开本机端口上的网页（端口转发过来的开发服务器）
+pub fn open_localhost(port: u16, path: &str, https: bool) -> Result<(), String> {
+    launch(&localhost_url(port, path, https)?)
+}
+
+/// 只认 http://localhost:端口 加一个干净的路径，界面传来的其他东西都不要
+fn localhost_url(port: u16, path: &str, https: bool) -> Result<String, String> {
+    let path = if path.is_empty() { "/" } else { path };
+    let bad = |c: char| c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '<' | '>' | '\\' | '`');
+    if port == 0 || !path.starts_with('/') || path.starts_with("//") || path.len() > 2048 || path.chars().any(bad) {
+        return Err("地址不对，不打开".into());
+    }
+    Ok(format!("{}://localhost:{port}{path}", if https { "https" } else { "http" }))
+}
+
+fn launch(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg(url).spawn();
     #[cfg(windows)]
@@ -27,6 +46,17 @@ pub fn open(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn localhost_urls_only_take_clean_paths() {
+        assert_eq!(localhost_url(5173, "", false).unwrap(), "http://localhost:5173/");
+        assert_eq!(localhost_url(5173, "/src/main.ts?t=1#x", false).unwrap(), "http://localhost:5173/src/main.ts?t=1#x");
+        assert_eq!(localhost_url(8443, "/", true).unwrap(), "https://localhost:8443/");
+        for bad in ["src", "//evil.com/x", "/a b", "/a\"b", "/a\nb", "/<script>"] {
+            assert!(localhost_url(5173, bad, false).is_err(), "{bad}");
+        }
+        assert!(localhost_url(0, "/", false).is_err());
+    }
 
     #[test]
     fn only_this_projects_github_pages_are_allowed() {

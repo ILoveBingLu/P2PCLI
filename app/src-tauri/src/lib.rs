@@ -254,6 +254,8 @@ struct AppState {
     terms: Mutex<HashMap<u64, mpsc::UnboundedSender<TermCmd>>>,
     /// 编辑器开着的语言服务：发给它的消息走这个通道，丢掉通道它就结束
     lsps: Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>,
+    /// 端口转发：编号 → (连接编号, 转发)。丢掉就停止；连接断了一起清掉
+    forwards: Mutex<HashMap<u64, (u64, p2pcli_core::ports::Forward)>>,
     next: AtomicU64,
     /// 本机自己那条常驻连接的编号：启动时建好，一直在 remotes 里，侧边栏的“本机”用它开终端、读会话
     local_conn: AtomicU64,
@@ -799,6 +801,7 @@ async fn connect(
     tauri::async_runtime::spawn(async move {
         let reason = watch.closed().await;
         app.state::<AppState>().remotes.lock().unwrap().remove(&conn_id);
+        app.state::<AppState>().forwards.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
         let _ = app.emit(
             "remote-closed",
             serde_json::json!({ "conn_id": conn_id, "reason": reason }),
@@ -822,6 +825,7 @@ fn disconnect(state: State<'_, AppState>, conn_id: u64) {
     if let Some(r) = state.remotes.lock().unwrap().remove(&conn_id) {
         r.close();
     }
+    state.forwards.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
 }
 
 #[tauri::command]
@@ -897,6 +901,65 @@ async fn edit_op(state: State<'_, AppState>, conn_id: u64, request: p2pcli_core:
 #[tauri::command]
 async fn write_file(state: State<'_, AppState>, conn_id: u64, path: String, text: String, bom: bool, expected: Option<String>, force: bool) -> Result<p2pcli_core::remote_fs::FileMeta, String> {
     state.remote(conn_id)?.write_file(path, text, bom, expected, force).await.map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Serialize)]
+struct ForwardView {
+    id: u64,
+    conn_id: u64,
+    remote_port: u16,
+    local_port: u16,
+    /// 正在转的连接数
+    connections: usize,
+}
+
+fn forward_view(id: u64, conn_id: u64, f: &p2pcli_core::ports::Forward) -> ForwardView {
+    ForwardView { id, conn_id, remote_port: f.remote_port, local_port: f.local_port, connections: f.connections() }
+}
+
+/// 对方电脑上正在监听的端口
+#[tauri::command]
+async fn list_ports(state: State<'_, AppState>, conn_id: u64) -> Result<Vec<p2pcli_core::ports::ListeningPort>, String> {
+    state.remote(conn_id)?.list_ports().await.map_err(|e| format!("{e:#}"))
+}
+
+/// 把对方电脑上的端口接到本机；同一台设备的同一个端口已经在转发就直接用它
+#[tauri::command]
+async fn forward_port(state: State<'_, AppState>, conn_id: u64, remote_port: u16, local_port: Option<u16>) -> Result<ForwardView, String> {
+    if let Some((id, (_, f))) = state.forwards.lock().unwrap().iter().find(|(_, (c, f))| *c == conn_id && f.remote_port == remote_port) {
+        return Ok(forward_view(*id, conn_id, f));
+    }
+    let remote = state.remote(conn_id)?;
+    let forward = p2pcli_core::ports::Forward::start(remote, remote_port, local_port).await.map_err(|e| format!("{e:#}"))?;
+    let id = state.next();
+    let view = forward_view(id, conn_id, &forward);
+    state.forwards.lock().unwrap().insert(id, (conn_id, forward));
+    Ok(view)
+}
+
+#[tauri::command]
+fn stop_forward(state: State<'_, AppState>, id: u64) {
+    state.forwards.lock().unwrap().remove(&id);
+}
+
+#[tauri::command]
+fn port_forwards(state: State<'_, AppState>) -> Vec<ForwardView> {
+    let mut list: Vec<_> = state.forwards.lock().unwrap().iter().map(|(id, (conn, f))| forward_view(*id, *conn, f)).collect();
+    list.sort_by_key(|f| f.id);
+    list
+}
+
+/// 在浏览器里打开转发过来的端口；地址只能是本机的转发端口，界面只给路径
+#[tauri::command]
+fn open_forward(state: State<'_, AppState>, id: u64, path: String, https: Option<bool>) -> Result<(), String> {
+    let port = state.forwards.lock().unwrap().get(&id).map(|(_, f)| f.local_port).ok_or("这个转发已经停了")?;
+    links::open_localhost(port, &path, https.unwrap_or(false))
+}
+
+/// 本机自己的服务（终端里点了本机的 localhost 地址）：直接打开，不用转发
+#[tauri::command]
+fn open_localhost(port: u16, path: String, https: Option<bool>) -> Result<(), String> {
+    links::open_localhost(port, &path, https.unwrap_or(false))
 }
 
 #[derive(Serialize)]
@@ -1308,6 +1371,7 @@ pub fn run() {
                 remotes: Mutex::new(HashMap::new()),
                 terms: Mutex::new(HashMap::new()),
                 lsps: Mutex::new(HashMap::new()),
+                forwards: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
                 local_conn: AtomicU64::new(0),
             });
@@ -1495,6 +1559,12 @@ pub fn run() {
             lsp_start,
             lsp_send,
             lsp_stop,
+            list_ports,
+            forward_port,
+            stop_forward,
+            port_forwards,
+            open_forward,
+            open_localhost,
             term_input,
             term_resize,
             term_close,

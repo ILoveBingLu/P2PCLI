@@ -28,6 +28,7 @@ import {
   api,
   shellQuote,
   type FileRequest,
+  type ForwardView,
   type HostEvent,
   type IncomingRequest,
   type Overview,
@@ -40,7 +41,8 @@ import {
   type Transfer,
 } from "./api";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
-import type { TerminalPathLink } from "./terminalLinks";
+import type { FoundUrl, TerminalPathLink } from "./terminalLinks";
+import { PortForwards } from "./components/PortForwards";
 import { dirName, resolvePath } from "./components/editor/paths";
 import { pollConnections } from "./lib/pollConnections";
 import { withoutClearedSessions } from "./lib/sessionCleanup";
@@ -86,7 +88,7 @@ import {
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { RemarksProvider } from "./components/Remarks";
-import { t } from "@/i18n";
+import { t, tr } from "@/i18n";
 
 interface Tab {
   key: number;
@@ -254,6 +256,29 @@ export default function App() {
       if (existing) return { ...all, [id]: { ...existing, shown: true, open: { ...open, seq } } };
       return { ...all, [id]: { root: cwd || dirName(path), seq: 1, shown: true, open: { ...open, seq } } };
     });
+  };
+  // 端口转发：后端按连接记，这里只拿来显示；有转发时隔几秒刷新一下连接数，连接断了也会跟着消失
+  const [forwards, setForwards] = useState<ForwardView[]>([]);
+  const refreshForwards = useCallback(() => {
+    void api.portForwards().then((list) => setForwards((old) => JSON.stringify(old) === JSON.stringify(list) ? old : list)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!forwards.length) return;
+    const timer = window.setInterval(refreshForwards, 3000);
+    return () => window.clearInterval(timer);
+  }, [forwards.length, refreshForwards]);
+  const isLocalTab = (tab: Tab) => tab.connId === ov?.local?.conn_id;
+  /** 终端里 ⌘/Ctrl+点击了 http://localhost:5173/ 这种：对方电脑上的端口先转发到本机，再用浏览器打开 */
+  const openUrlFromTerminal = async (tab: Tab, url: FoundUrl) => {
+    try {
+      if (isLocalTab(tab)) return await api.openLocalhost(url.port, url.path, url.https);
+      const forward = await api.forwardPort(tab.connId, url.port);
+      refreshForwards();
+      if (forward.local_port !== url.port) toast.notice(t("本机的 {{port}} 端口被占用了，改用 {{local}}", { port: url.port, local: forward.local_port }));
+      await api.openForward(forward.id, url.path, url.https);
+    } catch (e) {
+      toast.error(tr(String(e)));
+    }
   };
   const closeEditor = (endpointId: string) => {
     setEditors(({ [endpointId]: _, ...rest }) => rest);
@@ -959,6 +984,10 @@ export default function App() {
                   <History />
                 </Button>
               )}
+              {activeTab && activeTab.state === "open" && !isLocalTab(activeTab) && (
+                <PortForwards connId={activeTab.connId} deviceName={activeTab.info.name}
+                  forwards={forwards.filter((f) => f.conn_id === activeTab.connId)} onChanged={refreshForwards} />
+              )}
               {activeTab && (activeTab.state === "open" || editors[activeTab.info.endpoint_id]) && (
                 <Button variant="ghost" size="icon-sm" className="terminal-editor-toggle"
                   data-active={editors[activeTab.info.endpoint_id]?.shown || undefined}
@@ -1010,6 +1039,7 @@ export default function App() {
                     onStatus={(s) => setTabState(tab.key, s)}
                     onPromptReady={(ready) => setPromptReady((current) => current[tab.key] === ready ? current : { ...current, [tab.key]: ready })}
                     onOpenPath={(link) => void openFromTerminal(tab, link)}
+                    onOpenUrl={(url) => void openUrlFromTerminal(tab, url)}
                     onHandle={(handle) => {
                       if (handle) termHandles.current.set(tab.key, handle);
                       else termHandles.current.delete(tab.key);
