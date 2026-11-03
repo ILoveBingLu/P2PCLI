@@ -21,6 +21,8 @@ pub const REMOTE_EDIT_V2: &str = "remote_edit_v2";
 pub const REMOTE_LSP_V1: &str = "remote_lsp_v1";
 /// 端口转发：把对方电脑上 localhost 的端口接到本机
 pub const PORT_FORWARD_V1: &str = "port_forward_v1";
+/// 编辑器的 Git 面板：暂存、提交、推送、拉取、提交记录
+pub const GIT_V1: &str = "git_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;

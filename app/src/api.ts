@@ -148,7 +148,15 @@ export type EditRequest =
   | { op: "create_dir"; path: string }
   | { op: "rename"; from: string; to: string }
   | { op: "delete"; path: string }
-  | { op: "git_status"; root: string };
+  | { op: "git_status"; root: string }
+  // Git 面板，需要对方有 git_v1；paths 相对仓库根目录
+  | { op: "git_stage"; root: string; paths: string[] }
+  | { op: "git_unstage"; root: string; paths: string[] }
+  | { op: "git_discard"; root: string; paths: string[]; untracked: string[] }
+  | { op: "git_commit"; root: string; message: string }
+  | { op: "git_push"; root: string }
+  | { op: "git_pull"; root: string }
+  | { op: "git_log"; root: string; limit: number };
 /** 列号、长度按 UTF-16 算，列号从 1 开始；preview_col 是匹配在预览里的位置，从 0 开始 */
 export interface SearchMatch { line: number; col: number; len: number; preview: string; preview_col: number }
 export interface SearchResult { files: { path: string; matches: SearchMatch[] }[]; truncated: boolean }
@@ -156,13 +164,20 @@ export interface FileList { root: string; files: string[]; truncated: boolean }
 export interface FileStat { size: number; mtime: number | null; dir: boolean }
 /** status 是 git status --porcelain 的两个字母，比如 " M"、"A "、"??"；path 相对 top，分隔符是 / */
 /** prefix：请求的目录相对仓库根目录的位置（如 "app/src/"），按它把 entries 换算成文件树里的路径 */
-export interface GitStatus { top: string; prefix: string; branch: string | null; entries: { path: string; status: string }[] }
+/** upstream 是上游分支（如 origin/main），ahead/behind 是比它多几个、少几个提交 */
+export interface GitStatus {
+  top: string; prefix: string; branch: string | null; entries: { path: string; status: string }[];
+  upstream?: string | null; ahead?: number; behind?: number;
+}
+export interface GitCommit { hash: string; short: string; author: string; time: number; subject: string }
 export type EditReply =
   | { kind: "search"; result: SearchResult }
   | { kind: "files"; list: FileList }
   | { kind: "stats"; stats: (FileStat | null)[] }
   | { kind: "done" }
-  | { kind: "git"; status: GitStatus | null };
+  | { kind: "git"; status: GitStatus | null }
+  | { kind: "output"; text: string }
+  | { kind: "log"; commits: GitCommit[] };
 
 async function edit<K extends EditReply["kind"]>(connId: number, request: EditRequest, kind: K): Promise<Extract<EditReply, { kind: K }>> {
   const reply = await invoke<EditReply>("edit_op", { connId, request });
@@ -497,6 +512,14 @@ export const api = {
   /** 移到废纸篓/回收站 */
   deletePath: (connId: number, path: string) => edit(connId, { op: "delete", path }, "done"),
   gitStatus: async (connId: number, root: string) => (await edit(connId, { op: "git_status", root }, "git")).status,
+  gitStage: (connId: number, root: string, paths: string[]) => edit(connId, { op: "git_stage", root, paths }, "done"),
+  gitUnstage: (connId: number, root: string, paths: string[]) => edit(connId, { op: "git_unstage", root, paths }, "done"),
+  /** paths 换回暂存区的版本，untracked 移到废纸篓 */
+  gitDiscard: (connId: number, root: string, paths: string[], untracked: string[]) => edit(connId, { op: "git_discard", root, paths, untracked }, "done"),
+  gitCommit: async (connId: number, root: string, message: string) => (await edit(connId, { op: "git_commit", root, message }, "output")).text,
+  gitPush: async (connId: number, root: string) => (await edit(connId, { op: "git_push", root }, "output")).text,
+  gitPull: async (connId: number, root: string) => (await edit(connId, { op: "git_pull", root }, "output")).text,
+  gitLog: async (connId: number, root: string, limit = 20) => (await edit(connId, { op: "git_log", root, limit }, "log")).commits,
   /** 在对方电脑上启动语言服务（补全、跳转、报错）；它发来的消息和结束都从 onEvent 送来 */
   lspStart: (connId: number, language: string, file: string, root: string, onEvent: (event: LspEventView) => void) => {
     const messages = new Channel<LspEventView>();

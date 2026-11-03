@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -114,7 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into()],
         },
     )
     .await?;
@@ -383,6 +383,21 @@ impl RemoteHost {
             return crate::remote_ops::handle(request).await;
         }
         self.require_capability(REMOTE_EDIT_V2)?;
+        if request.needs_git_v1() {
+            if let Link::Net { capabilities, .. } = &self.link
+                && !capabilities.iter().any(|c| c == GIT_V1)
+            {
+                bail!("对方的 P2PCLI 版本较旧，不支持 Git 面板，请更新对方的 P2PCLI");
+            }
+            // 提交钩子、推送要跑一阵子，不受普通请求的 20 秒限制
+            let (mut send, mut recv) = self.open_stream(&Msg::Edit { request }).await?;
+            let _ = send.finish();
+            return match timeout(Duration::from_secs(360), read_msg(&mut recv)).await.map_err(|_| anyhow!("git 运行超时"))?? {
+                Msg::EditDone { reply } => Ok(reply),
+                Msg::Error { message } => bail!("{message}"),
+                other => bail!("操作失败：{other:?}"),
+            };
+        }
         match self.session_request(Msg::Edit { request }).await? {
             Msg::EditDone { reply } => Ok(reply),
             other => bail!("操作失败：{other:?}"),

@@ -2692,3 +2692,81 @@ img.agent-icon {
 .ports-row svg { width: 14px; height: 14px; }
 .ports-manual { display: flex; gap: 6px; }
 .ports-manual input { flex: 1; }
+
+/* Git 面板 */
+.git-panel { overflow: hidden; }
+.git-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 6px 4px 10px;
+  font-size: 12px;
+}
+.git-branch { display: inline-flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+.git-head svg, .git-group svg, .git-row svg { width: 13px; height: 13px; flex: none; }
+.git-commit-box { display: flex; flex-direction: column; gap: 6px; padding: 4px 8px 8px; }
+.git-commit-box textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 8px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.03);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+}
+.git-commit-box textarea:focus { outline: none; border-color: var(--accent); }
+.remote-editor-note.is-warning { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; color: var(--warning); font-size: 12px; }
+.git-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  padding: 0 8px 0 10px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+.git-group .remote-editor-search-count { margin-left: auto; }
+.git-group button + .remote-editor-search-count { margin-left: 2px; }
+.git-group button { margin-left: auto; }
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+  padding: 0 8px 0 16px;
+  font-size: 12px;
+}
+.git-row:hover { background: rgb(255 255 255 / 0.05); }
+.git-row > button[aria-label] { visibility: hidden; }
+.git-row:hover > button[aria-label], .git-row:focus-within > button[aria-label] { visibility: visible; }
+.git-row-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  text-align: left;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.git-row-main svg { color: var(--muted-foreground); }
+.git-code { width: 12px; flex: none; font-family: var(--font-mono); font-size: 11px; text-align: center; }
+.git-code-M .git-code, .git-code-R .git-code, .git-code-C .git-code { color: #e2c08d; }
+.git-code-A .git-code, .git-code-U .git-code { color: #73c991; }
+.git-code-D .git-code { color: #c74e39; }
+.git-code-conflict .git-code { color: #e4676b; font-weight: 700; }
+.git-commit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 16px;
+  font-size: 12px;
+}
+.git-commit .remote-editor-search-dir { margin-left: auto; flex: none; }
+.git-hash { flex: none; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 11px; }

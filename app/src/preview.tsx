@@ -397,6 +397,12 @@ for (const [path, file] of previewFs) {
   if (path.endsWith("server.rs")) continue;
   file.head = path.endsWith("main.ts") ? file.text.replace("// 中文注释，标点不会被框起来\n", "") : file.text;
 }
+const previewStaged = new Map<string, string>();
+let previewAhead = 0;
+const previewCommits = [
+  { hash: "a".repeat(40), short: "a1b2c3d", author: "demo", time: Math.floor(Date.now() / 1000) - 3600 * 5, subject: "加上服务端的入口" },
+  { hash: "b".repeat(40), short: "9f8e7d6", author: "demo", time: Math.floor(Date.now() / 1000) - 86400 * 2, subject: "初始化项目" },
+];
 function previewUnder(path: string, dir: string) { return path === dir || path.startsWith(dir + "/"); }
 const previewForwards: { id: number; conn_id: number; remote_port: number; local_port: number; connections: number }[] = [];
 let previewForwardSeq = 0;
@@ -547,7 +553,7 @@ function previewLspStart(family: string, output: any) {
   return { lsp_id: id, server: family === "rust" ? "rust-analyzer" : "typescript-language-server", root: previewRepo };
 }
 
-function previewEdit(request: any) {
+async function previewEdit(request: any) {
   switch (request.op) {
     case "search": {
       let pattern = request.regex ? request.query : request.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -587,10 +593,50 @@ function previewEdit(request: any) {
       return { kind: "done" };
     case "git_status": {
       if (!previewUnder(request.root, previewRepo)) return { kind: "git", status: null };
-      const entries = [...previewFs].filter(([, f]) => f.head !== f.text).map(([p, f]) => ({ path: p.slice(previewRepo.length + 1), status: f.head === undefined ? "??" : " M" }));
+      // 暂存区：previewStaged 里的文件按暂存时的内容算；工作区再改过就两边都有
+      const entries = [...previewFs].flatMap(([p, f]) => {
+        const rel = p.slice(previewRepo.length + 1);
+        const staged = previewStaged.get(rel);
+        const index = staged ?? f.head;
+        const x = staged === undefined ? " " : f.head === undefined ? "A" : "M";
+        const y = index === undefined ? "?" : index !== f.text ? "M" : " ";
+        if (x === " " && y === "?") return [{ path: rel, status: "??" }];
+        return x === " " && y === " " ? [] : [{ path: rel, status: x + y }];
+      });
       const prefix = request.root === previewRepo ? "" : request.root.slice(previewRepo.length + 1) + "/";
-      return { kind: "git", status: { top: previewRepo, prefix, branch: "main", entries } };
+      return { kind: "git", status: { top: previewRepo, prefix, branch: "main", entries, upstream: "origin/main", ahead: previewAhead, behind: 1 } };
     }
+    case "git_stage":
+      for (const [p, f] of previewFs) {
+        const rel = p.slice(previewRepo.length + 1);
+        if ((request.paths.length === 0 && f.head !== f.text) || request.paths.includes(rel)) previewStaged.set(rel, f.text);
+      }
+      return { kind: "done" };
+    case "git_unstage":
+      if (request.paths.length === 0) previewStaged.clear();
+      for (const rel of request.paths) previewStaged.delete(rel);
+      return { kind: "done" };
+    case "git_discard":
+      for (const rel of request.paths) { const f = previewFs.get(previewRepo + "/" + rel); if (f) { f.text = previewStaged.get(rel) ?? f.head ?? f.text; f.mtime = Date.now(); } }
+      for (const rel of request.untracked) previewFs.delete(previewRepo + "/" + rel);
+      return { kind: "done" };
+    case "git_commit": {
+      if (!previewStaged.size) throw new Error("nothing to commit, working tree clean");
+      for (const [rel, text] of previewStaged) { const f = previewFs.get(previewRepo + "/" + rel); if (f) f.head = text; }
+      const files = previewStaged.size;
+      previewStaged.clear();
+      previewAhead++;
+      previewCommits.unshift({ hash: "f".repeat(40), short: "f00ba" + previewAhead, author: "demo", time: Math.floor(Date.now() / 1000), subject: request.message.split("\n")[0] });
+      return { kind: "output", text: `[main f00ba${previewAhead}] ${request.message}\n ${files} file changed` };
+    }
+    case "git_push":
+      await new Promise((r) => setTimeout(r, 600));
+      previewAhead = 0;
+      return { kind: "output", text: "To github.com:demo/demo.git\n   1234567..f00ba1  main -> main" };
+    case "git_pull":
+      throw new Error("fatal: Not possible to fast-forward, aborting.");
+    case "git_log":
+      return { kind: "log", commits: previewCommits.slice(0, request.limit) };
   }
   throw new Error("unknown op");
 }

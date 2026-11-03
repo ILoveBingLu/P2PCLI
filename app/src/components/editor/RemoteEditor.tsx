@@ -17,6 +17,7 @@ import { languageFor, monaco } from "./monaco";
 import { baseName, dirName, gitMarks, isUnder, joinPath, movePath, type GitKind } from "./paths";
 import { NameDialog, ProblemsPanel, QuickOpen, SearchPanel, SymbolSearch, type SearchTarget } from "./EditorPanels";
 import { LspManager, type LspStatus } from "./lsp";
+import { GitPanel } from "./GitPanel";
 
 type Eol = "LF" | "CRLF";
 
@@ -115,7 +116,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [rootError, setRootError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [side, setSide] = useState<"files" | "search" | "problems">("files");
+  const [side, setSide] = useState<"files" | "search" | "problems" | "git">("files");
   const [symbolSearch, setSymbolSearch] = useState(false);
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -243,6 +244,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => setQuickOpen(true));
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => setSide("search"));
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyM, () => setSide("problems"));
+    instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyG, () => setSide("git"));
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyT, () => setSymbolSearch(true));
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyS, () => void saveAll());
     editor.current = instance;
@@ -808,6 +810,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
     if (mod && !e.shiftKey && e.key.toLowerCase() === "p") { e.preventDefault(); setQuickOpen(true); }
     else if (mod && e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); setSide("search"); }
     else if (mod && e.shiftKey && e.key.toLowerCase() === "m") { e.preventDefault(); setSide("problems"); }
+    else if (mod && e.shiftKey && e.key.toLowerCase() === "g") { e.preventDefault(); setSide("git"); }
     else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); setSymbolSearch(true); }
     else if (mod && e.altKey && e.code === "KeyS") { e.preventDefault(); void saveAll(); }
   };
@@ -861,6 +864,10 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
               onClick={() => setSide("problems")} title={t("语言服务报的问题（⌘/Ctrl+Shift+M）")}>
               <CircleX />{t("问题")}{errorCount + warningCount > 0 && <span className="remote-editor-count">{errorCount + warningCount}</span>}
             </button>
+            {(git || side === "git") && <button type="button" role="tab" aria-selected={side === "git"} className={cn(side === "git" && "is-active")}
+              onClick={() => setSide("git")} title={t("Git：暂存、提交、推送（⌘/Ctrl+Shift+G）")}>
+              <GitBranch />Git{!!git?.entries.length && <span className="remote-editor-count">{git.entries.length}</span>}
+            </button>}
             <span className="grow" />
             {side === "files" && <>
               <Button variant="ghost" size="icon-xs" aria-label={t("新建文件")} title={t("新建文件")} isDisabled={!online || root == null}
@@ -896,6 +903,12 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
             })}
           </nav>
           {side === "search" && <SearchPanel connId={connId} root={root} onOpen={(target) => void openFile(target.path, target)} />}
+          {side === "git" && <GitPanel connId={connId} root={root} status={git} dirtyCount={dirtyCount}
+            onRefresh={async () => { gitCheckedAt.current = 0; await pollGit(); }}
+            onOpen={(path) => { setSelected(path); void openFile(path); }}
+            onDiff={(path) => { setSelected(path); void compareWithHead(path); }}
+            onSaveAll={saveAll}
+            confirm={(options) => setConfirm(options)} />}
           {side === "problems" && <ProblemsPanel problems={problems} root={root} onOpen={(target) => { setSelected(target.path); void openFile(target.path, target); }} />}
         </div>
         <div className="remote-editor-main">
