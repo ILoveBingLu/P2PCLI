@@ -857,16 +857,16 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
         <div className="remote-editor-side">
           <div className="remote-editor-side-tabs" role="tablist">
             <button type="button" role="tab" aria-selected={side === "files"} className={cn(side === "files" && "is-active")}
-              onClick={() => setSide("files")} title={t("文件")}><Files />{t("文件")}</button>
+              onClick={() => setSide("files")} title={t("文件")} aria-label={t("文件")}><Files /><span className="side-tab-label">{t("文件")}</span></button>
             <button type="button" role="tab" aria-selected={side === "search"} className={cn(side === "search" && "is-active")}
-              onClick={() => setSide("search")} title={t("在文件中搜索（⌘/Ctrl+Shift+F）")}><TextSearch />{t("搜索")}</button>
+              onClick={() => setSide("search")} title={t("在文件中搜索（⌘/Ctrl+Shift+F）")} aria-label={t("搜索")}><TextSearch /><span className="side-tab-label">{t("搜索")}</span></button>
             <button type="button" role="tab" aria-selected={side === "problems"} className={cn(side === "problems" && "is-active")}
-              onClick={() => setSide("problems")} title={t("语言服务报的问题（⌘/Ctrl+Shift+M）")}>
-              <CircleX />{t("问题")}{errorCount + warningCount > 0 && <span className="remote-editor-count">{errorCount + warningCount}</span>}
+              onClick={() => setSide("problems")} title={t("语言服务报的问题（⌘/Ctrl+Shift+M）")} aria-label={t("问题")}>
+              <CircleX /><span className="side-tab-label">{t("问题")}</span>{errorCount + warningCount > 0 && <span className="remote-editor-count">{errorCount + warningCount}</span>}
             </button>
             {(git || side === "git") && <button type="button" role="tab" aria-selected={side === "git"} className={cn(side === "git" && "is-active")}
-              onClick={() => setSide("git")} title={t("Git：暂存、提交、推送（⌘/Ctrl+Shift+G）")}>
-              <GitBranch />Git{!!git?.entries.length && <span className="remote-editor-count">{git.entries.length}</span>}
+              onClick={() => setSide("git")} title={t("Git：暂存、提交、推送（⌘/Ctrl+Shift+G）")} aria-label="Git">
+              <GitBranch /><span className="side-tab-label">Git</span>{!!git?.entries.length && <span className="remote-editor-count">{git.entries.length}</span>}
             </button>}
             <span className="grow" />
             {side === "files" && <>

@@ -1,10 +1,14 @@
-import React, { useEffect } from "react";
+import React, { lazy, Suspense, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { useTranslation } from "react-i18next";
 import App from "./App";
 import "./styles.css";
 import { syncOsLocale } from "./i18n";
 import { startSelftest } from "./selftest";
+
+// 代码编辑器的单独窗口（index.html?window=editor）只渲染编辑器，主窗口照旧
+const isEditorWindow = new URLSearchParams(location.search).get("window") === "editor";
+const EditorWindow = lazy(() => import("./components/editor/EditorWindow"));
 
 function LocaleRoot({ children }: { children: React.ReactNode }) {
   const { i18n } = useTranslation();
@@ -22,9 +26,9 @@ void (async () => {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <LocaleRoot>
-        <App />
+        {isEditorWindow ? <Suspense fallback={null}><EditorWindow /></Suspense> : <App />}
       </LocaleRoot>
     </React.StrictMode>,
   );
-  startSelftest();
+  if (!isEditorWindow) startSelftest();
 })();

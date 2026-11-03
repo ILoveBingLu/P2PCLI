@@ -190,6 +190,9 @@ export const CONFLICT_PREFIX = "conflict:";
 /** 对方电脑上找不到某种语言的语言服务时，错误信息以它开头，后面跟语言 */
 export const LSP_MISSING_PREFIX = "lsp_missing:";
 
+/** 给代码编辑器窗口的请求：换根目录，和/或打开一个文件跳到某行 */
+export interface EditorRequest { root?: string; path?: string; line?: number; col?: number }
+export interface EditorBootstrap { endpoint_id: string; device_name: string; requests: EditorRequest[] }
 export interface LspOpened { lsp_id: number; server: string; root: string }
 
 /** 对方电脑上正在监听的端口 */
@@ -529,6 +532,13 @@ export const api = {
   /** 按顺序发一批消息 */
   lspSend: (lspId: number, messages: string[]) => invoke<void>("lsp_send", { lspId, messages }),
   lspStop: (lspId: number) => invoke<void>("lsp_stop", { lspId }),
+  /** 打开（或叫到前面）某台设备的代码编辑器窗口；initialRoot 只在新开窗口时用 */
+  openEditorWindow: (endpointId: string, deviceName: string, initialRoot: string, request?: EditorRequest) =>
+    invoke<void>("open_editor_window", { endpointId, deviceName, initialRoot, request: request ?? null }),
+  /** 编辑器窗口用：自己是哪台设备的，取走排队的请求 */
+  editorTakeRequests: () => invoke<EditorBootstrap>("editor_take_requests"),
+  /** 这台设备现在用哪条连接，断开时为空 */
+  editorConnection: (endpointId: string) => invoke<number | null>("editor_connection", { endpointId }),
   listPorts: (connId: number) => invoke<ListeningPort[]>("list_ports", { connId }),
   /** 同一台设备的同一个端口已经在转发时返回已有的那个 */
   forwardPort: (connId: number, remotePort: number, localPort?: number) => invoke<ForwardView>("forward_port", { connId, remotePort, localPort: localPort ?? null }),

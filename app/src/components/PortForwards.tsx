@@ -70,12 +70,12 @@ export function PortForwards({ connId, deviceName, forwards, onChanged }: {
 
   return (
     <Popover isOpen={open} onOpenChange={setOpen}>
-      <Button variant="ghost" size="icon-sm" className="terminal-ports-toggle" data-active={forwards.length > 0 || undefined}
+      <Button variant="ghost" size="icon-sm" className="terminal-ports-toggle terminal-dock-button" data-active={forwards.length > 0 || undefined}
         aria-label={t("端口转发")} title={forwards.length ? t("端口转发（{{count}} 个正在转发）", { count: forwards.length }) : t("端口转发：在本机打开对方电脑上的网页服务")}>
         <Cable />
         {forwards.length > 0 && <span className="terminal-ports-count">{forwards.length}</span>}
       </Button>
-      <Popover.Content placement="bottom end" offset={8} className="w-[24rem] max-w-[calc(100vw-24px)]">
+      <Popover.Content placement="left" offset={10} className="w-[24rem] max-w-[calc(100vw-24px)]">
         <Popover.Dialog aria-label={t("端口转发")} className="ports-panel">
           <div className="ports-head">
             <Popover.Heading className="ports-title">{t("端口转发")}</Popover.Heading>

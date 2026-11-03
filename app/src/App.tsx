@@ -1,13 +1,9 @@
 import {
-  Fragment,
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useRef,
   useState,
   type ComponentProps,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -23,7 +19,6 @@ import {
 } from "lucide-react";
 import { Tabs } from "@heroui/react";
 import { toast, Toaster } from "@/components/ui/toast";
-import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
   api,
   shellQuote,
@@ -102,18 +97,7 @@ interface Tab {
   termId?: number;
 }
 
-// 代码编辑器带着 Monaco，十几 MB，第一次打开时才加载
-const RemoteEditor = lazy(() => import("./components/editor/RemoteEditor"));
 
-/** 代码编辑器按设备记：断开重连后打开的文件和未保存的修改都还在 */
-interface EditorState {
-  root: string;
-  /** 外面要求换根目录时加一 */
-  seq: number;
-  shown: boolean;
-  /** 终端里点了文件路径：打开它并跳到这一行；seq 每次加一 */
-  open?: { path: string; line: number; col: number; seq: number };
-}
 
 /** 拖文件进窗口时的提示：发给谁，或者为什么发不了 */
 type DropHint = { name: string } | { blocked: string };
@@ -218,44 +202,24 @@ export default function App() {
   }, [refresh]);
 
   const activeTab = tabs.find((tab) => tab.key === activeKey) ?? null;
-  const [editors, setEditors] = useState<Record<string, EditorState>>({});
-  const [editorDirty, setEditorDirty] = useState<Record<string, number>>({});
-  const [editorWidth, setEditorWidth] = useState(() => {
-    const saved = Number(localStorage.getItem("p2pcli.editor.width"));
-    return saved >= 0.25 && saved <= 0.8 ? saved : 0.55;
-  });
-  /** 关掉某台设备最后一个标签时，它的编辑器里还有没保存的文件：先问一下 */
-  const [discardEditor, setDiscardEditor] = useState<{ count: number; onConfirm: () => void } | null>(null);
-  const editorConnId = (endpointId: string) => tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.state === "open")?.connId ?? null;
-  const openEditor = (tab: Tab, path?: string) => {
-    const id = tab.info.endpoint_id;
-    const current = tab.sessionId
-      ? liveSessions[tab.connId]?.sessions?.find((s) => s.id === tab.sessionId)?.details?.current_path
-      : undefined;
-    setEditors((all) => {
-      const existing = all[id];
-      // 已经开着又没指定目录：只是重新显示，不换根目录，免得收起的文件树被重置
-      if (existing && path === undefined) return { ...all, [id]: { ...existing, shown: true } };
-      return { ...all, [id]: { root: path ?? current ?? "", seq: (existing?.seq ?? 0) + 1, shown: true } };
-    });
+  /** 终端现在所在的目录（对方 tmux 会话报上来的） */
+  const cwdOf = (tab: Tab) => tab.sessionId
+    ? liveSessions[tab.connId]?.sessions?.find((s) => s.id === tab.sessionId)?.details?.current_path
+    : undefined;
+  /** 代码编辑器在单独的窗口里，每台设备一个；已经开着就叫到前面。root 写了就让它换到这个目录 */
+  const openEditor = (tab: Tab, root?: string) => {
+    void api.openEditorWindow(tab.info.endpoint_id, tab.info.name, root ?? cwdOf(tab) ?? "", root !== undefined ? { root } : undefined)
+      .catch((e) => toast.error(tr(String(e))));
   };
   /** 终端里 ⌘/Ctrl+点击了文件路径：相对路径按终端当前目录算，对方电脑上有这个文件才打开编辑器跳过去 */
   const openFromTerminal = async (tab: Tab, link: TerminalPathLink) => {
-    const id = tab.info.endpoint_id;
-    const cwd = tab.sessionId
-      ? liveSessions[tab.connId]?.sessions?.find((s) => s.id === tab.sessionId)?.details?.current_path
-      : undefined;
-    const path = resolvePath(link.path, cwd || editors[id]?.root);
+    const cwd = cwdOf(tab);
+    const path = resolvePath(link.path, cwd);
     if (!path) return void toast.error(t("不知道终端现在在哪个目录，没法打开 {{path}}", { path: link.path }));
     const [stat] = await api.statFiles(tab.connId, [path]).catch(() => [null]);
     if (!stat || stat.dir) return void toast.error(t("对方电脑上没有这个文件：{{path}}", { path }));
-    const open = { path, line: link.line ?? 1, col: link.col ?? 1 };
-    setEditors((all) => {
-      const existing = all[id];
-      const seq = (existing?.open?.seq ?? 0) + 1;
-      if (existing) return { ...all, [id]: { ...existing, shown: true, open: { ...open, seq } } };
-      return { ...all, [id]: { root: cwd || dirName(path), seq: 1, shown: true, open: { ...open, seq } } };
-    });
+    await api.openEditorWindow(tab.info.endpoint_id, tab.info.name, cwd || dirName(path), { path, line: link.line ?? 1, col: link.col ?? 1 })
+      .catch((e) => toast.error(tr(String(e))));
   };
   // 端口转发：后端按连接记，这里只拿来显示；有转发时隔几秒刷新一下连接数，连接断了也会跟着消失
   const [forwards, setForwards] = useState<ForwardView[]>([]);
@@ -280,38 +244,10 @@ export default function App() {
       toast.error(tr(String(e)));
     }
   };
-  const closeEditor = (endpointId: string) => {
-    setEditors(({ [endpointId]: _, ...rest }) => rest);
-    setEditorDirty(({ [endpointId]: _, ...rest }) => rest);
-  };
   // 目录选择用了 memo，传稳定的函数进去，里面再取最新的标签
   const openEditorRef = useRef<(path: string) => void>(() => {});
   openEditorRef.current = (path) => { if (activeTab) openEditor(activeTab, path); };
   const openEditorAt = useCallback((path: string) => openEditorRef.current(path), []);
-  const dragEditorSplit = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const container = event.currentTarget.parentElement;
-    if (!container) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    let frame = 0;
-    let width = editorWidth;
-    const move = (e: PointerEvent) => {
-      const rect = container.getBoundingClientRect();
-      width = Math.min(0.8, Math.max(0.25, (rect.right - e.clientX) / rect.width));
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setEditorWidth(width));
-    };
-    const up = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", up);
-      handle.removeEventListener("pointercancel", up);
-      try { localStorage.setItem("p2pcli.editor.width", String(width)); } catch { /* 存不了就算了 */ }
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", up);
-    handle.addEventListener("pointercancel", up);
-  };
   useEffect(() => {
     setActiveKey((key) => key !== null && !tabs.some((tab) => tab.key === key) ? tabs.at(-1)?.key ?? null : key);
   }, [tabs]);
@@ -614,19 +550,9 @@ export default function App() {
     void api.refreshDevices().catch(() => { /* 下轮常规探测会继续同步缓存。 */ });
   };
 
-  const closeTab = (key: number, discardEdits = false) => {
+  const closeTab = (key: number) => {
     const tab = tabs.find((tab) => tab.key === key);
     const rest = tabs.filter((tab) => tab.key !== key);
-    // 这台设备最后一个标签关掉以后，它的编辑器也跟着关；有没保存的文件先问
-    const endpointId = tab?.info.endpoint_id;
-    if (endpointId && editors[endpointId] && !rest.some((other) => other.info.endpoint_id === endpointId)) {
-      const dirty = editorDirty[endpointId] ?? 0;
-      if (dirty && !discardEdits) {
-        setDiscardEditor({ count: dirty, onConfirm: () => closeTab(key, true) });
-        return;
-      }
-      closeEditor(endpointId);
-    }
     // 这条连接上没有别的标签了就断开；会话页还开着时留给它，返回时它自己会断
     if (tab && !rest.some((other) => other.connId === tab.connId) && sessionTarget?.connId !== tab.connId)
       api.disconnect(tab.connId).catch((e) => toast.error(String(e)));
@@ -984,25 +910,7 @@ export default function App() {
                   <History />
                 </Button>
               )}
-              {activeTab && activeTab.state === "open" && !isLocalTab(activeTab) && (
-                <PortForwards connId={activeTab.connId} deviceName={activeTab.info.name}
-                  forwards={forwards.filter((f) => f.conn_id === activeTab.connId)} onChanged={refreshForwards} />
-              )}
-              {activeTab && (activeTab.state === "open" || editors[activeTab.info.endpoint_id]) && (
-                <Button variant="ghost" size="icon-sm" className="terminal-editor-toggle"
-                  data-active={editors[activeTab.info.endpoint_id]?.shown || undefined}
-                  aria-label={t("代码编辑器")}
-                  title={editors[activeTab.info.endpoint_id]?.shown ? t("收起代码编辑器（打开的文件会保留）") : t("在代码编辑器里打开这台设备上的文件")}
-                  onClick={() => {
-                    const id = activeTab.info.endpoint_id;
-                    if (editors[id]?.shown) setEditors((all) => ({ ...all, [id]: { ...all[id], shown: false } }));
-                    else openEditor(activeTab);
-                  }}>
-                  <FileCode2 />
-                </Button>
-              )}
             </div>
-            <div className="workspace-split">
             <div className="terminals">
               <Tabs.Panel id="home" className="terminal-panel terminal-home-panel">
                 <Welcome
@@ -1106,29 +1014,19 @@ export default function App() {
                   )}
                 </Tabs.Panel>
               ))}
-            </div>
-            {Object.entries(editors).map(([endpointId, editor]) => {
-              const visible = editor.shown && activeTab?.info.endpoint_id === endpointId;
-              return (
-                <Fragment key={endpointId}>
-                  {visible && <div className="workspace-splitter" role="separator" aria-orientation="vertical"
-                    aria-label={t("拖动调整编辑器宽度")} onPointerDown={dragEditorSplit} />}
-                  <div className="remote-editor-pane" hidden={!visible} style={{ flexBasis: `${editorWidth * 100}%` }}>
-                    <Suspense fallback={<div className="remote-editor-placeholder"><LoaderCircle className="animate-spin" />{t("正在加载编辑器…")}</div>}>
-                      <RemoteEditor
-                        connId={editorConnId(endpointId)}
-                        root={editor.root}
-                        rootSeq={editor.seq}
-                        openRequest={editor.open}
-                        active={visible && !showSettings && !sessionTarget}
-                        onDirty={(count) => setEditorDirty((all) => all[endpointId] === count ? all : { ...all, [endpointId]: count })}
-                        onClose={() => closeEditor(endpointId)}
-                      />
-                    </Suspense>
-                  </div>
-                </Fragment>
-              );
-            })}
+              {/* 右侧悬浮：代码编辑器（单独的窗口）、端口转发。不占标签栏，也不挡终端的字 */}
+              {activeTab && activeTab.state === "open" && !showSettings && !sessionTarget && (
+                <div className="terminal-dock" role="toolbar" aria-label={t("设备工具")}>
+                  <Button variant="ghost" size="icon-sm" className="terminal-dock-button" aria-label={t("代码编辑器")}
+                    title={t("在单独的窗口里打开代码编辑器，直接编辑这台设备上的文件")} onClick={() => openEditor(activeTab)}>
+                    <FileCode2 />
+                  </Button>
+                  {!isLocalTab(activeTab) && (
+                    <PortForwards connId={activeTab.connId} deviceName={activeTab.info.name}
+                      forwards={forwards.filter((f) => f.conn_id === activeTab.connId)} onChanged={refreshForwards} />
+                  )}
+                </div>
+              )}
             </div>
             {activeTab && activeAgent && (
               <AgentComposer
@@ -1192,20 +1090,6 @@ export default function App() {
         </div>
         <TransferPanel transfers={transfers} />
       </main>
-      {discardEditor && (
-        <AlertDialog open>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("有 {{count}} 个文件未保存", { count: discardEditor.count })}</AlertDialogTitle>
-              <AlertDialogDescription>{t("这是这台设备的最后一个标签，关掉以后代码编辑器也会关闭，未保存的修改会丢失。")}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <Button variant="outline" onPress={() => setDiscardEditor(null)}>{t("取消")}</Button>
-              <Button variant="destructive" onPress={() => { const next = discardEditor; setDiscardEditor(null); next.onConfirm(); }}>{t("不保存，关闭标签")}</Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
       {showDiag && <DiagDialog publicKey={ov?.endpoint_id ?? null} onClose={() => setShowDiag(false)} />}
       {requests.length > 0 && (
         <ApproveDialog

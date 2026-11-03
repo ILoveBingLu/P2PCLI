@@ -2125,49 +2125,33 @@ img.agent-icon {
   .dir-picker-spin { animation: none; }
 }
 
-/* 代码编辑器：在终端右边，中间一条可以拖的分隔线 */
-.workspace-split {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-}
-.workspace-split > .terminals {
-  min-width: 240px;
-}
-.workspace-splitter {
-  flex: none;
-  width: 5px;
-  margin: 0 -2px;
-  position: relative;
-  z-index: 2;
-  cursor: col-resize;
-  touch-action: none;
-}
-.workspace-splitter::after {
-  content: "";
+/* 终端右侧悬浮的设备工具：代码编辑器（单独窗口）、端口转发。平时淡一点，鼠标移上去才清楚 */
+.terminal-dock {
   position: absolute;
-  inset: 0 2px;
-  background: var(--border);
-}
-.workspace-splitter:hover::after,
-.workspace-splitter:active::after {
-  inset: 0 1px;
-  background: var(--accent);
-}
-.remote-editor-pane {
-  flex: 0 0 auto;
-  min-width: 320px;
-  min-height: 0;
+  z-index: 5;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sidebar) 88%, transparent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.35);
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.terminal-dock:hover,
+.terminal-dock:focus-within { opacity: 1; }
+/* 代码编辑器的单独窗口：编辑器铺满整个窗口 */
+.editor-window {
+  display: flex;
+  height: 100vh;
   background: var(--terminal);
 }
-.remote-editor-pane[hidden] {
-  display: none;
-}
-.terminal-editor-toggle[data-active] {
-  color: var(--accent);
-}
+.editor-window > .remote-editor-placeholder { position: static; flex: 1; }
 .remote-editor {
   display: flex;
   flex-direction: column;
@@ -2234,7 +2218,7 @@ img.agent-icon {
 .remote-editor-side {
   display: flex;
   flex-direction: column;
-  width: 240px;
+  width: 260px;
   flex: none;
   min-height: 0;
   border-right: 1px solid var(--border);
@@ -2263,6 +2247,9 @@ img.agent-icon {
 .remote-editor-side-tabs > button[role="tab"]:hover { color: var(--foreground); }
 .remote-editor-side-tabs > button.is-active { color: var(--foreground); background: rgb(255 255 255 / 0.08); }
 .remote-editor-side-tabs svg { width: 13px; height: 13px; }
+/* 地方小：只有选中的那个标签显示文字，其余只留图标（名字在提示里） */
+.remote-editor-side-tabs > button[role="tab"] { white-space: nowrap; flex: none; }
+.remote-editor-side-tabs > button[role="tab"]:not(.is-active) .side-tab-label { display: none; }
 .remote-editor-side-tabs .grow { flex: 1; }
 .remote-editor-tree {
   flex: 1;
@@ -2377,7 +2364,6 @@ img.agent-icon {
   color: var(--muted-foreground);
   overflow-wrap: anywhere;
 }
-.remote-editor-pane > .remote-editor-placeholder { position: static; flex: 1; }
 .remote-editor-placeholder.is-error { color: var(--danger); }
 .remote-editor-placeholder svg { width: 16px; height: 16px; }
 .remote-editor-status {

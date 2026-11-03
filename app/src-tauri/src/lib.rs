@@ -256,6 +256,8 @@ struct AppState {
     lsps: Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>,
     /// 端口转发：编号 → (连接编号, 转发)。丢掉就停止；连接断了一起清掉
     forwards: Mutex<HashMap<u64, (u64, p2pcli_core::ports::Forward)>>,
+    /// 代码编辑器窗口：窗口标签 → 它是哪台设备的、还没取走的请求（打开哪个文件、换根目录）
+    editor_windows: Mutex<HashMap<String, EditorWindow>>,
     next: AtomicU64,
     /// 本机自己那条常驻连接的编号：启动时建好，一直在 remotes 里，侧边栏的“本机”用它开终端、读会话
     local_conn: AtomicU64,
@@ -903,6 +905,87 @@ async fn write_file(state: State<'_, AppState>, conn_id: u64, path: String, text
     state.remote(conn_id)?.write_file(path, text, bom, expected, force).await.map_err(|e| format!("{e:#}"))
 }
 
+/// 给编辑器窗口的一个请求：换根目录，和/或打开一个文件跳到某行
+#[derive(Clone, Default, Serialize, serde::Deserialize)]
+struct EditorRequest {
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<u32>,
+    #[serde(default)]
+    col: Option<u32>,
+}
+
+struct EditorWindow {
+    endpoint_id: String,
+    device_name: String,
+    pending: Vec<EditorRequest>,
+}
+
+#[derive(Serialize)]
+struct EditorBootstrap {
+    endpoint_id: String,
+    device_name: String,
+    requests: Vec<EditorRequest>,
+}
+
+/// 编辑器窗口按设备开，同一台设备只开一个
+fn editor_label(endpoint_id: &str) -> String {
+    let id: String = endpoint_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
+    format!("editor-{id}")
+}
+
+/// 打开（或叫到前面）某台设备的代码编辑器窗口。initial_root 只在新开窗口时用；
+/// request 是要它做的事（终端里点了文件、目录选择里点了“在编辑器中打开”）
+#[tauri::command]
+fn open_editor_window(app: AppHandle, state: State<'_, AppState>, endpoint_id: String, device_name: String, initial_root: Option<String>, request: Option<EditorRequest>) -> Result<(), String> {
+    let label = editor_label(&endpoint_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        if let Some(request) = request {
+            if let Some(entry) = state.editor_windows.lock().unwrap().get_mut(&label) { entry.pending.push(request); }
+            // 窗口自己来取，免得它还在加载时把事件丢了
+            let _ = app.emit_to(label.as_str(), "editor-request", ());
+        }
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let mut pending = vec![EditorRequest { root: initial_root, ..Default::default() }];
+    pending.extend(request);
+    state.editor_windows.lock().unwrap().insert(label.clone(), EditorWindow { endpoint_id, device_name: device_name.clone(), pending });
+    let title = format!("{device_name} — 代码编辑器");
+    let built = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html?window=editor".into()))
+        .title(title)
+        .inner_size(1200.0, 820.0)
+        .min_inner_size(640.0, 420.0)
+        .build();
+    if let Err(e) = built {
+        state.editor_windows.lock().unwrap().remove(&label);
+        return Err(format!("打不开编辑器窗口：{e}"));
+    }
+    Ok(())
+}
+
+/// 编辑器窗口启动时、收到 editor-request 时调：拿到自己是哪台设备的、取走排队的请求
+#[tauri::command]
+fn editor_take_requests(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<EditorBootstrap, String> {
+    let mut windows = state.editor_windows.lock().unwrap();
+    let entry = windows.get_mut(window.label()).ok_or("这个编辑器窗口没有登记")?;
+    Ok(EditorBootstrap { endpoint_id: entry.endpoint_id.clone(), device_name: entry.device_name.clone(), requests: std::mem::take(&mut entry.pending) })
+}
+
+/// 这台设备现在用哪条连接：断开时为空，重连后换成新的
+#[tauri::command]
+fn editor_connection(state: State<'_, AppState>, endpoint_id: String) -> Option<u64> {
+    state.remotes.lock().unwrap().iter()
+        .filter(|(_, r)| r.info.endpoint_id == endpoint_id && !r.is_closed())
+        .map(|(id, _)| *id)
+        .max()
+}
+
 #[derive(Serialize)]
 struct ForwardView {
     id: u64,
@@ -1372,6 +1455,7 @@ pub fn run() {
                 terms: Mutex::new(HashMap::new()),
                 lsps: Mutex::new(HashMap::new()),
                 forwards: Mutex::new(HashMap::new()),
+                editor_windows: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
                 local_conn: AtomicU64::new(0),
             });
@@ -1491,6 +1575,13 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // 编辑器窗口照常关；关掉以后它排队的请求也不要了
+            if window.label() != "main" {
+                if let WindowEvent::Destroyed = event {
+                    window.app_handle().state::<AppState>().editor_windows.lock().unwrap().remove(window.label());
+                }
+                return;
+            }
             // 关窗口只是藏起来，别人还要能连进来
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // If tray creation failed, closing must not hide an unreachable window.
@@ -1559,6 +1650,9 @@ pub fn run() {
             lsp_start,
             lsp_send,
             lsp_stop,
+            open_editor_window,
+            editor_take_requests,
+            editor_connection,
             list_ports,
             forward_port,
             stop_forward,

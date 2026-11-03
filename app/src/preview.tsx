@@ -948,6 +948,21 @@ mockIPC(
       case "edit_op":
         await new Promise((r) => setTimeout(r, 150));
         return previewEdit(args.request);
+      case "open_editor_window":
+        // 浏览器预览里没有第二个窗口：记下来，测试脚本看；真要看编辑器窗口用 preview.html?window=editor
+        (window as any).__previewEditorOpened = [...((window as any).__previewEditorOpened ?? []), args];
+        return;
+      case "editor_take_requests": {
+        const first = !(window as any).__previewEditorBooted;
+        (window as any).__previewEditorBooted = true;
+        return {
+          endpoint_id: "f3a91c2d8e7b4a6f9d0c1b2a3e4f5061",
+          device_name: "工作室 Mac mini",
+          requests: first ? [{ root: previewRepo }, { path: previewRepo + "/src/main.ts", line: 5, col: 13 }] : [],
+        };
+      }
+      case "editor_connection":
+        return 1;
       case "list_ports":
         await new Promise((r) => setTimeout(r, 300));
         return [{ port: 5173, process: "node", pid: 4242 }, { port: 8000, process: "python3", pid: 4300 }, { port: 5432, process: "postgres", pid: 88 }];
