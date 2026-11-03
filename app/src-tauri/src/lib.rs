@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use p2pcli_core::client::{ConnectError, RemoteHost, RemoteInfo, TermEvent};
+use p2pcli_core::client::{ConnectError, LspEvent, RemoteHost, RemoteInfo, TermEvent};
 use p2pcli_core::files::Transfer;
 use p2pcli_core::host::{
     BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest, SessionSummary,
@@ -252,6 +252,8 @@ struct AppState {
     settings: Mutex<Settings>,
     remotes: Mutex<HashMap<u64, Arc<RemoteHost>>>,
     terms: Mutex<HashMap<u64, mpsc::UnboundedSender<TermCmd>>>,
+    /// 编辑器开着的语言服务：发给它的消息走这个通道，丢掉通道它就结束
+    lsps: Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>,
     next: AtomicU64,
     /// 本机自己那条常驻连接的编号：启动时建好，一直在 remotes 里，侧边栏的“本机”用它开终端、读会话
     local_conn: AtomicU64,
@@ -897,6 +899,69 @@ async fn write_file(state: State<'_, AppState>, conn_id: u64, path: String, text
     state.remote(conn_id)?.write_file(path, text, bom, expected, force).await.map_err(|e| format!("{e:#}"))
 }
 
+#[derive(Serialize)]
+struct LspOpened {
+    lsp_id: u64,
+    server: String,
+    root: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum LspView {
+    /// 语言服务发来的一条 JSON-RPC 消息，原样转给编辑器
+    Message { message: String },
+    /// 语言服务结束了：自己退出、断线或出错
+    Closed { reason: Option<String> },
+}
+
+/// 在对方电脑上启动语言服务（补全、跳转、报错），它发来的消息从 messages 送给编辑器
+#[tauri::command]
+async fn lsp_start(app: AppHandle, state: State<'_, AppState>, conn_id: u64, language: String, file: String, root: String, messages: Channel<LspView>) -> Result<LspOpened, String> {
+    let (started, mut input, mut output) = state.remote(conn_id)?.open_lsp(language, file, root).await.map_err(|e| format!("{e:#}"))?;
+    let lsp_id = state.next();
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    state.lsps.lock().unwrap().insert(lsp_id, tx);
+    tauri::async_runtime::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            if input.send(message.as_bytes()).await.is_err() { break; }
+        }
+        // 编辑器不要它了：关掉输入，对方会结束语言服务
+        input.close();
+    });
+    tauri::async_runtime::spawn(async move {
+        let reason = loop {
+            match output.next().await {
+                Ok(Some(LspEvent::Message(message))) => {
+                    if messages.send(LspView::Message { message }).is_err() { break None; }
+                }
+                Ok(Some(LspEvent::Exited(message))) => break Some(message),
+                Ok(None) => break None,
+                Err(e) => break Some(format!("{e:#}")),
+            }
+        };
+        let _ = messages.send(LspView::Closed { reason });
+        app.state::<AppState>().lsps.lock().unwrap().remove(&lsp_id);
+    });
+    Ok(LspOpened { lsp_id, server: started.server, root: started.root })
+}
+
+/// 按顺序发几条消息给语言服务；编辑器攒成一批发，保证改动和随后的补全请求不会乱序
+#[tauri::command]
+fn lsp_send(state: State<'_, AppState>, lsp_id: u64, messages: Vec<String>) -> Result<(), String> {
+    let lsps = state.lsps.lock().unwrap();
+    let tx = lsps.get(&lsp_id).ok_or("语言服务已经关了")?;
+    for message in messages {
+        tx.send(message).map_err(|_| "语言服务已经关了".to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn lsp_stop(state: State<'_, AppState>, lsp_id: u64) {
+    state.lsps.lock().unwrap().remove(&lsp_id);
+}
+
 #[tauri::command]
 async fn installed_agents(state: State<'_, AppState>, conn_id: u64, refresh: bool) -> Result<Vec<p2pcli_core::launchers::InstalledAgent>, String> {
     state.remote(conn_id)?.installed_agents(refresh).await.map_err(|e| format!("{e:#}"))
@@ -1242,6 +1307,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 remotes: Mutex::new(HashMap::new()),
                 terms: Mutex::new(HashMap::new()),
+                lsps: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
                 local_conn: AtomicU64::new(0),
             });
@@ -1426,6 +1492,9 @@ pub fn run() {
             read_file,
             write_file,
             edit_op,
+            lsp_start,
+            lsp_send,
+            lsp_stop,
             term_input,
             term_resize,
             term_close,

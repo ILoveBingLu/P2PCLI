@@ -16,6 +16,7 @@ pub mod files;
 pub mod host;
 pub mod identity;
 pub mod lan;
+pub mod lsp;
 pub mod node;
 pub mod path;
 pub mod presence;

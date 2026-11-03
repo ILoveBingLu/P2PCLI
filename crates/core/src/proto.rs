@@ -17,6 +17,8 @@ pub const DIR_PICKER_V1: &str = "dir_picker_v1";
 pub const REMOTE_EDIT_V1: &str = "remote_edit_v1";
 /// 远程编辑第二阶段：搜索、文件操作、Git 状态，打开文件时可以读 Git 最新提交里的版本
 pub const REMOTE_EDIT_V2: &str = "remote_edit_v2";
+/// 远程编辑第三版：在对方电脑上启动语言服务，做代码补全、跳转、报错
+pub const REMOTE_LSP_V1: &str = "remote_lsp_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -140,6 +142,20 @@ pub enum Msg {
     /// 远程编辑的其他操作：搜索、按名字找文件、看文件变没变、新建/重命名/删除、Git 状态
     Edit { request: crate::remote_ops::EditRequest },
     EditDone { reply: crate::remote_ops::EditReply },
+    /// 在对方电脑上启动语言服务（补全、跳转、报错）。回 LspStarted 以后两边都只发原始字节帧，
+    /// 就是语言服务的标准输入输出（带 Content-Length 头）；流关了语言服务就结束。需要 remote_lsp_v1
+    LspStart {
+        /// 哪种语言的服务：rust、go、python、typescript、c……
+        language: String,
+        /// 触发启动的文件，用它往上找项目根目录
+        file: String,
+        /// 编辑器打开的目录，找不到项目根目录时用它
+        root: String,
+    },
+    /// server 是语言服务的程序名，root 是它的工作目录（项目根目录）
+    LspStarted { server: String, root: String },
+    /// 语言服务自己退出了，message 里带退出码和它最后的报错；之后流就结束
+    LspExited { message: String },
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,

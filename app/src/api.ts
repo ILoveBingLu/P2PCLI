@@ -172,6 +172,11 @@ async function edit<K extends EditReply["kind"]>(connId: number, request: EditRe
 
 /** 保存时文件被别人改过，后端报的错以它开头 */
 export const CONFLICT_PREFIX = "conflict:";
+/** 对方电脑上找不到某种语言的语言服务时，错误信息以它开头，后面跟语言 */
+export const LSP_MISSING_PREFIX = "lsp_missing:";
+
+export interface LspOpened { lsp_id: number; server: string; root: string }
+export type LspEventView = { kind: "message"; message: string } | { kind: "closed"; reason: string | null };
 
 export interface OpenedTerminal { term_id: number; session_id: string }
 
@@ -487,6 +492,15 @@ export const api = {
   /** 移到废纸篓/回收站 */
   deletePath: (connId: number, path: string) => edit(connId, { op: "delete", path }, "done"),
   gitStatus: async (connId: number, root: string) => (await edit(connId, { op: "git_status", root }, "git")).status,
+  /** 在对方电脑上启动语言服务（补全、跳转、报错）；它发来的消息和结束都从 onEvent 送来 */
+  lspStart: (connId: number, language: string, file: string, root: string, onEvent: (event: LspEventView) => void) => {
+    const messages = new Channel<LspEventView>();
+    messages.onmessage = onEvent;
+    return invoke<LspOpened>("lsp_start", { connId, language, file, root, messages });
+  },
+  /** 按顺序发一批消息 */
+  lspSend: (lspId: number, messages: string[]) => invoke<void>("lsp_send", { lspId, messages }),
+  lspStop: (lspId: number) => invoke<void>("lsp_stop", { lspId }),
   /** expected 是打开时的哈希；对不上会报 conflict:，force 直接覆盖 */
   writeFile: (connId: number, path: string, text: string, bom: boolean, expected: string | null, force = false) =>
     invoke<FileMeta>("write_file", { connId, path, text, bom, expected, force }),

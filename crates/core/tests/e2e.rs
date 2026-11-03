@@ -1648,3 +1648,106 @@ async fn remote_edit_ops_over_connection() {
     guest.shutdown().await;
     host.shutdown().await;
 }
+
+/// 语言服务的管子：调试构建里的 echo 是 cat，发什么回什么；走网络和本机各试一次
+#[cfg(unix)]
+#[tokio::test]
+async fn lsp_stream_over_connection_and_local() {
+    use p2pcli_core::client::LspEvent;
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("lsp-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("lsp-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let local = guest.local_remote().await;
+
+    let work = temp_dir("lsp-work");
+    std::fs::create_dir_all(work.join("pkg")).unwrap();
+    std::fs::write(work.join("pkg/go.mod"), "module x\n").unwrap();
+    let file = work.join("pkg/main.go").to_string_lossy().into_owned();
+    let root = work.to_string_lossy().into_owned();
+
+    for remote in [&remote, &local] {
+        let (started, mut input, mut output) = remote.open_lsp("echo".into(), file.clone(), root.clone()).await.unwrap();
+        assert_eq!(started.server, "cat");
+        assert_eq!(started.root, root);
+        // 比单帧上限大的消息也要完整送到
+        let big = format!(r#"{{"jsonrpc":"2.0","method":"x","params":"{}"}}"#, "中".repeat(600_000));
+        for body in [r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#.to_string(), big.clone()] {
+            // 边发边收：大消息塞满管道时，回显不读走 cat 就写不动
+            let (sent, got) = tokio::time::timeout(Duration::from_secs(20), async { tokio::join!(input.send(body.as_bytes()), output.next()) }).await.unwrap();
+            sent.unwrap();
+            match got.unwrap() {
+                Some(LspEvent::Message(m)) => assert_eq!(m, body),
+                _ => panic!("没收到回显"),
+            }
+        }
+        // 关掉输入：语言服务跟着结束，流随之结束（或者先收到它退出的消息）
+        input.close();
+        match tokio::time::timeout(Duration::from_secs(10), output.next()).await.expect("关掉输入后流没有结束") {
+            Ok(Some(LspEvent::Exited(message))) => assert!(message.contains("cat"), "{message}"),
+            Ok(None) => {}
+            Err(e) => panic!("{e:#}"),
+            Ok(Some(LspEvent::Message(m))) => panic!("意外的消息：{m}"),
+        }
+    }
+    let missing = remote.open_lsp("nope".into(), file.clone(), root.clone()).await.err().unwrap();
+    assert!(format!("{missing:#}").contains("不支持"));
+
+    std::fs::remove_dir_all(&work).ok();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
+/// 真的语言服务：本机有 clangd 时手动跑（cargo test -- --ignored lsp_real）。Mac 装了 Xcode 命令行工具就有
+#[tokio::test]
+#[ignore]
+async fn lsp_real_clangd() {
+    use p2pcli_core::client::LspEvent;
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("lspr-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("lspr-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+
+    let work = temp_dir("lspr-work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(work.join("compile_flags.txt"), "-std=c11\n").unwrap();
+    let main = work.join("src/main.c");
+    let text = "int add_numbers(int a, int b) { return a + b; }\nint main(void) { return add_num }\n";
+    std::fs::write(&main, text).unwrap();
+    let uri = |p: &std::path::Path| format!("file://{}", p.display());
+    let (started, mut input, mut output) = remote.open_lsp("c".into(), main.to_string_lossy().into(), work.to_string_lossy().into()).await.unwrap();
+    assert_eq!(started.server, "clangd");
+    assert_eq!(started.root, work.to_string_lossy());
+
+    let send = |v: serde_json::Value| v.to_string();
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":uri(&work),"capabilities":{}}})).as_bytes()).await.unwrap();
+    let mut next_reply = async |id: i64| loop {
+        match tokio::time::timeout(Duration::from_secs(30), output.next()).await.unwrap().unwrap() {
+            Some(LspEvent::Message(m)) => {
+                let v: serde_json::Value = serde_json::from_str(&m).unwrap();
+                if v["id"] == id && v.get("method").is_none() { return v; }
+            }
+            Some(LspEvent::Exited(reason)) => panic!("语言服务提前结束：{reason}"),
+            None => panic!("语言服务提前结束"),
+        }
+    };
+    let init = next_reply(1).await;
+    assert!(init["result"]["capabilities"]["completionProvider"].is_object(), "{init}");
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","method":"initialized","params":{}})).as_bytes()).await.unwrap();
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri(&main),"languageId":"c","version":1,"text":text}}})).as_bytes()).await.unwrap();
+    input.send(send(serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":uri(&main)},"position":{"line":1,"character":32}}})).as_bytes()).await.unwrap();
+    let completion = next_reply(2).await;
+    let items = completion["result"]["items"].as_array().or(completion["result"].as_array()).cloned().unwrap_or_default();
+    assert!(items.iter().any(|i| i["filterText"] == "add_numbers" || i["label"].as_str().is_some_and(|l| l.contains("add_numbers"))), "{completion}");
+
+    input.close();
+    std::fs::remove_dir_all(&work).ok();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}

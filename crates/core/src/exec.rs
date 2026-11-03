@@ -136,7 +136,7 @@ fn pump<R: AsyncRead + Unpin + Send + 'static>(mut pipe: R, tag: u8, tx: mpsc::S
     })
 }
 
-struct AbortOnDrop(Vec<JoinHandle<()>>);
+pub(crate) struct AbortOnDrop(pub(crate) Vec<JoinHandle<()>>);
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
@@ -147,9 +147,9 @@ impl Drop for AbortOnDrop {
 }
 
 /// 命令的进程组：没正常跑完就被丢掉（对面取消、断线、出错）时，整组结束
-struct Group {
-    pid: Option<u32>,
-    armed: bool,
+pub(crate) struct Group {
+    pub(crate) pid: Option<u32>,
+    pub(crate) armed: bool,
 }
 
 impl Group {
@@ -161,7 +161,7 @@ impl Group {
         self.kill();
     }
 
-    fn kill(&self) {
+    pub(crate) fn kill(&self) {
         #[cfg(unix)]
         self.signal(libc::SIGKILL);
         #[cfg(windows)]
@@ -197,7 +197,7 @@ impl Drop for Group {
 }
 
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// 命令用的工作目录：不写是用户目录，`~` 开头展开，相对路径从用户目录算起
 fn work_dir(cwd: Option<&str>) -> Result<PathBuf> {

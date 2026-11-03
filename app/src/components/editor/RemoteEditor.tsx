@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   ArrowUp, ChevronDown, ChevronRight, CircleAlert, Copy, File, FilePlus, Files, Folder, FolderOpen, FolderPlus, GitBranch, GitCompare,
-  House, LoaderCircle, Pencil, RefreshCw, Save, Search, TextSearch, Trash2, TriangleAlert, X,
+  House, LoaderCircle, Pencil, RefreshCw, Save, Search, TextSearch, Trash2, TriangleAlert, X, Zap, ZapOff,
 } from "lucide-react";
 import { api, CONFLICT_PREFIX, type EntryListing, type FileList, type FileMeta, type GitStatus } from "../../api";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import { t, tr } from "@/i18n";
 import { languageFor, monaco } from "./monaco";
 import { baseName, dirName, gitMarks, isUnder, joinPath, movePath, type GitKind } from "./paths";
 import { NameDialog, QuickOpen, SearchPanel, type SearchTarget } from "./EditorPanels";
+import { LspManager, type LspStatus } from "./lsp";
 
 type Eol = "LF" | "CRLF";
 
@@ -47,6 +48,11 @@ interface Loaded {
   checkedAt: number;
 }
 
+/** 跳转定义、查引用时预先读出来的文件：还没开标签，打开时直接用 */
+interface Peeked { model: monaco.editor.ITextModel; meta: FileMeta; eol: Eol; mixed: boolean }
+/** 预读的文件最多留这么多个 */
+const MAX_PEEKED = 60;
+
 interface DirState { listing?: EntryListing; loading: boolean; error?: string }
 
 type Row =
@@ -72,6 +78,7 @@ const POLL_MS = 3000;
 const GIT_RETRY_MS = 30_000;
 const GIT_LETTER: Record<GitKind, string> = { modified: "M", added: "A", untracked: "U", deleted: "D", conflict: "!" };
 let modelSeq = 0;
+const modelUri = (kind: string, name: string) => monaco.Uri.from({ scheme: "p2pcli", authority: `${kind}${++modelSeq}`, path: "/" + name });
 
 const editorOptions = (): monaco.editor.IEditorOptions & monaco.editor.IGlobalEditorOptions => ({
   theme: "p2pcli-dark",
@@ -122,6 +129,9 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const diffEditor = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const loaded = useRef(new Map<string, Loaded>());
+  const peeked = useRef(new Map<string, Peeked>());
+  const lsp = useRef<LspManager | null>(null);
+  const [, setLspTick] = useState(0);
   const viewStates = useRef(new Map<string, monaco.editor.ICodeEditorViewState | null>());
   /** 从搜索结果打开时要跳到的位置，文件读出来以后再跳 */
   const pendingReveal = useRef(new Map<string, SearchTarget>());
@@ -230,15 +240,44 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => setQuickOpen(true));
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => setSide("search"));
     editor.current = instance;
+    const manager = new LspManager({
+      connId: () => connRef.current,
+      root: () => treeRef.current.root,
+      loadModel: (path) => loadModel(path),
+      pathOf: (uri) => {
+        const key = uri.toString();
+        for (const [path, entry] of [...loaded.current, ...peeked.current]) if (entry.model.uri.toString() === key) return path;
+        return null;
+      },
+      open: (path, range) => {
+        setSelected(path);
+        void openFile(path, { path, line: range.startLineNumber, col: range.startColumn, len: range.startLineNumber === range.endLineNumber ? range.endColumn - range.startColumn : 0 });
+      },
+      changed: () => setLspTick((n) => n + 1),
+    });
+    lsp.current = manager;
     const models = loaded.current;
+    const peeks = peeked.current;
     return () => {
+      manager.dispose();
+      lsp.current = null;
       instance.dispose();
       diffEditor.current?.dispose();
       diffRef.current?.original.dispose();
       for (const { model } of models.values()) model.dispose();
+      for (const { model } of peeks.values()) model.dispose();
       models.clear();
+      peeks.clear();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 连接断开或重连：语言服务跟着连接走，换了连接要重新开
+  const lspConn = useRef(connId);
+  useEffect(() => {
+    if (lspConn.current === connId) return;
+    lspConn.current = connId;
+    lsp.current?.reset();
+  }, [connId]);
 
   const activeFile = files.find((f) => f.path === activePath) ?? null;
 
@@ -298,15 +337,25 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
     const name = baseName(path);
     setFiles((list) => [...list, { path, name, state: "loading", dirty: false, saving: false, conflict: false, remoteChanged: false, gone: false, eol: "LF", mixed: false }]);
     const conn = connRef.current;
-    if (conn == null) return update(path, { state: "error", error: t("连接已断开") });
+    const early = peeked.current.get(path);
+    if (conn == null && !early) return update(path, { state: "error", error: t("连接已断开") });
     try {
-      const { meta, text } = await api.readFile(conn, path);
-      // 等待期间标签被关掉了
-      if (!filesRef.current.some((f) => f.path === path)) return;
-      const { eol, mixed } = detectEol(text);
-      const model = monaco.editor.createModel(text, languageFor(name), monaco.Uri.from({ scheme: "p2pcli", authority: `f${++modelSeq}`, path: "/" + name }));
-      model.setEOL(EOL(eol));
-      const entry: Loaded = { model, saved: model.getAlternativeVersionId(), checkedAt: Date.now() };
+      let file: Peeked;
+      if (early) {
+        // 跳转时已经读过了：直接用，对方电脑上有没有变交给定时核对
+        peeked.current.delete(path);
+        file = early;
+      } else {
+        const { meta, text } = await api.readFile(conn!, path);
+        // 等待期间标签被关掉了
+        if (!filesRef.current.some((f) => f.path === path)) return;
+        const { eol, mixed } = detectEol(text);
+        const model = monaco.editor.createModel(text, languageFor(name), modelUri("f", name));
+        model.setEOL(EOL(eol));
+        file = { model, meta, eol, mixed };
+      }
+      const { model, meta, eol, mixed } = file;
+      const entry: Loaded = { model, saved: model.getAlternativeVersionId(), checkedAt: early ? 0 : Date.now() };
       loaded.current.set(path, entry);
       model.onDidChangeContent(() => {
         // 改名以后路径会变，按模型找回现在的路径
@@ -316,6 +365,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
         if (filesRef.current.find((f) => f.path === current)?.dirty !== dirty) update(current, { dirty });
       });
       update(path, { state: "ready", meta, eol, mixed });
+      lsp.current?.attach(path, model);
       if (pendingDiff.current === path) {
         pendingDiff.current = null;
         void compareWithHead(path);
@@ -324,6 +374,27 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       pendingReveal.current.delete(path);
       update(path, { state: "error", error: tr(String(e)) });
     }
+  };
+
+  /** 跳转定义、查引用要看别的文件：已经开着的直接用，没开的先读出来，不开标签 */
+  const loadModel = async (path: string) => {
+    const known = loaded.current.get(path) ?? peeked.current.get(path);
+    if (known) return known.model;
+    const conn = connRef.current;
+    if (conn == null) return null;
+    const { meta, text } = await api.readFile(conn, path);
+    const again = loaded.current.get(path) ?? peeked.current.get(path);
+    if (again) return again.model;
+    const { eol, mixed } = detectEol(text);
+    const model = monaco.editor.createModel(text, languageFor(baseName(path)), modelUri("p", baseName(path)));
+    model.setEOL(EOL(eol));
+    peeked.current.set(path, { model, meta, eol, mixed });
+    if (peeked.current.size > MAX_PEEKED) {
+      const [oldest, entry] = peeked.current.entries().next().value!;
+      peeked.current.delete(oldest);
+      entry.model.dispose();
+    }
+    return model;
   };
 
   /** 用对方电脑上的最新内容替换；放进撤销记录，按撤销还能回到替换前 */
@@ -452,6 +523,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       const meta = await api.writeFile(conn, path, text, file.meta.bom, file.meta.hash, force);
       entry.saved = version;
       entry.checkedAt = Date.now();
+      lsp.current?.saved(entry.model);
       update(path, { meta, saving: false, conflict: false, remoteChanged: false, gone: false, mixed: false, dirty: entry.model.getAlternativeVersionId() !== version });
       if (file.gone) void loadDir(dirName(path));
     } catch (e) {
@@ -496,6 +568,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       editor.current?.setModel(null);
       shownPath.current = null;
     }
+    if (entry) lsp.current?.detach(entry.model);
     entry?.model.dispose();
     loaded.current.delete(path);
     viewStates.current.delete(path);
@@ -538,7 +611,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
 
   const showDiff = (path: string, title: string, text: string) => {
     closeDiff();
-    const original = monaco.editor.createModel(text, languageFor(baseName(path)), monaco.Uri.from({ scheme: "p2pcli", authority: `d${++modelSeq}`, path: "/" + baseName(path) }));
+    const original = monaco.editor.createModel(text, languageFor(baseName(path)), modelUri("d", baseName(path)));
     setActivePath(path);
     setDiff({ path, title, original });
   };
@@ -578,9 +651,11 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       const next = movePath(f.path, from, to);
       const entry = loaded.current.get(f.path);
       if (entry) {
+        lsp.current?.detach(entry.model);
         loaded.current.delete(f.path);
         loaded.current.set(next, entry);
         monaco.editor.setModelLanguage(entry.model, languageFor(baseName(next)));
+        lsp.current?.attach(next, entry.model);
       }
       if (viewStates.current.has(f.path)) {
         viewStates.current.set(next, viewStates.current.get(f.path)!);
@@ -699,6 +774,8 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
   const dirtyCount = files.filter((f) => f.dirty).length;
   const activeKind = activeFile ? marks.files.get(activeFile.path) : undefined;
   const changedElsewhere = activeFile && (activeFile.conflict || activeFile.remoteChanged) && !activeFile.gone;
+  const activeModel = activeFile?.state === "ready" ? loaded.current.get(activeFile.path)?.model : undefined;
+  const lspStatus = activeFile && activeModel && !activeModel.isDisposed() ? lsp.current?.status(activeFile.path, activeModel.getLanguageId()) ?? null : null;
 
   return (
     <section className="remote-editor" aria-label={t("代码编辑器")} onKeyDown={onKeyDown}>
@@ -826,6 +903,7 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
                 {activeFile.eol}{activeFile.mixed && " ⚠"}
               </span>
               {activeFile.meta?.readonly && <span>{t("只读")}</span>}
+              {lspStatus && <LspBadge status={lspStatus} onRetry={() => lsp.current?.retry(lspStatus.family)} />}
             </>}
             <span className="grow" />
             {activeFile?.state === "ready" && <>
@@ -865,6 +943,50 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, act
       </AlertDialog>}
     </section>
   );
+}
+
+/** 找不到语言服务时告诉用户在对方电脑上装什么 */
+function installHint(family: string) {
+  switch (family) {
+    case "rust": return t("在对方电脑上运行 rustup component add rust-analyzer，或者在 VS Code、Cursor 里装 rust-analyzer 插件。");
+    case "go": return t("在对方电脑上运行 go install golang.org/x/tools/gopls@latest。");
+    case "python": return t("在对方电脑上运行 pip install basedpyright（或 npm i -g pyright）。");
+    case "typescript": return t("在对方电脑上运行 npm i -g typescript-language-server，项目里还要装 typescript。");
+    case "c": return t("在对方电脑上装 clangd（Mac 装了 Xcode 命令行工具就有）。");
+    case "swift": return t("在对方电脑上装 Xcode 或 Swift 工具链，里面带 sourcekit-lsp。");
+    case "ruby": return t("在对方电脑上运行 gem install ruby-lsp。");
+    case "php": return t("在对方电脑上运行 npm i -g intelephense。");
+    case "shell": return t("在对方电脑上运行 npm i -g bash-language-server。");
+    default: return t("在对方电脑上装好这种语言的语言服务（LSP）。");
+  }
+}
+
+/** 状态栏里语言服务的状态：启动中、索引中、可用、出错、没装 */
+function LspBadge({ status, onRetry }: { status: LspStatus; onRetry: () => void }) {
+  const full = status.server ?? "";
+  // 状态栏地方小：typescript-language-server 显示成 typescript，完整名字在提示里
+  const name = full.replace(/[-_]?(language-?server|langserver|lsp)$/i, "") || full;
+  if (status.state === "starting") {
+    return <span className="remote-editor-lsp" title={t("正在对方电脑上启动语言服务…")}><LoaderCircle className="animate-spin" /><span className="remote-editor-lsp-name">{t("启动语言服务…")}</span></span>;
+  }
+  if (status.state === "missing") {
+    return <button type="button" className="remote-editor-lsp is-off" onClick={onRetry}
+      title={t("对方电脑上没有找到这种语言的语言服务，所以没有补全和跳转。") + "\n" + installHint(status.family) + "\n" + t("装好后点这里重试。")}>
+      <ZapOff /><span className="remote-editor-lsp-name">{t("无补全")}</span>
+    </button>;
+  }
+  if (status.state === "error") {
+    return <button type="button" className="remote-editor-lsp is-error" onClick={onRetry}
+      title={t("{{server}} 停止了，点这里重新启动。", { server: full || t("语言服务") }) + (status.detail ? "\n" + status.detail : "")}>
+      <TriangleAlert /><span className="remote-editor-lsp-name">{t("{{server}} 已停止", { server: name || t("语言服务") })}</span>
+    </button>;
+  }
+  const title = t("补全、跳转、报错由对方电脑上的 {{server}} 提供", { server: full }) + (status.root ? "\n" + t("项目目录：{{root}}", { root: status.root }) : "");
+  return <span className="remote-editor-lsp" title={status.detail ? title + "\n" + status.detail : title}>
+    {status.state === "busy" ? <LoaderCircle className="animate-spin" /> : <Zap />}
+    <span className="remote-editor-lsp-name">{name}</span>
+    {status.state === "busy" && status.detail && <span className="remote-editor-lsp-detail">{status.detail}</span>}
+  </span>;
 }
 
 function Placeholder({ children, error }: { children: ReactNode; error?: boolean }) {

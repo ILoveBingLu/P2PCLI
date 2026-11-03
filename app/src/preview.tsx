@@ -382,7 +382,8 @@ const previewFs = new Map<string, PreviewFile>([
   ["/Users/demo/Projects/demo/package.json", { text: '{\n  "name": "demo",\n  "version": "1.0.0",\n  "scripts": { "dev": "vite" }\n}\n' }],
   ["/Users/demo/Projects/demo/src/main.ts", { text: 'import { greet } from "./util";\n\n// 中文注释，标点不会被框起来\nconst name: string = "P2PCLI";\nconsole.log(greet(name));\n' }],
   ["/Users/demo/Projects/demo/src/util.ts", { text: "export function greet(name: string) {\r\n  return `hello ${name}`;\r\n}\r\n" }],
-  ["/Users/demo/Projects/demo/src/server.rs", { text: "fn main() {\n    println!(\"hello\");\n}\n" }],
+  ["/Users/demo/Projects/demo/src/server.rs", { text: "fn main() {\n    println!(\"hello\");\n    // TODO 处理参数\n}\n" }],
+  ["/Users/demo/Projects/demo/src/tool.py", { text: "print('hi')\n" }],
   ["/Users/demo/Projects/demo/logo.png", { text: "", binary: true }],
   ["/Users/demo/Projects/demo/.env", { text: "TOKEN=xxx\n", readonly: true }],
   ["/Users/demo/Projects/demo/.gitignore", { text: "node_modules\ndist\n" }],
@@ -397,6 +398,99 @@ for (const [path, file] of previewFs) {
   file.head = path.endsWith("main.ts") ? file.text.replace("// 中文注释，标点不会被框起来\n", "") : file.text;
 }
 function previewUnder(path: string, dir: string) { return path === dir || path.startsWith(dir + "/"); }
+// 假的语言服务：Rust 和 TypeScript 文件有补全、悬停、报错、跳转，其他语言当成对方没装
+const previewLsps = new Map<number, (message: any) => void>();
+let previewLspSeq = 0;
+function previewLspStart(family: string, output: any) {
+  if (family !== "rust" && family !== "typescript") throw new Error("lsp_missing:" + family);
+  const id = ++previewLspSeq;
+  const docs = new Map<string, string>();
+  const send = (message: object) => setTimeout(() => output.onmessage({ kind: "message", message: JSON.stringify({ jsonrpc: "2.0", ...message }) }), 30);
+  const offset = (text: string, pos: any) => text.split("\n").slice(0, pos.line).reduce((n, l) => n + l.length + 1, 0) + pos.character;
+  const wordAt = (uri: string, pos: any) => {
+    const line = (docs.get(uri) ?? "").split("\n")[pos.line] ?? "";
+    let a = pos.character, b = pos.character;
+    while (a > 0 && /\w/.test(line[a - 1])) a--;
+    while (b < line.length && /\w/.test(line[b])) b++;
+    return { word: line.slice(a, b), start: a, end: b, before: line[a - 1] };
+  };
+  const diagnose = (uri: string) => {
+    const diagnostics: any[] = [];
+    (docs.get(uri) ?? "").split("\n").forEach((line, i) => {
+      const nope = line.indexOf("nope");
+      if (nope >= 0) diagnostics.push({ range: { start: { line: i, character: nope }, end: { line: i, character: nope + 4 } }, severity: 1, source: family === "rust" ? "rustc" : "ts", code: family === "rust" ? "E0425" : 2304, message: family === "rust" ? "cannot find value `nope` in this scope" : "Cannot find name 'nope'." });
+      const todo = line.indexOf("TODO");
+      if (todo >= 0) diagnostics.push({ range: { start: { line: i, character: todo }, end: { line: i, character: line.length } }, severity: 2, source: "lint", message: "还有没做完的事" });
+    });
+    send({ method: "textDocument/publishDiagnostics", params: { uri, diagnostics } });
+  };
+  previewLsps.set(id, (m) => {
+    const p = m.params;
+    switch (m.method) {
+      case "initialize":
+        send({ id: m.id, result: { capabilities: {
+          textDocumentSync: { openClose: true, change: 2, save: {} },
+          completionProvider: { triggerCharacters: ["."], resolveProvider: false },
+          hoverProvider: true, definitionProvider: true, referencesProvider: true, documentFormattingProvider: true,
+          signatureHelpProvider: { triggerCharacters: ["(", ","] },
+        } } });
+        // 启动后先“索引”两秒，状态栏显示进度
+        [[300, { kind: "begin", title: "Indexing", percentage: 0 }], [1200, { kind: "report", message: "42/97 (std)", percentage: 43 }], [2500, { kind: "end" }]].forEach(([at, value]) =>
+          setTimeout(() => send({ method: "$/progress", params: { token: "index", value } }), at as number));
+        break;
+      case "textDocument/didOpen": docs.set(p.textDocument.uri, p.textDocument.text); diagnose(p.textDocument.uri); break;
+      case "textDocument/didChange": {
+        let text = docs.get(p.textDocument.uri) ?? "";
+        for (const c of p.contentChanges) text = c.range ? text.slice(0, offset(text, c.range.start)) + c.text + text.slice(offset(text, c.range.end)) : c.text;
+        docs.set(p.textDocument.uri, text);
+        diagnose(p.textDocument.uri);
+        break;
+      }
+      case "textDocument/didClose": docs.delete(p.textDocument.uri); break;
+      case "textDocument/completion": {
+        const { before } = wordAt(p.textDocument.uri, p.position);
+        const items = family === "rust"
+          ? before === "." ? [{ label: "len", kind: 2, detail: "fn(&self) -> usize" }, { label: "push_str", kind: 2, detail: "fn(&mut self, string: &str)" }]
+            : [{ label: "println!", kind: 3, detail: "macro_rules! println", insertText: 'println!("$1")', insertTextFormat: 2, documentation: { kind: "markdown", value: "Prints to the standard output, with a newline." } },
+              { label: "String", kind: 22, detail: "pub struct String" }, { label: "Vec", kind: 22, detail: "pub struct Vec<T>" }]
+          : before === "." ? [{ label: "log", kind: 2, detail: "(...data: any[]) => void" }, { label: "error", kind: 2, detail: "(...data: any[]) => void" }]
+            : [{ label: "greet", kind: 3, labelDetails: { detail: "(name)", description: "./util" }, detail: "function greet(name: string): string", documentation: { kind: "markdown", value: "跟 **name** 打招呼。" } },
+              { label: "name", kind: 6, detail: "const name: string" }, { label: "console", kind: 6, detail: "var console: Console" }];
+        send({ id: m.id, result: { isIncomplete: false, items } });
+        break;
+      }
+      case "textDocument/hover": {
+        const { word, start, end } = wordAt(p.textDocument.uri, p.position);
+        const docsText: Record<string, string> = family === "rust"
+          ? { main: "```rust\nfn main()\n```", println: "```rust\nmacro_rules! println\n```\n---\nPrints to the standard output, with a newline." }
+          : { greet: "```typescript\nfunction greet(name: string): string\n```\n跟 **name** 打招呼。", name: "```typescript\nconst name: string\n```" };
+        send({ id: m.id, result: docsText[word] ? { contents: { kind: "markdown", value: docsText[word] }, range: { start: { line: p.position.line, character: start }, end: { line: p.position.line, character: end } } } : null });
+        break;
+      }
+      case "textDocument/definition":
+      case "textDocument/references": {
+        const { word } = wordAt(p.textDocument.uri, p.position);
+        const util = "file://" + previewRepo + "/src/util.ts";
+        const main = "file://" + previewRepo + "/src/main.ts";
+        const result = family === "typescript" && word === "greet"
+          ? [{ uri: util, range: { start: { line: 0, character: 16 }, end: { line: 0, character: 21 } } }].concat(m.method.endsWith("references")
+            ? [{ uri: main, range: { start: { line: 0, character: 9 }, end: { line: 0, character: 14 } } }, { uri: main, range: { start: { line: 4, character: 12 }, end: { line: 4, character: 17 } } }] : [])
+          : null;
+        send({ id: m.id, result });
+        break;
+      }
+      case "textDocument/signatureHelp":
+        send({ id: m.id, result: family === "typescript" ? { signatures: [{ label: "greet(name: string): string", parameters: [{ label: "name: string" }], documentation: "跟 name 打招呼" }], activeSignature: 0, activeParameter: 0 } : null });
+        break;
+      case "textDocument/formatting": send({ id: m.id, result: [] }); break;
+      case "shutdown": send({ id: m.id, result: null }); break;
+      case "exit": previewLsps.delete(id); setTimeout(() => output.onmessage({ kind: "closed", reason: null }), 50); break;
+      default: if (m.id !== undefined && m.method) send({ id: m.id, result: null });
+    }
+  });
+  return { lsp_id: id, server: family === "rust" ? "rust-analyzer" : "typescript-language-server", root: previewRepo };
+}
+
 function previewEdit(request: any) {
   switch (request.op) {
     case "search": {
@@ -752,6 +846,15 @@ mockIPC(
       case "edit_op":
         await new Promise((r) => setTimeout(r, 150));
         return previewEdit(args.request);
+      case "lsp_start":
+        await new Promise((r) => setTimeout(r, 400));
+        return previewLspStart(String(args.language), args.messages);
+      case "lsp_send":
+        for (const message of args.messages as string[]) previewLsps.get(Number(args.lspId))?.(JSON.parse(message));
+        return;
+      case "lsp_stop":
+        previewLsps.delete(Number(args.lspId));
+        return;
       case "change_dir": {
         await new Promise((r) => setTimeout(r, 200));
         const session = terminalSessions.find((x) => x.id === args.sessionId);
