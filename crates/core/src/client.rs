@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -114,7 +114,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into()],
         },
     )
     .await?;
@@ -389,6 +389,38 @@ impl RemoteHost {
         }
     }
 
+    /// 在对方电脑上启动某种语言的语言服务。返回的两头：一头发消息给它，一头收它的消息；
+    /// 丢掉发消息那头（或者断线），语言服务就结束
+    pub async fn open_lsp(&self, language: String, file: String, root: String) -> Result<(LspStarted, LspInput, LspOutput)> {
+        let (send, mut recv) = match &self.link {
+            Link::Local { .. } => {
+                let (client_w, host_r) = tokio::io::duplex(LOCAL_PIPE);
+                let (mut host_w, client_r) = tokio::io::duplex(LOCAL_PIPE);
+                tokio::spawn(async move {
+                    if let Err(e) = crate::lsp::serve(host_r, &mut host_w, &language, &file, &root).await {
+                        let _ = write_msg(&mut host_w, &Msg::Error { message: format!("{e:#}") }).await;
+                    }
+                });
+                (TermWrite::Local(client_w), TermRead::Local(client_r))
+            }
+            Link::Net { .. } => {
+                self.require_capability(REMOTE_LSP_V1)?;
+                let (send, recv) = self.open_stream(&Msg::LspStart { language, file, root }).await?;
+                (TermWrite::Quic(send), TermRead::Quic(recv))
+            }
+        };
+        // 第一次要找语言服务、读用户的 PATH，最慢十几秒
+        match timeout(Duration::from_secs(40), read_msg(&mut recv)).await.map_err(|_| anyhow!("启动语言服务超时"))?? {
+            Msg::LspStarted { server, root } => Ok((
+                LspStarted { server, root },
+                LspInput { send: Some(send) },
+                LspOutput { recv, buf: Vec::new() },
+            )),
+            Msg::Error { message } => bail!("{message}"),
+            other => bail!("意外的回复：{other:?}"),
+        }
+    }
+
     fn require_capability(&self, capability: &str) -> Result<()> {
         if let Link::Net { capabilities, .. } = &self.link
             && !capabilities.iter().any(|c| c == capability)
@@ -587,6 +619,71 @@ fn describe_close(e: iroh::endpoint::ConnectionError) -> String {
         E::LocallyClosed => "连接已关闭".into(),
         E::TimedOut => "网络中断，连接超时".into(),
         other => format!("连接断开：{other}"),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LspStarted {
+    /// 语言服务的程序名，比如 rust-analyzer
+    pub server: String,
+    /// 它的工作目录（项目根目录）
+    pub root: String,
+}
+
+/// 发给语言服务的这一头
+pub struct LspInput {
+    send: Option<TermWrite>,
+}
+
+impl LspInput {
+    /// 发一条 JSON-RPC 消息，Content-Length 头在这里加
+    pub async fn send(&mut self, body: &[u8]) -> Result<()> {
+        let stream = self.send.as_mut().ok_or_else(|| anyhow!("语言服务已经关了"))?;
+        for chunk in crate::lsp::encode(body).chunks(256 * 1024) {
+            write_data(stream, chunk).await?;
+        }
+        Ok(())
+    }
+
+    pub fn close(&mut self) {
+        if let Some(TermWrite::Quic(s)) = &mut self.send {
+            let _ = s.finish();
+        }
+        self.send = None;
+    }
+}
+
+pub enum LspEvent {
+    /// 语言服务发来的一条 JSON-RPC 消息
+    Message(String),
+    /// 语言服务退出了，带着原因
+    Exited(String),
+}
+
+/// 收语言服务消息的这一头
+pub struct LspOutput {
+    recv: TermRead,
+    buf: Vec<u8>,
+}
+
+impl LspOutput {
+    /// 下一条消息；流正常结束时是 None
+    pub async fn next(&mut self) -> Result<Option<LspEvent>> {
+        loop {
+            if let Some(message) = crate::lsp::take_message(&mut self.buf)? {
+                return Ok(Some(LspEvent::Message(message)));
+            }
+            match read_frame(&mut self.recv).await? {
+                None => return Ok(None),
+                Some(Frame::Data(data)) => {
+                    if self.buf.len() + data.len() > crate::lsp::MAX_MESSAGE + 8192 { bail!("语言服务的一条消息太大"); }
+                    self.buf.extend_from_slice(&data);
+                }
+                Some(Frame::Msg(Msg::LspExited { message })) => return Ok(Some(LspEvent::Exited(message))),
+                Some(Frame::Msg(Msg::Error { message })) => bail!("{message}"),
+                Some(Frame::Msg(other)) => bail!("意外的消息：{other:?}"),
+            }
+        }
     }
 }
 

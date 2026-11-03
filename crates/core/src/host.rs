@@ -19,7 +19,7 @@ use crate::PROTO_VERSION;
 use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::Files;
 use crate::identity::DeviceInfo;
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, Frame, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_data, write_json, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_data, write_json, write_msg};
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
@@ -512,7 +512,7 @@ impl Host {
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
                 capabilities: capabilities.iter().filter(|capability|
-                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2)).cloned().collect(),
+                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2 | REMOTE_LSP_V1)).cloned().collect(),
             },
         )
         .await?;
@@ -652,6 +652,11 @@ impl Host {
                     info!(session, bytes = meta.size, force, "对面在编辑器里保存了本机的文件");
                     debug!(session, path = %meta.path, "远程编辑：保存");
                     write_msg(&mut send, &Msg::FileSaved { meta }).await?;
+                }
+                Msg::LspStart { language, file, root } => {
+                    info!(session, %language, "对面在编辑器里启动了本机的语言服务");
+                    crate::lsp::serve(recv, &mut send, &language, &file, &root).await?;
+                    debug!(session, %language, "语言服务已结束");
                 }
                 Msg::Exec { command, cwd, timeout_secs } => {
                     info!(session, bytes = command.len(), "对面要在本机跑一条命令");

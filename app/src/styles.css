@@ -2433,6 +2433,43 @@ img.agent-icon {
   gap: 3px;
 }
 
+/* 状态栏里语言服务的状态 */
+.remote-editor-lsp {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  /* 编辑器窄时先缩它，名字用省略号 */
+  flex: 0 1 auto;
+  /* 再窄也留着图标，状态看图标、详情看提示 */
+  min-width: 12px;
+  max-width: 240px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.remote-editor-lsp > svg { flex: none; }
+.remote-editor-lsp-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remote-editor-status button.remote-editor-lsp {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.remote-editor-status button.remote-editor-lsp:hover { color: var(--foreground); }
+.remote-editor-lsp.is-off { opacity: 0.7; }
+.remote-editor-lsp.is-error { color: var(--warning); }
+.remote-editor-lsp-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.75;
+}
+
 /* 全项目搜索 */
 .remote-editor-search {
   display: flex;
