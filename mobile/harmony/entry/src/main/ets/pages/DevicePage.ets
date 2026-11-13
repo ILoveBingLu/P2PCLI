@@ -131,9 +131,9 @@ export struct DevicePage {
     }
     .title(this.device()?.remark ?? this.device()?.name ?? this.conn()?.name ?? t('设备'))
     .menus(this.conn() !== undefined ? [
-      { value: t('新建终端'), icon: $r('app.media.lucide_plus_accent'), action: () => this.core.openTerminal(this.endpointId, null, true) },
-      { value: t('发送文件'), icon: $r('app.media.lucide_file_up_accent'), action: () => this.pickFiles() },
-      { value: t('刷新会话'), icon: $r('app.media.lucide_refresh_cw_accent'), action: () => this.core.loadSessions(this.endpointId) }
+      { value: t('新建终端'), icon: $r('app.media.menu_plus'), action: () => this.core.openTerminal(this.endpointId, null, true) },
+      { value: t('发送文件'), icon: $r('app.media.menu_file_up'), action: () => this.pickFiles() },
+      { value: t('刷新会话'), icon: $r('app.media.menu_refresh_cw'), action: () => this.core.loadSessions(this.endpointId) }
     ] : [])
     .backgroundColor(Hero.background)
     .bindSheet(this.ending !== null, this.endSheet(), {
