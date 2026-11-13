@@ -46,6 +46,20 @@ export interface SessionView {
   remark: string | null;
 }
 
+/** 对方电脑上装了的一个命令行 AI */
+export interface InstalledAgentView {
+  kind: string;
+  name: string;
+}
+
+/** 对方电脑上一个目录里的子目录 */
+export interface DirListingView {
+  path: string;
+  parent: string | null;
+  dirs: string[];
+  truncated: boolean;
+}
+
 export interface DeviceView {
   endpoint_id: string;
   code: string | null;
