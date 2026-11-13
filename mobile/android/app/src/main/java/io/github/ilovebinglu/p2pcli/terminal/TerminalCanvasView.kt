@@ -47,6 +47,9 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
             field?.view = null
             field = value
             value?.view = this
+            selection = null
+            dragging = false
+            onSelectionChanged(false)
             topRow = 0
             updateSize()
             invalidate()
@@ -68,8 +71,19 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
 
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            showKeyboard()
+            // 选着字时点一下是取消选择，不弹键盘
+            if (selection != null) clearSelection() else showKeyboard()
             return true
+        }
+
+        override fun onLongPress(e: MotionEvent) {
+            if (scaling) return
+            val cell = cellAt(e) ?: return
+            selection = Selection(cell, cell)
+            dragging = true
+            performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            onSelectionChanged(true)
+            invalidate()
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
@@ -141,7 +155,9 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
             canvas.drawColor(Color.BLACK)
             return
         }
-        renderer.render(emu, canvas, topRow, -1, -1, -1, -1)
+        val sel = selection?.ordered()
+        if (sel == null) renderer.render(emu, canvas, topRow, -1, -1, -1, -1)
+        else renderer.render(emu, canvas, topRow, sel.first.second, sel.second.second, sel.first.first, sel.second.first)
     }
 
     /** 有新输出：在看历史就停在原来的内容上，不然跟着到最底下 */
@@ -153,10 +169,62 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
         invalidate()
     }
 
+    // ---- 选字、复制 ----
+
+    /** 选区的两头：(列, 行)，行是相对屏幕第一行的，负数在历史里 */
+    private data class Selection(val start: Pair<Int, Int>, val end: Pair<Int, Int>) {
+        /** 按先行后列排好：前面那头、后面那头 */
+        fun ordered(): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+            val (a, b) = start to end
+            return if (a.second < b.second || (a.second == b.second && a.first <= b.first)) a to b else b to a
+        }
+    }
+
+    private var selection: Selection? = null
+    private var dragging = false
+    /** 开始选、取消选的时候告诉界面，界面显示“复制”按钮 */
+    var onSelectionChanged: (Boolean) -> Unit = {}
+
+    val hasSelection: Boolean get() = selection != null
+
+    /** 手指位置对应终端里哪一格 */
+    private fun cellAt(e: MotionEvent): Pair<Int, Int>? {
+        val emu = terminal?.emulator ?: return null
+        val col = (e.x / renderer.fontWidth).toInt().coerceIn(0, emu.mColumns - 1)
+        val row = (e.y / renderer.fontLineSpacing).toInt().coerceIn(0, emu.mRows - 1) + topRow
+        return col to row.coerceAtLeast(-emu.screen.activeTranscriptRows)
+    }
+
+    /** 选中的字；没选是空 */
+    fun selectedText(): String? {
+        val emu = terminal?.emulator ?: return null
+        val (a, b) = selection?.ordered() ?: return null
+        return emu.getSelectedText(a.first, a.second, b.first, b.second)?.takeIf { it.isNotEmpty() }
+    }
+
+    fun clearSelection() {
+        if (selection == null) return
+        selection = null
+        dragging = false
+        onSelectionChanged(false)
+        invalidate()
+    }
+
     // ---- 手势 ----
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 长按以后手指不松开拖动：调整选区的另一头
+        if (dragging) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> cellAt(event)?.let { end ->
+                    selection = selection?.copy(end = end)
+                    invalidate()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragging = false
+            }
+            return true
+        }
         if (event.actionMasked == MotionEvent.ACTION_DOWN) scrollRemainder = 0f
         scale.onTouchEvent(event)
         gestures.onTouchEvent(event)

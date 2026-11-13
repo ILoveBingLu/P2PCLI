@@ -1161,5 +1161,8 @@
   "保存后马上生效。改了代理或中继会重新连网络，开着的终端会断开，对方电脑上的会话还在。": "Takes effect right away. Changing the proxy or relay reconnects the network: open terminals disconnect, but sessions keep running on the other computer.",
   "{{name}} · 等待确认": "{{name}} · Waiting for you",
   "输入栏": "Input bar",
-  "从左边选一台设备，或者连接新设备。": "Pick a device on the left, or connect a new one."
+  "从左边选一台设备，或者连接新设备。": "Pick a device on the left, or connect a new one.",
+  "撤销": "Undo",
+  "更多按键": "More keys",
+  "要复制先长按终端里的文字，再拖动选择范围。": "To copy, long-press text in the terminal, then drag to adjust the selection."
 }

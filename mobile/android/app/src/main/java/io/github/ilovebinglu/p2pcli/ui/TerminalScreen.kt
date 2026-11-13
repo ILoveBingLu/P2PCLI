@@ -89,6 +89,21 @@ fun TerminalScreen(core: Core, key: Int) {
         }
     }
     val view = remember { TerminalCanvasView(context, modifiers) }
+    var selecting by remember { mutableStateOf(false) }
+    view.onSelectionChanged = { selecting = it }
+    val copy = {
+        val text = view.selectedText()
+        if (text != null) {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("terminal", text))
+            core.notices.tryEmit(t("已复制"))
+        }
+        view.clearSelection()
+    }
+    val paste = {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }?.let { term.paste(it) }
+    }
     val live = term.state == RemoteTerminal.State.OPEN
     val path = conns[term.endpointId]?.path
 
@@ -134,6 +149,16 @@ fun TerminalScreen(core: Core, key: Int) {
                 update = { it.terminal = term },
                 modifier = Modifier.fillMaxSize().padding(start = 6.dp, end = 2.dp, top = 4.dp),
             )
+            if (selecting) {
+                Row(
+                    Modifier.align(Alignment.TopCenter).padding(top = 10.dp).clip(RoundedCornerShape(14.dp)).background(Hero.Surface)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    HeroButton(t("复制"), { copy() }, icon = Lucide.Copy, height = 40.dp)
+                    HeroButton(t("取消"), { view.clearSelection() }, kind = ButtonKind.Ghost, height = 40.dp)
+                }
+            }
             when (term.state) {
                 RemoteTerminal.State.OPENING -> Row(
                     Modifier.align(Alignment.Center),
@@ -220,14 +245,12 @@ fun TerminalScreen(core: Core, key: Int) {
 
         if (live) {
             KeyBar(
-                ctrl = ctrl, alt = alt, composing = composing,
-                onCtrl = { ctrl = !ctrl }, onAlt = { alt = !alt }, onCompose = { composing = !composing },
+                ctrl = ctrl, composing = composing,
+                onCtrl = { ctrl = !ctrl }, onCompose = { composing = !composing },
                 onBytes = { term.send(it) },
                 onKey = { view.sendKeyCode(it, 0) },
-                onPaste = {
-                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }?.let { term.paste(it) }
-                },
+                onPaste = paste,
+                onMore = { panel = "keys" },
             )
         } else {
             Spacer(Modifier.navigationBarsPadding())
@@ -235,6 +258,30 @@ fun TerminalScreen(core: Core, key: Int) {
     }
 
     when (panel) {
+        "keys" -> HeroSheet(onDismiss = { panel = null }, title = t("更多按键")) {
+            // 按一下就发，面板跟着关上，回到终端
+            val send = { bytes: String -> panel = null; term.send(bytes) }
+            val keys = listOf(
+                "⇧Tab" to "\u001b[Z", "^C" to "\u0003", "^D" to "\u0004", "^Z" to "\u001a",
+                "^L" to "\u000c", "^R" to "\u0012", "|" to "|", "~" to "~", "/" to "/", "-" to "-",
+            )
+            keys.chunked(5).forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { (label, bytes) ->
+                        Key(label, Modifier.weight(1f).height(46.dp)) { send(bytes) }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Key("Alt", Modifier.weight(1f).height(46.dp), active = alt) { alt = !alt; panel = null }
+                // 终端里的撤销：bash、zsh、Claude Code 的输入框都是 Ctrl+_
+                Key(t("撤销"), Modifier.weight(1f).height(46.dp)) { send("\u001f") }
+                Key(t("复制"), Modifier.weight(1f).height(46.dp)) { panel = null; copy() }
+            }
+            if (!view.hasSelection) {
+                Text(t("要复制先长按终端里的文字，再拖动选择范围。"), color = Hero.Muted, fontSize = 12.5.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
         "switch" -> HeroSheet(onDismiss = { panel = null }, title = t("开着的终端")) {
             terms.forEach { other ->
                 val l = sessionsMap[other.endpointId]?.list.orEmpty()
@@ -268,74 +315,59 @@ fun TerminalScreen(core: Core, key: Int) {
     }
 }
 
-/** 手机键盘上没有、终端里又常用的键；横着能滑。按的时候不抢终端的焦点，软键盘不会收起 */
+/**
+ * 终端下面一排最常用的键，一屏放得下，不用左右滑；不常用的在“⋯”里。
+ * 按的时候不抢终端的焦点，软键盘不会收起
+ */
 @Composable
 private fun KeyBar(
     ctrl: Boolean,
-    alt: Boolean,
     composing: Boolean,
     onCtrl: () -> Unit,
-    onAlt: () -> Unit,
     onCompose: () -> Unit,
     onBytes: (String) -> Unit,
     onKey: (Int) -> Unit,
     onPaste: () -> Unit,
+    onMore: () -> Unit,
 ) {
     Row(
         // 先让开手势条，按键条的底色不画进安全区
-        Modifier.fillMaxWidth().navigationBarsPadding().background(Hero.Background).padding(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        Modifier.fillMaxWidth().navigationBarsPadding().background(Hero.Background).padding(horizontal = 6.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Key("", active = composing, icon = { Icon(Lucide.Keyboard, t("输入栏"), Modifier.size(20.dp), tint = if (composing) Hero.Accent else Hero.Foreground) }, onClick = onCompose)
-        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Key("Esc") { onBytes("\u001b") }
-            Key("Tab") { onBytes("\t") }
-            Key("Ctrl", active = ctrl, onClick = onCtrl)
-            Key("Alt", active = alt, onClick = onAlt)
-            Key("^C") { onBytes("\u0003") }
-            IconKey(Lucide.ArrowUp, "↑") { onKey(KeyEvent.KEYCODE_DPAD_UP) }
-            IconKey(Lucide.ArrowDown, "↓") { onKey(KeyEvent.KEYCODE_DPAD_DOWN) }
-            IconKey(Lucide.ArrowLeft, "←") { onKey(KeyEvent.KEYCODE_DPAD_LEFT) }
-            IconKey(Lucide.ArrowRight, "→") { onKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
-            Key("Tab", icon = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Icon(Lucide.ArrowBigUp, "Shift", Modifier.size(15.dp), tint = Hero.Foreground)
-                    Text("Tab", color = Hero.Foreground, fontFamily = Hero.Mono, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                }
-            }) { onBytes("\u001b[Z") }
-            IconKey(Lucide.ClipboardPaste, t("粘贴"), onClick = onPaste)
-            Key("^D") { onBytes("\u0004") }
-            Key("^Z") { onBytes("\u001a") }
-            Key("^L") { onBytes("\u000c") }
-            Key("^R") { onBytes("\u0012") }
-            Key("|") { onBytes("|") }
-            Key("~") { onBytes("~") }
-            Key("/") { onBytes("/") }
-            Key("-") { onBytes("-") }
-        }
+        val m = Modifier.weight(1f).height(40.dp)
+        Key(t("输入栏"), m, active = composing, icon = Lucide.Keyboard, onClick = onCompose)
+        Key("Esc", m) { onBytes("\u001b") }
+        Key("Tab", m) { onBytes("\t") }
+        Key("Ctrl", m, active = ctrl, onClick = onCtrl)
+        Key("↑", m, icon = Lucide.ArrowUp) { onKey(KeyEvent.KEYCODE_DPAD_UP) }
+        Key("↓", m, icon = Lucide.ArrowDown) { onKey(KeyEvent.KEYCODE_DPAD_DOWN) }
+        Key("←", m, icon = Lucide.ArrowLeft) { onKey(KeyEvent.KEYCODE_DPAD_LEFT) }
+        Key("→", m, icon = Lucide.ArrowRight) { onKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        Key(t("粘贴"), m, icon = Lucide.ClipboardPaste, onClick = onPaste)
+        Key(t("更多按键"), m, icon = Lucide.Ellipsis, onClick = onMore)
     }
 }
 
-/** 方向键这类：画图标，读屏念 description */
+/** 一个键：有图标画图标（读屏念 label），没有就写 label */
 @Composable
-private fun IconKey(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
-    Key(description, icon = { Icon(icon, description, Modifier.size(18.dp), tint = Hero.Foreground) }, onClick = onClick)
-}
-
-@Composable
-private fun Key(label: String, active: Boolean = false, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+private fun Key(
+    label: String,
+    modifier: Modifier,
+    active: Boolean = false,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    onClick: () -> Unit,
+) {
     // 不要涟漪、不抢焦点：按下时只换底色
     val source = remember { MutableInteractionSource() }
+    val color = if (active) Hero.Accent else Hero.Foreground
     Box(
-        Modifier.widthIn(min = 44.dp).height(38.dp).clip(RoundedCornerShape(10.dp))
+        modifier.clip(RoundedCornerShape(10.dp))
             .background(if (active) Hero.AccentSoft.copy(alpha = 0.22f) else Hero.Tile)
-            .clickable(interactionSource = source, indication = null, onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .clickable(interactionSource = source, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        if (icon != null) icon()
-        else Text(label, color = if (active) Hero.Accent else Hero.Foreground, fontFamily = Hero.Mono, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-            maxLines = 1, overflow = TextOverflow.Clip)
+        if (icon != null) Icon(icon, label, Modifier.size(18.dp), tint = color)
+        else Text(label, color = color, fontFamily = Hero.Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Clip)
     }
 }
