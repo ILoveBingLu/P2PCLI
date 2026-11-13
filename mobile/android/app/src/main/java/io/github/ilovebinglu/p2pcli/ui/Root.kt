@@ -87,8 +87,10 @@ fun Root(core: Core) {
                 val wide = width >= 700.dp
                 SideEffect { core.wide = wide }
                 val sidebarHidden by core.sidebarHidden.collectAsStateWithLifecycle()
+                // 扫码页盖在最上面，宽屏时也是整屏；下面照常显示它之前那一页
+                val pages = stack.filter { it != Screen.Scan }
                 if (wide) {
-                    val top = stack.last()
+                    val top = pages.last()
                     Row(Modifier.fillMaxSize()) {
                         val collapse = sidebarHidden && top is Screen.Term
                         AnimatedVisibility(!collapse, enter = expandHorizontally(), exit = shrinkHorizontally()) {
@@ -100,12 +102,13 @@ fun Root(core: Core) {
                             }
                         }
                         Box(Modifier.weight(1f).fillMaxHeight()) {
-                            Screens(core, stack, detail = true)
+                            Screens(core, pages, detail = true)
                         }
                     }
                 } else {
-                    Screens(core, stack, detail = false)
+                    Screens(core, pages, detail = false)
                 }
+                if (stack.last() == Screen.Scan) ScanScreen(core)
             }
         }
 
@@ -155,6 +158,7 @@ private fun Screens(core: Core, stack: List<Screen>, detail: Boolean) {
             is Screen.Device -> DeviceScreen(core, top.endpointId)
             is Screen.Term -> TerminalScreen(core, top.key)
             Screen.Settings -> SettingsScreen(core)
+            Screen.Scan -> {}
         }
     }
 }
@@ -198,6 +202,15 @@ private fun ConnectSheet(core: Core, prompt: ConnectPrompt) {
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (!knownDevice) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HeroButton(t("扫码连接"), { core.openScan() }, Modifier.fillMaxWidth(), icon = Lucide.ScanLine, enabled = !busy)
+                    Text(t("在电脑上点标题栏的手机图标，会显示二维码"), color = Hero.Muted, fontSize = 12.5.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.weight(1f).height(1.dp).background(Hero.Line))
+                    Text(t("或者输入设备码"), color = Hero.Muted, fontSize = 12.5.sp)
+                    Box(Modifier.weight(1f).height(1.dp).background(Hero.Line))
+                }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Label(t("设备码"))
                     CodeField(code, { code = it }, enabled = !busy)

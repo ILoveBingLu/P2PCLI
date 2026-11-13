@@ -6,6 +6,9 @@
     <!-- 局域网发现（mDNS）要收组播包 -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- 扫电脑上显示的二维码连接；没有相机的设备也能装，手输设备码 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <application
         android:name=".P2pApplication"

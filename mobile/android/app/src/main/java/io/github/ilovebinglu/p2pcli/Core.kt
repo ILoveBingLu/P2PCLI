@@ -39,6 +39,8 @@ sealed interface Screen {
     data class Device(val endpointId: String) : Screen
     data class Term(val key: Int) : Screen
     data object Settings : Screen
+    /** 扫码页：全屏盖在最上面，宽屏时也一样 */
+    data object Scan : Screen
 }
 
 sealed interface StartState {
@@ -80,6 +82,8 @@ class Core(private val app: Application) : AppListener {
     val stack = MutableStateFlow<List<Screen>>(listOf(Screen.Home))
     /** 正在连哪台设备（公钥）；手输设备码时是 "new" */
     val connecting = MutableStateFlow<String?>(null)
+    /** 正在连的设备叫什么：扫码连的新设备列表里还没有，首页顶上显示一张卡片 */
+    val connectingName = MutableStateFlow<String?>(null)
     val prompt = MutableStateFlow<ConnectPrompt?>(null)
     val fileRequest = MutableStateFlow<FileRequestView?>(null)
     /** 设置页显示的；打开设置页时读 */
@@ -214,10 +218,34 @@ class Core(private val app: Application) : AppListener {
 
     fun connectPair(pair: PairInfo) = connect(pair.code ?: pair.id, pair.password, pair.id, pair.name.ifBlank { null })
 
+    /** 打开扫码页；从连接面板里点的先把面板关了 */
+    fun openScan() {
+        if (connecting.value != null) return
+        prompt.value = null
+        push(Screen.Scan)
+    }
+
+    fun closeScan() {
+        if (top == Screen.Scan) back()
+    }
+
+    /** 扫码页里点“输入设备码”：换成连接面板 */
+    fun scanToManual() {
+        closeScan()
+        prompt.value = ConnectPrompt()
+    }
+
+    /** 扫到了电脑的二维码：关掉扫码页，用里面的设备码和密码去连 */
+    fun scanned(pair: PairInfo) {
+        closeScan()
+        connectPair(pair)
+    }
+
     private fun connect(target: String, password: String?, endpointId: String?, name: String?) {
         val p = p2p ?: return
         if (connecting.value != null) return
         connecting.value = endpointId ?: "new"
+        connectingName.value = name
         scope.launch {
             try {
                 val c = p.connect(target, password)
@@ -242,6 +270,7 @@ class Core(private val app: Application) : AppListener {
                 showError(errorText(e))
             } finally {
                 connecting.value = null
+                connectingName.value = null
             }
         }
     }
