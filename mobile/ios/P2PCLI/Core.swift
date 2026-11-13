@@ -26,6 +26,13 @@ struct SessionsState {
     var error: String?
 }
 
+/// 一条连接上检测到的命令行 AI；list 为空是还没检测完
+struct AgentsState {
+    var list: [InstalledAgentView]?
+    var error: String?
+    var scanning = false
+}
+
 /// 连接面板：新连一台设备，或者连某台设备时要填密码
 struct ConnectPrompt: Identifiable, Equatable {
     let id = UUID()
@@ -60,6 +67,8 @@ final class Core {
     var conns: [String: Connected] = [:]
     /// 各设备的会话列表：公钥 → 列表
     var sessions: [String: SessionsState] = [:]
+    /// 各连接上装了的 AI：连接编号 → 检测结果（被控端还有五分钟缓存）
+    var agents: [UInt64: AgentsState] = [:]
     var terms: [RemoteTerminal] = []
     var selection: Selection?
     var path: [Route] = []
@@ -385,6 +394,54 @@ final class Core {
                 notify(errorText(error))
             }
             await loadSessions(term.endpointId)
+        }
+    }
+
+    // MARK: 启动 AI、选工作目录
+
+    /// 检测对方电脑上装了哪些命令行 AI；已经有结果时不重复检测，refresh 时强制重新检测
+    func scanAgents(_ connId: UInt64, refresh: Bool = false) {
+        guard let p = p2p else { return }
+        let current = agents[connId]
+        if current?.scanning == true || (!refresh && current?.list != nil) { return }
+        agents[connId] = AgentsState(list: current?.list, error: nil, scanning: true)
+        Task {
+            do {
+                let list = try await p.installedAgents(connId: connId, refresh: refresh)
+                agents[connId] = AgentsState(list: list, error: nil, scanning: false)
+            } catch {
+                agents[connId] = AgentsState(list: current?.list, error: errorText(error), scanning: false)
+                if refresh { notify(t("检测 AI 失败：{{e}}", ["e": errorText(error)])) }
+            }
+        }
+    }
+
+    /// 在终端的会话里启动一个 AI（会话要停在空闲的命令提示符）
+    func launchAgent(_ term: RemoteTerminal, kind: String, allowBypass: Bool) async {
+        guard let p = p2p, let session = term.sessionId else { return }
+        do {
+            try await p.launchAgent(connId: term.connId, sessionId: session, kind: kind, allowBypass: allowBypass)
+        } catch {
+            notify(t("启动失败：{{e}}", ["e": errorText(error)]))
+        }
+        await loadSessions(term.endpointId)
+    }
+
+    /// 对方电脑上某个目录的子目录；路径空着是用户目录
+    func listDir(_ connId: UInt64, path: String) async throws -> DirListingView {
+        guard let p = p2p else { throw P2pError.Disconnected }
+        return try await p.listDir(connId: connId, path: path)
+    }
+
+    /// 让终端的会话切到这个目录；出错时返回原因
+    func changeDir(_ term: RemoteTerminal, path: String) async -> String? {
+        guard let p = p2p, let session = term.sessionId else { return t("连接已断开") }
+        do {
+            try await p.changeDir(connId: term.connId, sessionId: session, path: path)
+            await loadSessions(term.endpointId)
+            return nil
+        } catch {
+            return errorText(error)
         }
     }
 
