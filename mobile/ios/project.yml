@@ -17,6 +17,7 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
+    # 打包（build-ipa.sh、发布工作流）时换成 app/src-tauri/tauri.conf.json 里的版本号；这里只是 Xcode 里直接编时用的
     MARKETING_VERSION: "0.1.11"
     CURRENT_PROJECT_VERSION: "1"
     # 必须用 Xcode 27.1 以上的 SDK 编：iPhone Duo 上才会铺满屏幕、跟着折叠和开合调整

@@ -1,5 +1,12 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+// 版本号和桌面端同一个：app/src-tauri/tauri.conf.json。versionCode 按 主*1000000 + 次*1000 + 修订 算，只增不减
+val appVersion = (groovy.json.JsonSlurper().parse(rootProject.file("../../app/src-tauri/tauri.conf.json")) as Map<*, *>)["version"] as String
+val appVersionCode = appVersion.substringBefore('-').split('.').map { it.toInt() }.let { (a, b, c) -> a * 1_000_000 + b * 1_000 + c }
+
+// 正式签名：发布工作流从仓库 Secrets 里取出密钥，经环境变量传进来。没有就用本机的调试密钥（本地打的测试包）
+val releaseKeystore: String? = System.getenv("P2PCLI_ANDROID_KEYSTORE")?.takeIf { it.isNotBlank() }
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,21 +18,31 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        // 开发期间和 Tauri 版的手机端分开装，两个能同时在手机上对比；原生版稳定后换回正式的包名
-        applicationId = "io.github.ilovebinglu.p2pcli.native"
+        // 和 iOS 的包名一样。发布以后不能再改：改了就是另一个 App，装不上旧版的更新
+        applicationId = "io.github.ilovebinglu.p2pcli"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.11"
+        versionCode = appVersionCode
+        versionName = appVersion
         // Rust 库只编了 64 位 ARM，现在的手机都是
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("P2PCLI_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("P2PCLI_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("P2PCLI_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
-            // 测试包用本机的调试密钥签名，能直接装；上架前换成正式密钥
-            signingConfig = signingConfigs.getByName("debug")
+            // 正式密钥签的包和调试密钥签的包互相不能覆盖安装：换的时候先卸载
+            signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "debug")
         }
     }
 
