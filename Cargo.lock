@@ -3206,9 +3206,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.191"
+version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libdbus-sys"
@@ -4331,6 +4331,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "iroh",
+ "libc",
  "p2pcli-core",
  "thiserror 2.0.21",
  "tokio",
