@@ -342,21 +342,21 @@ impl From<RejectCode> for RejectReason {
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum P2pError {
-    /// 对方拒绝了：message 是给人看的说明
-    #[error("{message}")]
-    Rejected { reason: RejectReason, message: String },
+    /// 对方拒绝了：detail 是给人看的说明。不叫 message：Kotlin 的异常自带 message，会撞名
+    #[error("{detail}")]
+    Rejected { reason: RejectReason, detail: String },
     /// 连接已断开（编号对不上）
     #[error("连接已断开")]
     Disconnected,
-    #[error("{message}")]
-    Failed { message: String },
+    #[error("{detail}")]
+    Failed { detail: String },
 }
 
 impl P2pError {
     pub(crate) fn failed(e: impl std::fmt::Display) -> Self {
-        Self::Failed { message: e.to_string() }
+        Self::Failed { detail: e.to_string() }
     }
     pub(crate) fn from_anyhow(e: anyhow::Error) -> Self {
-        Self::Failed { message: format!("{e:#}") }
+        Self::Failed { detail: format!("{e:#}") }
     }
 }
