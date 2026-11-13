@@ -1,21 +1,20 @@
 import SwiftUI
 
 /// 一个远程终端：上面是终端，下面是 AI 的确认选项、输入栏、按键条。
-/// iPhone Duo 半折（像笔记本那样立着）时，终端只占折痕上面；折痕下面是按键条，再往下是键盘或 AI 面板（FoldDeck）
+/// 只有 iPhone Duo 半折（像笔记本那样立着）时换一种排法：上半屏是终端和输入栏；折痕下面是按键条，
+/// 再往下是键盘或 AI 面板（FoldDeck）。合上、全展开、别的设备都是平常的排法
 struct TerminalScreen: View {
     @Environment(Core.self) private var core
     let key: Int
     @State private var composing = false
     @State private var draft = ""
     @State private var panel: Panel?
-    /// 横着的折痕在页面里的位置；不是半折立着时为 nil。量的时候忽略键盘，键盘弹起来也不变
+    /// 横着的折痕在页面里的位置；不是半折立着时为 nil
     @State private var fold: CGRect?
     /// 半折时下半屏自己选的模式；nil 跟着 AI 走
     @State private var deck: FoldDeck.Mode?
     @State private var keyboardUp = false
     @FocusState private var draftFocused: Bool
-    /// 输入栏出现时把光标放进去
-    @State private var focusDraft = false
 
     enum Panel: String, Identifiable {
         case keys, switcher, dir
@@ -42,12 +41,15 @@ struct TerminalScreen: View {
         // 终端控件始终是同一个位置上的同一个视图：半折和平常两种排法来回切时不会被拿下来重新放，
         // 否则它会丢掉键盘焦点，键盘收起
         return VStack(spacing: 0) {
-            terminalArea(term)
-                .frame(minHeight: 80, maxHeight: fold.map { max(80, $0.minY) } ?? .infinity)
-                .layoutPriority(1)
+            // 上半屏：终端；半折时输入栏也在这里，键盘在下半屏挡不到它
+            VStack(spacing: 0) {
+                terminalArea(term)
+                if fold != nil && composing && live { composer(term, agent: agent) }
+            }
+            .frame(minHeight: 80, maxHeight: fold.map { max(80, $0.minY) } ?? .infinity)
+            .layoutPriority(1)
             if let fold {
-                // 半折立着：终端在折痕上面，折痕那一条不放东西，下面是按键条和键盘或 AI 面板。
-                // 键盘弹起来时整页的高度只到键盘顶上：先保终端占满折痕以上，剩下的给按键条，下半屏的面板被键盘盖住
+                // 半折立着：折痕那一条不放东西，下面是按键条，再往下是键盘或 AI 面板
                 Color.clear.frame(height: fold.height)
                 VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: true) }
                 if live {
@@ -57,19 +59,20 @@ struct TerminalScreen: View {
                 }
             }
         }
+        // 半折时整页不跟着键盘缩：键盘从下半屏升起来盖住 AI 面板那块，终端和折痕的位置都不动
+        .ignoresSafeArea(.keyboard, edges: fold != nil ? .bottom : [])
         .heroBottomBar {
             if fold == nil { VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: false) } }
         }
         .background {
             Color.clear
-                .ignoresSafeArea(.keyboard)
                 .onGeometryChange(for: CGRect?.self) { Fold.horizontal($0) } action: { f in
-                    // 键盘弹着时量到的不算：页面被键盘顶短了，折痕可能量不到，等键盘收了再说
+                    // 平常排法时键盘会把页面顶短，这时量不到折痕不算，等键盘收了再量
                     if f != nil || !keyboardUp { fold = f }
                 }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         // 立起来时终端空闲就直接弹键盘；AI 跑起来自动换成 AI 面板，收起键盘
         .onChange(of: fold != nil && live) { _, ready in
             deck = nil
@@ -156,53 +159,57 @@ struct TerminalScreen: View {
         if !folded, let agent, agent.state == .waiting, let approval = agent.approval {
             ApprovalPanel(term: term, agent: agent, approval: approval)
         }
-        if composing && live {
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField(agent.map { t("发给 {{name}}", ["name": $0.name]) } ?? t("输入命令，发送后自动回车"),
-                          text: $draft, axis: .vertical)
-                    .lineLimit(1...5)
-                    .focused($draftFocused)
-                    .onAppear {
-                        guard focusDraft else { return }
-                        focusDraft = false
-                        Task {
-                            try? await Task.sleep(for: .milliseconds(150))
-                            draftFocused = true
-                        }
-                    }
-                    .submitLabel(.send)
-                    .onSubmit { send(term) }
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .heroGlass(cornerRadius: 21)
-                Button { send(term) } label: {
-                    Icon("send-horizontal").foregroundStyle(.white).frame(width: 44, height: 44)
-                }
-                .background(Circle().fill(draft.isEmpty ? Hero.tile : Hero.accent))
-                .disabled(draft.isEmpty)
-                .accessibilityLabel(t("发送"))
-            }
-            .padding(.horizontal, 8).padding(.top, 8)
-        }
+        if !folded && composing && live { composer(term, agent: agent) }
         if live {
             AgentBar(term: term, session: sessions(term).first { $0.id == term.sessionId }) { panel = .dir }
-            KeyBar(term: term, composing: composing,
+            KeyBar(term: term, composing: composing, keyboardUp: keyboardUp,
                    onCompose: { composing.toggle() },
+                   onHideKeyboard: hideKeyboard,
                    onMore: { panel = .keys })
         }
+    }
+
+    /// 输入栏：打一段字（可以用输入法）一次发出去，发完自动回车
+    private func composer(_ term: RemoteTerminal, agent: AgentView?) -> some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField(agent.map { t("发给 {{name}}", ["name": $0.name]) } ?? t("输入命令，发送后自动回车"),
+                      text: $draft, axis: .vertical)
+                .lineLimit(1...5)
+                .focused($draftFocused)
+                .submitLabel(.send)
+                .onSubmit { send(term) }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .heroGlass(cornerRadius: 21)
+            Button { send(term) } label: {
+                Icon("send-horizontal").foregroundStyle(.white).frame(width: 44, height: 44)
+            }
+            .background(Circle().fill(draft.isEmpty ? Hero.tile : Hero.accent))
+            .disabled(draft.isEmpty)
+            .accessibilityLabel(t("发送"))
+        }
+        .padding(.horizontal, 8).padding(.vertical, 8)
+    }
+
+    /// 收起键盘：不管现在是终端还是输入栏在打字
+    private func hideKeyboard() {
+        draftFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     private func sessions(_ term: RemoteTerminal) -> [SessionView] {
         core.sessions[term.endpointId]?.list ?? []
     }
 
-    /// 打开输入栏并把光标放进去（半折时 AI 面板上的“写指令”）。
-    /// 输入栏刚加进来时还不能给焦点，等它出现了再给（见输入栏的 onAppear）
+    /// 打开输入栏并把光标放进去（半折时 AI 面板上的“写指令”）
     private func compose() {
-        if composing {
-            draftFocused = true
-        } else {
-            focusDraft = true
-            composing = true
+        composing = true
+        Task {
+            // 输入栏刚加进来、键盘焦点还在别处时，第一次给可能不生效，没拿到就再给
+            for ms in [100, 300, 700] {
+                try? await Task.sleep(for: .milliseconds(ms))
+                if draftFocused { break }
+                draftFocused = true
+            }
         }
     }
 
@@ -224,7 +231,9 @@ private struct KeyBar: View {
     @Environment(Core.self) private var core
     let term: RemoteTerminal
     let composing: Bool
+    let keyboardUp: Bool
     let onCompose: () -> Void
+    let onHideKeyboard: () -> Void
     let onMore: () -> Void
 
     var body: some View {
@@ -257,7 +266,7 @@ private struct KeyBar: View {
     }
 
     private var items: [KeyItem] {
-        [
+        return [
             KeyItem(order: 0, label: t("输入栏"), icon: "keyboard", active: composing, action: onCompose),
             KeyItem(order: 1, label: "Esc") { term.send("\u{1b}") },
             KeyItem(order: 2, label: "Tab") { term.send("\t") },
@@ -269,6 +278,8 @@ private struct KeyBar: View {
             KeyItem(order: 8, label: t("粘贴"), icon: "clipboard-paste") { term.pasteClipboard() },
             KeyItem(order: 9, label: t("更多按键"), icon: "ellipsis", action: onMore),
         ]
+        // 键盘弹着时最后多一个“收起键盘”：苹果的键盘很多时候没有收起的键
+        + (keyboardUp ? [KeyItem(order: 10, label: t("收起键盘"), icon: "keyboard-off", action: onHideKeyboard)] : [])
     }
 
     private func row(_ keys: [KeyItem]) -> some View {

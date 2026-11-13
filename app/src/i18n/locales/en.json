@@ -1182,5 +1182,6 @@
   "切换模式": "Switch mode",
   "回车": "Enter",
   "给 {{name}} 写指令": "Write to {{name}}",
-  "下半屏用法": "Lower half"
+  "下半屏用法": "Lower half",
+  "收起键盘": "Hide keyboard"
 }

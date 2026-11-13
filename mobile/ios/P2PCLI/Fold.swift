@@ -6,13 +6,16 @@ import SwiftUI
 /// 只有 iOS 27.1 以上有这个接口；别的设备上一直是空
 enum Fold {
     /// 横着的折痕（像笔记本那样立着）：在这个视图里的位置。太靠边的不算。
-    /// 量的视图要忽略键盘（ignoresSafeArea(.keyboard)），否则键盘弹起来以后视图只剩上半截，折痕就量不到了
+    /// 键盘把页面顶短时（平常的排法）可能量不到，用的地方要自己处理
     static func horizontal(_ geo: GeometryProxy) -> CGRect? {
         #if DEBUG
         // 模拟器的折叠姿态只能在 Device Hub 里手动拨；界面测试用这个启动参数假装半折
-        if ProcessInfo.processInfo.arguments.contains("-P2PCLIFakeFold"), geo.size.height > 400 {
-            let y = (geo.size.height * 0.5).rounded()
-            return CGRect(x: 0, y: y - 12, width: geo.size.width, height: 24)
+        // 折痕放在屏幕正中，换算到这个视图里
+        if ProcessInfo.processInfo.arguments.contains("-P2PCLIFakeFold") {
+            let screen = UIScreen.main.bounds.height
+            let y = screen / 2 - geo.frame(in: .global).minY
+            if y > 120 && y < geo.size.height - 60 { return CGRect(x: 0, y: y - 12, width: geo.size.width, height: 24) }
+            return nil
         }
         #endif
         guard #available(iOS 27.1, *) else { return nil }
