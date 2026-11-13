@@ -1164,5 +1164,13 @@
   "从左边选一台设备，或者连接新设备。": "Pick a device on the left, or connect a new one.",
   "撤销": "Undo",
   "更多按键": "More keys",
-  "要复制先长按终端里的文字，再拖动选择范围。": "To copy, long-press text in the terminal, then drag to adjust the selection."
+  "要复制先长按终端里的文字，再拖动选择范围。": "To copy, long-press text in the terminal, then drag to adjust the selection.",
+  "选择一台设备": "Select a device",
+  "从左边的列表里选一台设备，或者连接一台新设备。": "Pick a device from the list on the left, or connect a new one.",
+  "这台设备不能用相机扫码": "This device can't scan with the camera",
+  "从相册选一张二维码截图，或者输入设备码连接。": "Pick a screenshot of the QR code from Photos, or enter the device code.",
+  "从相册选择": "Choose from Photos",
+  "这张图片里没找到二维码": "No QR code found in this image",
+  "“文件” App › 我的 iPhone › P2PCLI › Inbox": "Files app › On My iPhone › P2PCLI › Inbox",
+  "在“文件”里打开": "Open in Files"
 }

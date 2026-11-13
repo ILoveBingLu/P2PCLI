@@ -1,0 +1,2 @@
+"NSCameraUsageDescription" = "Scan the QR code shown by P2PCLI on your computer to connect to it.";
+"NSLocalNetworkUsageDescription" = "Find computers running P2PCLI on the same network and connect to them directly.";
