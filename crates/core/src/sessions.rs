@@ -2,12 +2,16 @@
 //! The authenticated remote key is part of every name; clients only supply a random suffix.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(feature = "host")]
+use std::path::Path;
 use std::process::Output;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+#[cfg(feature = "host")]
 use portable_pty::CommandBuilder;
+#[cfg(feature = "host")]
 use tokio::process::Command;
 
 use crate::agents::{self, AgentInfo, Processes, Quotas, ScreenActivity, Settings};
@@ -23,6 +27,7 @@ const AGENT_INPUT_FORMAT: &str = "#{pane_pid}\t#{window_index}\t#{pane_index}\t#
 /// shell 里往上滚进复制模式翻历史，滚回底部自动退出；全屏程序要了鼠标就转给它；在备用屏幕又没要鼠标的（less、man）转成上下键。
 /// 每一格 3 行，本机按 3 行的距离发一格。中键在复制模式里是退出：本机打字前先发一下，翻完历史直接打字也能进 shell；
 /// 不在复制模式时什么都不做，也不转给程序。按键绑定在 P2PCLI 自己的 tmux 服务（-L）里，不碰用户别的 tmux
+#[cfg(feature = "host")]
 const WHEEL_BINDINGS: &[&[&str]] = &[
     &["bind-key", "-n", "WheelUpPane", "if-shell", "-F", "#{||:#{pane_in_mode},#{mouse_any_flag}}", "send-keys -M",
         "if-shell -F '#{alternate_on}' 'send-keys -N 3 Up' 'copy-mode -e ; send-keys -X -N 3 scroll-up'"],
@@ -45,6 +50,7 @@ struct Health {
 
 pub struct SessionManager {
     namespace: String,
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     program: Option<PathBuf>,
     gate: tokio::sync::Mutex<()>,
     health: std::sync::Mutex<Health>,
@@ -106,6 +112,13 @@ impl SessionManager {
         Ok(format!("p2pcli-{owner}-{id}"))
     }
 
+    #[cfg(not(feature = "host"))]
+    async fn command(&self, _args: &[&str]) -> Result<Output> {
+        // 手机端（关掉 host）不跑 tmux，也不起任何子进程：会话列表是空的，开会话直接报错
+        bail!("这台设备没有后台会话")
+    }
+
+    #[cfg(feature = "host")]
     async fn command(&self, args: &[&str]) -> Result<Output> {
         let mut cmd = Command::new(executable(self.program.as_deref())?);
         cmd.args(["-L", &self.namespace]).args(args).kill_on_drop(true);
@@ -132,6 +145,7 @@ impl SessionManager {
     }
 
     /// 只开这个会话的 mouse，绑定见 WHEEL_BINDINGS
+    #[cfg(feature = "host")]
     async fn enable_wheel(&self, name: &str) -> Result<()> {
         self.checked(&["set-option", "-t", name, "mouse", "on"]).await?;
         for args in WHEEL_BINDINGS {
@@ -364,6 +378,7 @@ impl SessionManager {
         Ok((pid, pane))
     }
 
+    #[cfg(feature = "host")]
     pub async fn attach(&self, owner: &str, requested: Option<&str>, cols: u16, rows: u16) -> Result<(CommandBuilder, String)> {
         let _gate = self.gate.lock().await;
         let id = requested.map(str::to_string).unwrap_or_else(|| format!("{:032x}", rand::random::<u128>()));
@@ -574,6 +589,7 @@ fn empty_agent_prompt(screen: &str, row: usize) -> bool {
     })
 }
 
+#[cfg(feature = "host")]
 fn executable(bundled: Option<&Path>) -> Result<PathBuf> {
     // Desktop builds always supply an absolute sidecar path. Never silently
     // switch to an unrelated executable on PATH if the installation is damaged.
@@ -619,6 +635,7 @@ mod tests {
         assert!(!empty_agent_prompt("❯", 5));
     }
 
+    #[cfg(feature = "host")]
     #[test]
     fn desktop_uses_only_the_explicit_sidecar_path() {
         let existing = std::env::current_exe().unwrap();

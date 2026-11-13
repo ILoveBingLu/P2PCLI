@@ -1,4 +1,6 @@
 //! 同一进程里起两台设备，走真的 iroh 连接，把配对、弹窗、终端整条链路跑一遍。
+//! 要开终端、跑命令，只在带 host 的构建里跑
+#![cfg(feature = "host")]
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};

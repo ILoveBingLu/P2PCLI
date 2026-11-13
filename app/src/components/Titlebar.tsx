@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { ReactNode } from "react";
-import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Settings, Wifi } from "lucide-react";
+import { ArrowLeft, Menu, PanelLeftClose, PanelLeftOpen, Settings, Wifi } from "lucide-react";
 import logo from "@/assets/logo.svg";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,10 @@ import { Separator } from "@/components/ui/separator";
 import type { Overview, SessionSummary } from "../api";
 import { InUseIndicator } from "./InUseIndicator";
 import { LocalDevicePopover } from "./LocalDevicePopover";
+import { PhonePairPopover } from "./PhonePairPopover";
 import { sidebarShortcut } from "./useSidebar";
 import { t } from "@/i18n";
+import { isMobile } from "@/lib/platform";
 
 export function Titlebar({
   ov,
@@ -41,6 +43,38 @@ export function Titlebar({
   /** 断开一个正连着本机的设备 */
   onKick: (session: SessionSummary) => void;
 }) {
+  // 手机：一行顶栏，左边菜单（设备抽屉）或返回，右边新建连接、网络诊断、设置。
+  // 手机不能被别人连，没有“谁在用本机”“本机信息”；终端数看标签就知道
+  if (isMobile) {
+    return (
+      <header className="app-titlebar mobile-topbar" aria-label={t("应用标题栏")}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={onBack ? t("返回工作区") : sidebarOpen ? t("收起侧边栏") : t("展开侧边栏")}
+          aria-expanded={onBack ? undefined : sidebarOpen}
+          aria-controls={onBack ? undefined : "connection-sidebar"}
+          onPress={onBack ?? onToggleSidebar}
+        >
+          {onBack ? <ArrowLeft /> : <Menu />}
+        </Button>
+        <div className="mobile-topbar-brand">
+          <img className="brand-symbol" src={logo} alt="" draggable={false} />
+          <strong>P2PCLI</strong>
+        </div>
+        <div className="titlebar-actions">
+          {connectionAction}
+          <Button variant="ghost" size="icon" aria-label={t("查看网络诊断")} onClick={onDiag}>
+            <Wifi />
+          </Button>
+          <Button variant="ghost" size="icon" aria-label={t("设置")} disabled={!settingsEnabled} onClick={onSettings}>
+            <Settings />
+          </Button>
+        </div>
+      </header>
+    );
+  }
+
   const nativeMac = isTauri() && /Macintosh/.test(navigator.userAgent);
   const nativeWindows = isTauri() && /Windows/.test(navigator.userAgent);
 
@@ -84,6 +118,7 @@ export function Titlebar({
         <InUseIndicator sessions={ov?.sessions ?? []} onKick={onKick} />
         <Badge variant="outline">{terminalCount} {t("个终端")}</Badge>
         {connectionAction}
+        <PhonePairPopover ov={ov} />
         <LocalDevicePopover ov={ov} onRefresh={onRefresh} open={localDeviceOpen} onOpenChange={onLocalDeviceOpenChange} />
         <Button
           variant="ghost"

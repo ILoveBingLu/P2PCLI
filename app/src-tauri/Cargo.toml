@@ -21,11 +21,21 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tauri = { version = "2.12.5", features = ["tray-icon"] }
-tauri-plugin-single-instance = "2.5.4"
 tauri-plugin-notification = "2.7.0"
-tauri-plugin-updater = "2.14.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
+
+# 手机端：打开链接交给系统浏览器，扫桌面端的二维码连接
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-opener = "2"
+tauri-plugin-barcode-scanner = "2"
+
+# 桌面端：能被别人连（开终端、跑命令），单实例，自动更新。手机端（Android、iOS）都不要：
+# 手机只当连接的一方，更新走应用商店
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+p2pcli-core = { workspace = true, features = ["host"] }
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-updater = "2.14.0"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-window-controls = "=0.2.1"

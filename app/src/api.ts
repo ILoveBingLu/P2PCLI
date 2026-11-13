@@ -2,6 +2,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { unwrapCollaboration, type CollaborationAction, type CollaborationReply, type CollaborationDelivery } from "./lib/collaboration";
 import { t } from "@/i18n";
+import { isMobile } from "./lib/platform";
+import { pickPhoneFiles, stagePhoneFiles } from "./lib/phoneFiles";
 
 export type PathKind = "ipv6" | "ipv4" | "relay" | "local" | "unknown";
 export interface PathInfo {
@@ -212,7 +214,7 @@ export interface Connected {
   mutual: boolean;
 }
 
-export type RejectCode = "need_password" | "bad_password" | "denied" | "timeout" | "locked" | "version";
+export type RejectCode = "need_password" | "bad_password" | "denied" | "timeout" | "locked" | "version" | "controller_only";
 export interface ConnectFail {
   reject: RejectCode | null;
   message: string;
@@ -464,8 +466,12 @@ export const api = {
   /** 在后台发文件，返回传输编号；target 是设备公钥、设备码或名字 */
   sendFiles: (target: string, paths: string[]) => invoke<string>("send_files", { target, paths }),
   transfers: () => invoke<Transfer[]>("transfers"),
-  /** 系统选择框，没选返回空 */
-  pickPaths: (folders: boolean) => invoke<string[]>("pick_paths", { folders }),
+  /** 系统选择框，没选返回空。手机上选的文件先存进缓存目录，返回的是存好的路径；手机不能选文件夹 */
+  pickPaths: async (folders: boolean): Promise<string[]> => {
+    if (!isMobile) return invoke<string[]>("pick_paths", { folders });
+    if (folders) throw new Error(t("手机上暂不支持这个功能"));
+    return stagePhoneFiles(await pickPhoneFiles());
+  },
   revealPath: (path: string) => invoke("reveal_path", { path }),
   openFolder: (path: string) => invoke("open_folder", { path }),
   cliStatus: () => invoke<CliStatus>("cli_status"),

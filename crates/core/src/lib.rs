@@ -27,6 +27,8 @@ pub mod proxy;
 pub mod quic;
 pub mod remote_fs;
 pub mod remote_ops;
+/// 伪终端：只有被连的一方（和桌面端的“本机”终端）用，手机端不编
+#[cfg(feature = "host")]
 pub mod pty;
 pub mod rdv_ws;
 pub mod rendezvous;

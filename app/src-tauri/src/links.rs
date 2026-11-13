@@ -33,6 +33,23 @@ fn localhost_url(port: u16, path: &str, https: bool) -> Result<String, String> {
     Ok(format!("{}://localhost:{port}{path}", if https { "https" } else { "http" }))
 }
 
+/// 手机上打开链接要用软件自己的句柄（交给系统去开），启动时记下来
+#[cfg(mobile)]
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+#[cfg(mobile)]
+pub fn init(app: &tauri::AppHandle) {
+    let _ = APP.set(app.clone());
+}
+
+#[cfg(mobile)]
+fn launch(url: &str) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let app = APP.get().ok_or("软件还没准备好，稍后再试")?;
+    app.opener().open_url(url, None::<&str>).map_err(|e| format!("打不开浏览器：{e}"))
+}
+
+#[cfg(desktop)]
 fn launch(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg(url).spawn();

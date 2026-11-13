@@ -19,6 +19,7 @@ use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
 use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+#[cfg(feature = "host")]
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
 
@@ -71,7 +72,9 @@ enum Link {
         _control: SendStream,
         capabilities: Vec<String>,
     },
-    /// 本机自己：不走网络，直接用本机的会话管理器，终端和会话的行为和远程设备完全一样
+    /// 本机自己：不走网络，直接用本机的会话管理器，终端和会话的行为和远程设备完全一样。
+    /// 手机端（关掉 host）没有本机终端，建不出这种连接
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     Local {
         host: Arc<Host>,
         /// 会话归在这个名下；用本机的公钥，重启以后还能认回自己的后台会话
@@ -152,10 +155,12 @@ pub async fn handshake(
 }
 
 /// 本机内部通道的缓冲大小：终端输出慢慢读也不会丢，写满了就等
+#[cfg(feature = "host")]
 const LOCAL_PIPE: usize = 256 * 1024;
 
 impl RemoteHost {
     /// 本机自己：不走网络，直接用本机的会话管理器，所以会话、终端、AI 识别和远程设备一模一样
+    #[cfg(feature = "host")]
     pub async fn local(host: Arc<Host>, me: &DeviceInfo, endpoint_id: String) -> RemoteHost {
         let multiplexer = host.terminals.describe().await;
         RemoteHost {
@@ -209,7 +214,10 @@ impl RemoteHost {
     async fn open(&self, persistent: bool, session_id: Option<String>, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
         let conn = match &self.link {
             Link::Net { conn, .. } => conn,
+            #[cfg(feature = "host")]
             Link::Local { host, owner } => return open_local(host, owner, persistent, session_id, cols, rows).await,
+            #[cfg(not(feature = "host"))]
+            Link::Local { .. } => unreachable!("手机端建不出本机连接"),
         };
         let (mut send, mut recv) = conn.open_bi().await?;
         write_msg(&mut send, &Msg::Open { persistent, cols, rows, session_id }).await?;
@@ -326,6 +334,7 @@ impl RemoteHost {
     /// 远程编辑：打开文本文件，返回文件信息和内容（不含 BOM）
     /// head 为真时读 Git 最新提交里的版本（对比用）
     pub async fn read_file(&self, path: String, head: bool) -> Result<(crate::remote_fs::FileMeta, String)> {
+        #[cfg(feature = "host")]
         if self.is_local() {
             return if head { crate::remote_ops::read_head(&path).await } else { crate::remote_fs::read_text(&path).await };
         }
@@ -379,6 +388,7 @@ impl RemoteHost {
 
     /// 远程编辑的其他操作：搜索、按名字找文件、看文件变没变、新建/重命名/删除、Git 状态
     pub async fn edit(&self, request: crate::remote_ops::EditRequest) -> Result<crate::remote_ops::EditReply> {
+        #[cfg(feature = "host")]
         if self.is_local() {
             return crate::remote_ops::handle(request).await;
         }
@@ -408,6 +418,9 @@ impl RemoteHost {
     /// 丢掉发消息那头（或者断线），语言服务就结束
     pub async fn open_lsp(&self, language: String, file: String, root: String) -> Result<(LspStarted, LspInput, LspOutput)> {
         let (send, mut recv) = match &self.link {
+            #[cfg(not(feature = "host"))]
+            Link::Local { .. } => unreachable!("手机端建不出本机连接"),
+            #[cfg(feature = "host")]
             Link::Local { .. } => {
                 let (client_w, host_r) = tokio::io::duplex(LOCAL_PIPE);
                 let (mut host_w, client_r) = tokio::io::duplex(LOCAL_PIPE);
@@ -610,6 +623,7 @@ impl RemoteHost {
     }
 }
 
+#[cfg(feature = "host")]
 /// 在本机开一个终端：起一对内存里的管道，当作“连接”的两头，服务端那头直接交给和远程设备同一套的终端服务
 async fn open_local(
     host: &Arc<Host>,
@@ -760,6 +774,7 @@ impl LspOutput {
 /// 终端输入这一头：远程设备是 QUIC 流，本机自己是内存管道
 enum TermWrite {
     Quic(SendStream),
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     Local(DuplexStream),
 }
 
@@ -787,6 +802,7 @@ impl AsyncWrite for TermWrite {
 /// 终端输出这一头
 enum TermRead {
     Quic(RecvStream),
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     Local(DuplexStream),
 }
 
@@ -917,7 +933,9 @@ impl Drop for ExecStream {
 #[cfg(test)]
 mod collaboration_tests {
     use super::*;
-    use crate::collaboration::model::{Action, Response, Role};
+    use crate::collaboration::model::Action;
+    #[cfg(feature = "host")]
+    use crate::collaboration::model::{Response, Role};
     use crate::host::{BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest};
     use crate::node::{Node, NodeConfig};
 
@@ -946,6 +964,7 @@ mod collaboration_tests {
         )
     }
 
+    #[cfg(feature = "host")]
     fn response(reply: Reply) -> Response {
         assert!(reply.error.is_none(), "{:?}", reply.error);
         reply.response.expect("successful reply has a response")
@@ -990,6 +1009,8 @@ mod collaboration_tests {
         server.close().await;
     }
 
+    // 用到了本机连接（local_remote），手机端没有
+    #[cfg(feature = "host")]
     #[tokio::test]
     async fn authenticated_collaboration_and_local_routing() {
         let host_config = config();
@@ -1054,6 +1075,32 @@ mod collaboration_tests {
         let _ = std::fs::remove_dir_all(guest_config.data_dir);
     }
 
+    /// 手机端（关掉 host）只能连别人：带着正确的密码来连，握手时也直接回绝，不弹窗
+    #[cfg(not(feature = "host"))]
+    #[tokio::test]
+    async fn controller_only_rejects_incoming_connections() {
+        let host_config = config();
+        let host = Node::start(host_config.clone(), Arc::new(Allow)).await.unwrap();
+        let client = Endpoint::builder(iroh::endpoint::presets::N0)
+            .clear_address_lookup()
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap()
+            .bind().await.unwrap();
+        let conn = dial(&client, address(&host.endpoint)).await.unwrap();
+        let (mut control_send, mut control_recv) = conn.open_bi().await.unwrap();
+        write_msg(&mut control_send, &Msg::Hello {
+            v: PROTO_VERSION, name: "desktop".into(), platform: "test".into(),
+            password: Some(host.host.password()), version: None, os: None,
+            capabilities: vec![],
+        }).await.unwrap();
+        let reply = timeout(Duration::from_secs(10), read_msg(&mut control_recv)).await.unwrap().unwrap();
+        assert!(matches!(reply, Msg::Reject { code: RejectCode::ControllerOnly }), "{reply:?}");
+        client.close().await;
+        host.shutdown().await;
+        let _ = std::fs::remove_dir_all(host_config.data_dir);
+    }
+
+    #[cfg(feature = "host")]
     #[tokio::test]
     async fn host_rejects_collaboration_without_negotiation() {
         let host_config = config();

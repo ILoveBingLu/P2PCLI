@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { api, type ConnectFail, type NearbyDevice, type PathInfo, type RemoteInfo } from "../api";
 import { toast } from "@/components/ui/toast";
 import { t } from "@/i18n";
+import { isMobile } from "@/lib/platform";
+import { parsePairLink } from "@/lib/pairLink";
 
 interface Options {
   onConnected: (connId: number, info: RemoteInfo, code: string | null, path: PathInfo) => void;
@@ -54,5 +56,35 @@ export function useConnection({ onConnected, onOpenChange }: Options) {
   /** 局域网设备按公钥连；受信设备直接连上，否则面板弹出来要密码 */
   const connectLan = (d: NearbyDevice) => doConnect(d.endpoint_id, "", d);
 
-  return { target, setTarget, password, setPassword, mutual, setMutual, busy, error, setError, pwRef, doConnect, lanTarget, setLanTarget, connectLan };
+  /** 手机：扫桌面端标题栏手机图标里的二维码，设备码和密码都在里面，扫完直接连 */
+  const scanAndConnect = async () => {
+    if (!isMobile || connecting.current) return;
+    let content: string;
+    try {
+      // 扫码插件只有手机端有，用到时才加载
+      const scanner = await import("@tauri-apps/plugin-barcode-scanner");
+      let permission = await scanner.checkPermissions();
+      if (permission !== "granted") permission = await scanner.requestPermissions();
+      if (permission !== "granted") {
+        toast.error(t("没有相机权限：去系统设置里允许 P2PCLI 使用相机，或者输入设备码连接"));
+        return;
+      }
+      content = (await scanner.scan({ windowed: false, formats: [scanner.Format.QRCode] })).content;
+    } catch (e) {
+      // 按返回键取消扫码也会走到这里，不算出错
+      if (!/cancel/i.test(String(e))) toast.error(t("扫码失败：{{error}}", { error: String(e) }));
+      return;
+    }
+    const pair = parsePairLink(content);
+    if (!pair) {
+      toast.error(t("这不是 P2PCLI 的连接二维码"));
+      return;
+    }
+    setLanTarget(null);
+    setTarget(pair.code ?? "");
+    setPassword(pair.password);
+    await doConnect(pair.code ?? pair.id, pair.password);
+  };
+
+  return { target, setTarget, password, setPassword, mutual, setMutual, busy, error, setError, pwRef, doConnect, lanTarget, setLanTarget, connectLan, scanAndConnect };
 }

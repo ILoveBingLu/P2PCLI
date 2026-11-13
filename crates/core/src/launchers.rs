@@ -1,8 +1,12 @@
 //! AI 启动器：在被连接的电脑上查找命令，不启动 AI 来探测版本。
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+#[cfg(feature = "host")]
+use anyhow::Context;
+#[cfg(feature = "host")]
 use std::time::Duration;
+#[cfg(feature = "host")]
 use tokio::process::Command;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,6 +68,13 @@ pub fn empty_prompt(line: &str) -> bool {
         || prefix.starts_with('/') || prefix.starts_with('~')
 }
 
+/// 手机端（关掉 host）上没有命令行 AI 可开，也不起子进程去找
+#[cfg(not(feature = "host"))]
+pub async fn scan() -> Result<Vec<InstalledAgent>> {
+    Ok(Vec::new())
+}
+
+#[cfg(feature = "host")]
 pub async fn scan() -> Result<Vec<InstalledAgent>> {
     let candidates = crate::agents::launcher_candidates();
     let names: Vec<_> = candidates.iter().flat_map(|(_, _, names)| names.iter().copied()).collect();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api, type UpdateProgress, type UpdateView } from "../api";
 import { t } from "@/i18n";
+import { isMobile } from "@/lib/platform";
 
 /** 启动后过一会儿查一次，之后每 6 小时查一次 */
 const FIRST_CHECK_DELAY = 5_000;
@@ -53,6 +54,8 @@ export function useUpdater() {
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
+    // 手机上的更新走应用商店，不查
+    if (isMobile) return;
     const first = window.setTimeout(() => void check(), FIRST_CHECK_DELAY);
     const timer = window.setInterval(() => void check(), CHECK_EVERY);
     return () => {

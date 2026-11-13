@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["host"]
+# 被连的一方：开终端、跑命令、tmux 会话、语言服务、改远程文件、端口列表、移到回收站。
+# 手机端只当连接的一方，关掉它（--no-default-features）就不编这些，也不带它们的依赖
+host = ["dep:portable-pty", "dep:ignore", "dep:regex", "dep:trash", "dep:libc"]
+
 [dependencies]
 iroh.workspace = true
 tokio.workspace = true
@@ -13,7 +19,7 @@ serde_json.workspace = true
 tracing.workspace = true
 rand.workspace = true
 bytes.workspace = true
-portable-pty = "0.9"
+portable-pty = { version = "0.9", optional = true }
 whoami = "2"
 netdev = "0.45.1"
 # WebSocket 牵线（可部署到 Cloudflare）；TLS 用 iroh 已经在用的 ring，不另引加密库
@@ -35,14 +41,14 @@ noq-proto = "=1.4.0"
 base64 = "0.22"
 rusqlite = { version = "0.41", features = ["bundled"] }
 # 远程编辑的全项目搜索：ripgrep 用的目录遍历，认 .gitignore；匹配用 regex
-ignore = "0.4"
-regex = "1"
+ignore = { version = "0.4", optional = true }
+regex = { version = "1", optional = true }
 # 远程编辑删除文件时移到废纸篓/回收站，不直接删掉
-trash = "5"
+trash = { version = "5", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # 远程执行的命令超时或被取消时，按进程组结束它和它的子进程
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 # 链路模拟实验（tests/lossy_link.rs）用：自己写一个内存里的传输，带延迟、丢包、带宽上限；版本和 iroh 用的一致

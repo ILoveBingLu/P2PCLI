@@ -211,7 +211,10 @@ impl Node {
         };
         let host = shared_host.unwrap_or_else(|| {
             let host = Arc::new(Host::new(me.clone(), &cfg.data_dir, &endpoint.id().to_string(), cfg.session_program.clone(), delegate, collaboration));
+            // 定时看一眼后台会话还在不在；手机端没有后台会话，不查
+            #[cfg(feature = "host")]
             let weak = Arc::downgrade(&host);
+            #[cfg(feature = "host")]
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -534,7 +537,9 @@ impl Node {
         self.files.run_send(&transfer, &self.endpoint, addr, &self.me, paths).await
     }
 
-    /// 本机自己当作一条“连接”：不走网络，终端、会话、AI 识别都用本机的会话管理器，和连远程设备的行为一样
+    /// 本机自己当作一条“连接”：不走网络，终端、会话、AI 识别都用本机的会话管理器，和连远程设备的行为一样。
+    /// 手机端（关掉 host）没有本机终端
+    #[cfg(feature = "host")]
     pub async fn local_remote(&self) -> RemoteHost {
         RemoteHost::local(self.host.clone(), &self.me, self.id().to_string()).await
     }
