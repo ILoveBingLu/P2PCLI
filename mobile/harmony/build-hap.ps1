@@ -15,19 +15,11 @@ $env:DEVECO_SDK_HOME = "$deveco\sdk"
 $node = "$deveco\tools\node\node.exe"
 $env:PATH = "$deveco\tools\node;$env:PATH"
 
-# hvigor 不认带中文（等非英文字符）的工程路径：这时在 %LOCALAPPDATA%\p2pcli-ohos\harmony 建一个目录链接指过来，从那里打包。
-# 在 DevEco Studio 里也要打开这个链接路径，不能直接开带中文的目录
-$project = $here
-if ($here -match '[^\x00-\x7F]') {
-    $project = Join-Path $env:LOCALAPPDATA "p2pcli-ohos\harmony"
-    if (-not (Test-Path $project)) {
-        New-Item -ItemType Directory -Force (Split-Path $project) | Out-Null
-        New-Item -ItemType Junction -Path $project -Target $here | Out-Null
-    }
-    Write-Host "工程路径里有非英文字符，从这个链接打包：$project"
-}
+# hvigor 不认带中文（等非英文字符）的工程路径，目录链接、subst 虚拟盘符也绕不开（它会找到真实路径）：
+# 代码要放在纯英文的路径下，DevEco Studio 里打开也一样
+if ($here -match '[^\x00-\x7F]') { throw "工程路径里有中文等非英文字符，鸿蒙的打包工具不支持：把代码挪到纯英文的路径下。现在的路径：$here" }
 
-Push-Location $project
+Push-Location $here
 try {
     & "$deveco\tools\ohpm\bin\ohpm.bat" install --all
     if ($LASTEXITCODE -ne 0) { throw "ohpm install 失败" }
