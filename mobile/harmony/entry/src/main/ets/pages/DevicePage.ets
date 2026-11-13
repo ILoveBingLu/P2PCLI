@@ -58,7 +58,8 @@ export struct DevicePage {
       List() {
         ListItem() {
           Column({ space: 10 }) {
-            PlatformTile({ platform: this.device()?.platform ?? this.conn()?.platform ?? '', connected: this.conn() !== undefined, tileSize: 76 })
+            PlatformTile({ platform: this.device()?.platform ?? this.conn()?.platform ?? '', connected: this.conn() !== undefined, tileSize: 76,
+              ring: Hero.background })
             if (this.conn() !== undefined) {
               Text(t('已连接') + ' · ' + pathText(this.conn()?.path ?? null)).fontSize(13)
                 .fontColor(this.conn()?.path.kind === 'relay' ? Hero.warning : Hero.success)
@@ -136,6 +137,8 @@ export struct DevicePage {
       .width('100%').height('100%').padding({ left: 16, right: 16 }).scrollBar(BarState.Off)
     }
     .title(this.device()?.remark ?? this.device()?.name ?? this.conn()?.name ?? t('设备'))
+    // 页面背景延伸到底部手势条下面（系统的安全区），不留一条窗口的黑底
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     .menus(this.conn() !== undefined ? [
       { value: t('新建终端'), icon: $r('app.media.menu_plus'), action: () => this.core.openTerminal(this.endpointId, null, true) },
       { value: t('发送文件'), icon: $r('app.media.menu_file_up'), action: () => this.pickFiles() },

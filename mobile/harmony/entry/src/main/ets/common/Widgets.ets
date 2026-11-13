@@ -8,6 +8,8 @@ export struct PlatformTile {
   @Param platform: string = '';
   @Param connected: boolean = false;
   @Param tileSize: number = 42;
+  /** 绿点外面那一圈的颜色：和方块所在的背景一样，看着就是方块被“挖”出一个口，不是另一层底色 */
+  @Param ring: string = Hero.surface;
 
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
@@ -21,7 +23,7 @@ export struct PlatformTile {
       .width(this.tileSize).height(this.tileSize).borderRadius(this.tileSize > 60 ? 24 : 13).backgroundColor(Hero.tile)
       if (this.connected) {
         Circle().width(this.tileSize > 60 ? 12 : 8).height(this.tileSize > 60 ? 12 : 8).fill(Hero.success)
-          .border({ width: this.tileSize > 60 ? 3.5 : 2.5, color: Hero.surface })
+          .border({ width: this.tileSize > 60 ? 3.5 : 2.5, color: this.ring })
           .offset({ x: 3, y: 3 })
       }
     }

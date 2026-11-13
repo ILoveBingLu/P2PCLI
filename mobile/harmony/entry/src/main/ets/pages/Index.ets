@@ -107,13 +107,18 @@ struct Index {
       ])
       .toolbarConfiguration([
         { value: t('连接新设备'), icon: $r('app.media.menu_plus'), action: () => this.core.newPrompt() }
-      ])
+      ], {
+        // 系统的半透明模糊底，列表从它下面透出来，不是一条实心的黑底
+        backgroundColor: Color.Transparent,
+        backgroundBlurStyle: BlurStyle.COMPONENT_THICK
+      })
       .mode(NavigationMode.Auto)
       .navBarWidth(360)
       .navBarWidthRange([300, 420])
       .minContentWidth(360)
       .navDestination(this.pageMap)
       .backgroundColor(Hero.background)
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       .bindSheet(this.showConnect!!, this.connectSheet(), {
         height: SheetSize.LARGE,
         backgroundColor: Hero.surface,
