@@ -2877,3 +2877,273 @@ img.agent-icon {
 }
 .git-commit .remote-editor-search-dir { margin-left: auto; flex: none; }
 .git-hash { flex: none; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 11px; }
+
+/* ======================================================================
+   手机（html[data-mobile]，见 lib/platform.ts）：只当连接的一方。
+   一行顶栏；设备列表是从左边滑出来的抽屉；终端占满剩下的地方，下面一排手机键盘没有的键。
+   按钮按手指点的大小放（至少 40px），刘海和底部手势条用安全区留白。
+   ====================================================================== */
+html[data-mobile] body {
+  font-size: 14px;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+html[data-mobile] .app-shell {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: var(--sidebar);
+}
+
+/* 顶栏 */
+.mobile-topbar {
+  height: 52px;
+  gap: 2px;
+  padding-inline: 4px;
+}
+.mobile-topbar-brand {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 2px;
+}
+.mobile-topbar-brand .brand-symbol {
+  width: 24px;
+  height: 24px;
+}
+.mobile-topbar-brand strong {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+}
+.mobile-topbar .titlebar-actions {
+  gap: 0;
+  padding-right: 0;
+}
+/* 顶栏里的“新建连接”是 icon-sm，手机上放大到和别的按钮一样 */
+.mobile-topbar [data-slot="button"] {
+  min-width: 44px;
+  min-height: 44px;
+}
+.mobile-topbar [data-slot="button"] svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* 设备抽屉：盖在终端上面，从左边滑出来 */
+html[data-mobile] .connection-sidebar,
+html[data-mobile] .connection-sidebar[data-collapsed] {
+  position: fixed;
+  z-index: 50;
+  top: calc(env(safe-area-inset-top) + 52px);
+  bottom: 0;
+  left: 0;
+  width: min(86vw, 340px);
+  border-right: 1px solid var(--border);
+  border-top-right-radius: 16px;
+  box-shadow: 12px 0 32px #0008;
+}
+html[data-mobile] .connection-sidebar {
+  transform: translateX(0);
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s;
+}
+html[data-mobile] .connection-sidebar[data-collapsed] {
+  transform: translateX(-105%);
+  visibility: hidden;
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s 240ms;
+}
+html[data-mobile] .connection-sidebar-inner {
+  width: 100%;
+  padding: 14px 12px calc(18px + env(safe-area-inset-bottom));
+}
+/* 抽屉里每一行好点一点 */
+html[data-mobile] .connection-sidebar [data-slot="button"] {
+  min-height: 40px;
+}
+.mobile-drawer-backdrop {
+  position: fixed;
+  z-index: 49;
+  inset: calc(env(safe-area-inset-top) + 52px) 0 0 0;
+  background: #000a;
+  animation: mobile-backdrop-in 200ms ease-out;
+}
+@keyframes mobile-backdrop-in {
+  from { opacity: 0; }
+}
+/* 抽屉不占位置，主区域不用画左边那条分隔线和圆角 */
+html[data-mobile] .workspace,
+html[data-mobile] .connection-sidebar:not([data-collapsed]) + .workspace {
+  grid-column: 1 / -1;
+  border-left: none;
+  border-top-left-radius: 0;
+}
+
+/* 终端标签：窄一点，横着滑 */
+html[data-mobile] .terminal-toolbar {
+  padding: 4px 4px 0;
+  min-height: 46px;
+}
+html[data-mobile] .terminal-tab {
+  width: 150px;
+  max-width: 150px;
+  padding-left: 12px;
+}
+html[data-mobile] .terminal-tab-list {
+  scrollbar-width: none;
+}
+html[data-mobile] .terminal-tab-list::-webkit-scrollbar {
+  display: none;
+}
+html[data-mobile] .terminal-toolbar > [data-slot="button"] {
+  min-width: 40px;
+  min-height: 40px;
+}
+/* 状态栏：只留最要紧的，挤不下就裁 */
+html[data-mobile] .terminal-statusbar {
+  gap: 10px;
+  padding-inline: 10px;
+}
+html[data-mobile] .terminal-statusbar > .terminal-status-window,
+html[data-mobile] .terminal-statusbar > .terminal-status-command {
+  display: none;
+}
+
+/* 终端下面那排键 */
+.mobile-keybar {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  background: var(--sidebar);
+  border-top: 1px solid var(--border);
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+.mobile-keybar::-webkit-scrollbar {
+  display: none;
+}
+.mobile-key {
+  flex: none;
+  min-width: 44px;
+  height: 36px;
+  padding-inline: 10px;
+  border: none;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  touch-action: manipulation;
+  user-select: none;
+}
+.mobile-key:active {
+  background: color-mix(in srgb, var(--foreground) 20%, transparent);
+}
+
+/* 设置：分类改成顶部横着滑的一排，内容占满宽度 */
+html[data-mobile] .settings-page,
+html[data-mobile] .settings-tabs {
+  flex-direction: column;
+}
+html[data-mobile] .settings-nav {
+  width: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+html[data-mobile] .settings-nav::-webkit-scrollbar {
+  display: none;
+}
+/* 顶栏已经有返回，标题“设置”不再单独占一块 */
+html[data-mobile] .settings-nav-title {
+  display: none;
+}
+html[data-mobile] .settings-nav .tabs__list {
+  flex-direction: row;
+  gap: 4px;
+}
+html[data-mobile] .settings-nav .tabs__tab {
+  flex: none;
+  height: 36px;
+  padding-inline: 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+html[data-mobile] .settings-nav .tabs__indicator {
+  border-radius: 999px;
+}
+html[data-mobile] .settings-main {
+  min-height: 0;
+}
+html[data-mobile] .settings-main-title {
+  padding: 16px 16px 8px;
+}
+html[data-mobile] .settings-content {
+  padding: 8px 16px 24px;
+}
+html[data-mobile] .settings-footer {
+  padding: 10px 16px;
+}
+
+/* 首页：按钮竖着排、撑满，好点 */
+html[data-mobile] .welcome [data-slot="button"] {
+  min-height: 44px;
+}
+
+/* 弹窗和弹出面板不超出屏幕 */
+html[data-mobile] [role="dialog"] {
+  max-width: calc(100vw - 24px);
+}
+
+/* 桌面端标题栏手机图标里的二维码：白底，四周留白，手机在深色界面里也扫得出来 */
+.phone-pair-qr {
+  width: 208px;
+  height: 208px;
+  padding: 8px;
+  border-radius: 14px;
+  background: #fff;
+}
+.phone-pair-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.phone-pair-qr-empty {
+  display: grid;
+  place-items: center;
+  color: #666;
+  font-size: 12px;
+}
+
+/* 手机首页：扫码、输入设备码、附近设备，竖着排、撑满 */
+.welcome-mobile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 320px);
+}
+.welcome-mobile-actions [data-slot="button"] {
+  width: 100%;
+  justify-content: center;
+}
+/* 连接面板里扫码按钮和手输之间的那句 */
+.connect-or {
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}

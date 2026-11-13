@@ -16,6 +16,7 @@ import { OverlayScroll } from "./OverlayScroll";
 import { PlatformIcon } from "./PlatformIcon";
 import { type useUpdater } from "./useUpdater";
 import { applyLocaleChoice, intlLocale, storedLocaleChoice, t, tr, type LocaleChoice } from "@/i18n";
+import { isMobile } from "@/lib/platform";
 
 /** 牵线服务器选“自定义”时的取值，预设项的取值就是它的地址 */
 const CUSTOM_SERVER = "custom";
@@ -59,6 +60,9 @@ function LanguageField() {
 }
 
 /** 左边菜单的分类，右边标题也用这个名字 */
+/** 手机上留下的设置分类 */
+const MOBILE_SECTIONS = ["general", "proxy", "files", "about"];
+
 function settingsSections() {
   return [
     { id: "general", label: t("连接设置"), icon: Globe2 },
@@ -104,8 +108,12 @@ export function SettingsPage({
   const [permissionsLoading, setPermissionsLoading] = useState(true);
   const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
   const mac = ov.platform === "macos";
-  const sections = (mac ? settingsSections() : settingsSections().filter((section) => section.id !== "permissions"));
+  // 手机只当连接的一方：没有本机的 AI、命令行工具和系统权限，也不能被别人连，受信设备用不上
+  const sections = isMobile
+    ? settingsSections().filter((section) => MOBILE_SECTIONS.includes(section.id))
+    : mac ? settingsSections() : settingsSections().filter((section) => section.id !== "permissions");
   useEffect(() => {
+    if (isMobile) return;
     api.cliStatus().then(setCli).catch(() => {});
   }, []);
   const installCli = async () => {
@@ -165,6 +173,7 @@ export function SettingsPage({
   }, []);
   useEffect(() => {
     void load();
+    if (isMobile) return;
     void loadAgents();
     void loadPermissions();
   }, [load, loadAgents, loadPermissions]);
@@ -230,7 +239,7 @@ export function SettingsPage({
   const current = sections.find((item) => item.id === tab) ?? sections[0];
   return (
     <section className="settings-page" aria-labelledby="settings-title">
-      <Tabs orientation="vertical" selectedKey={tab} onSelectionChange={(key) => setTab(String(key))} className="settings-tabs">
+      <Tabs orientation={isMobile ? "horizontal" : "vertical"} selectedKey={tab} onSelectionChange={(key) => setTab(String(key))} className="settings-tabs">
         <nav className="settings-nav">
           <h1 id="settings-title" className="settings-nav-title">{t("设置")}</h1>
           <Tabs.List aria-label={t("设置分类")}>
@@ -335,7 +344,8 @@ export function SettingsPage({
                         {t("直连失败时转发加密数据，多个地址用逗号分隔。")}
                       </FieldDescription>
                     </Field>
-                    <Checkbox isSelected={lanVisible} onChange={setLanVisible} isDisabled={saving}>
+                    {/* 手机不能被连，不用让附近的设备看到 */}
+                    {!isMobile && <Checkbox isSelected={lanVisible} onChange={setLanVisible} isDisabled={saving}>
                       <Checkbox.Content className="gap-3 text-sm">
                         <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
                         {t("在局域网中显示本机")}
@@ -343,7 +353,7 @@ export function SettingsPage({
                       <Description className="pl-7 text-xs text-muted-foreground">
                         {t("同一网络里的其他 P2PCLI 能看到本机名称，点一下就能发起连接，仍然要配对密码和你的同意。在公共 Wi-Fi 上可以关掉。")}
                       </Description>
-                    </Checkbox>
+                    </Checkbox>}
                   </FieldGroup>
                 )}
               </Tabs.Panel>
@@ -380,15 +390,17 @@ export function SettingsPage({
                     <FieldLabel>{t("收到的文件放在")}</FieldLabel>
                     <div className="flex min-w-0 items-center gap-2">
                       <code className="min-w-0 flex-1 truncate rounded-md bg-muted-surface px-2 py-1.5 text-xs" title={ov.inbox_dir}>{ov.inbox_dir}</code>
-                      <Button variant="outline" size="sm" onClick={() => void api.openFolder(ov.inbox_dir).catch((e) => toast.error(String(e)))}>
+                      {!isMobile && <Button variant="outline" size="sm" onClick={() => void api.openFolder(ov.inbox_dir).catch((e) => toast.error(String(e)))}>
                         <FolderOpen data-icon="inline-start" />
                         {t("打开")}
-                      </Button>
+                      </Button>}
                     </div>
                     <FieldDescription>
                       {t("按发送的设备分文件夹，重名的自动加编号，不会覆盖。配对过的设备、你连过的设备发来的直接收；别的设备发来要你点同意。")}
                     </FieldDescription>
                   </Field>
+                  {/* 拖文件进终端、命令行工具 p2pcli：手机上都没有 */}
+                  {!isMobile && <>
                   <Field>
                     <FieldLabel>{t("发文件")}</FieldLabel>
                     <FieldDescription>
@@ -430,6 +442,7 @@ export function SettingsPage({
                       )}
                     </div>
                   </Field>
+                  </>}
                 </FieldGroup>
               </Tabs.Panel>
               <Tabs.Panel id="agents">

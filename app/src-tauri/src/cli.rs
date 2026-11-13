@@ -31,6 +31,7 @@ fn bundled() -> Option<PathBuf> {
 }
 
 /// 正式安装的软件才自动装；开发时从 target 目录跑，不去动终端里的 p2pcli
+#[cfg(desktop)]
 pub fn auto_install(data_dir: &Path) {
     if cfg!(debug_assertions) || bundled().is_none() {
         return;

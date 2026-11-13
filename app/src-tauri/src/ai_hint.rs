@@ -177,6 +177,7 @@ pub fn remove(targets: &[Target]) -> Vec<String> {
 }
 
 /// 软件启动时调用：自动安装开着就装或更新。开发版不去动开发者自己的 AI 配置，和命令行工具的自动安装一样
+#[cfg(desktop)]
 pub fn auto_install(enabled: bool) {
     if cfg!(debug_assertions) || !enabled {
         return;

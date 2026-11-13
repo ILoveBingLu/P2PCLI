@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-p2pcli-core.workspace = true
+p2pcli-core = { workspace = true, features = ["host"] }
 iroh.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

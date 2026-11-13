@@ -4,7 +4,7 @@ fn main() {
         Some(format!("binaries/psmux-{target}.exe"))
     } else if target.contains("apple-darwin") {
         Some(format!("binaries/tmux-{target}"))
-    } else if target.contains("linux") {
+    } else if target.contains("linux") && !target.contains("android") {
         Some(format!("binaries/p2pcli-tmux-{target}"))
     } else {
         None

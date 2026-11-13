@@ -1,0 +1,45 @@
+# 推到 main 和提合并请求时，检查桌面和手机两种配置都能编过：
+# 桌面（core 带 host，能被别人连）和手机（关掉 host，只当连接的一方）。
+# 手机这份除了在电脑上关掉开关检查，还真的按 Android ARM64 编：core 完整编一次，app 检查一遍。
+# 用 GitHub Ubuntu 机器自带的 NDK；API 24 和 Tauri 默认支持的最低版本一致。
+# 有警告也算失败：关掉开关以后没人用的代码只会以警告的形式冒出来。
+name: 检查
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    name: 桌面和手机两种配置
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 Android 编译目标，配好 NDK 的编译器
+        run: |
+          rustup target add aarch64-linux-android
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: core 桌面配置
+        run: cargo check --locked -p p2pcli-core --all-targets
+
+      - name: core 手机配置（在电脑上检查）
+        run: cargo check --locked -p p2pcli-core --all-targets --no-default-features
+
+      - name: core 手机配置（按 Android ARM64 编译）
+        run: cargo build --locked -p p2pcli-core --no-default-features --target aarch64-linux-android
+
+      - name: app（按 Android ARM64 检查）
+        run: |
+          # 只查 Rust，不编界面：打包时要嵌进去的界面目录在就行
+          mkdir -p app/dist && touch app/dist/index.html
+          cargo check --locked -p p2pcli-app --target aarch64-linux-android

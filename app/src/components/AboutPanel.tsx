@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { progressText, type useUpdater } from "./useUpdater";
 import { t } from "@/i18n";
+import { isMobile } from "@/lib/platform";
 
 /** 项目主页，和后端 links.rs 里的 REPO_URL 一致；后端只认这个地址和它下面的页面 */
 const REPO_URL = "https://github.com/ILoveBingLu/P2PCLI";
@@ -119,7 +120,8 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
         </div>
       </section>
 
-      <section className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
+      {/* 手机上的更新走应用商店 */}
+      {!isMobile && <section className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="text-sm font-medium">{t("软件更新")}</span>
@@ -145,7 +147,7 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
         {updater.update?.notes && !updater.installing && (
           <p className="whitespace-pre-line border-t border-border pt-2 text-xs text-muted-foreground">{updater.update.notes}</p>
         )}
-      </section>
+      </section>}
 
       {/* 版权上面两行：软件框架、服务端，各自用乘号连接并居中 */}
       <div className="flex flex-col items-center gap-2.5 text-center">

@@ -19,13 +19,25 @@ use crate::PROTO_VERSION;
 use crate::collaboration::{Store, model::{Reply, Request}};
 use crate::files::Files;
 use crate::identity::DeviceInfo;
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_data, write_json, write_msg};
+use crate::proto::{COLLABORATION_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
+#[cfg(feature = "host")]
+use crate::proto::{AGENT_MESSAGE_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, write_data};
+#[cfg(feature = "host")]
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
 use crate::store::{TrustStore, write_private};
 
+/// 本机能回应对面的哪些能力。手机端（关掉 host）不开终端、不让对面碰本机的文件和程序，只剩 AI 协作消息
+fn serves(capability: &str) -> bool {
+    #[cfg(feature = "host")]
+    return matches!(capability, COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2 | REMOTE_LSP_V1 | PORT_FORWARD_V1 | GIT_V1);
+    #[cfg(not(feature = "host"))]
+    return capability == COLLABORATION_V1;
+}
+
 /// 远程编辑传文件内容时每帧的大小，低于单帧上限
+#[cfg(feature = "host")]
 const EDIT_CHUNK: usize = 256 * 1024;
 
 /// 弹窗最多等多久
@@ -441,6 +453,11 @@ impl Host {
         if v != PROTO_VERSION {
             return reject(conn, &mut send, RejectCode::Version).await;
         }
+        // 手机端（关掉 host）只当连接的一方：不查密码、不弹窗，直接回绝
+        if !cfg!(feature = "host") {
+            info!(remote = %remote.fmt_short(), "本机只能连别人，拒绝被连接");
+            return reject(conn, &mut send, RejectCode::ControllerOnly).await;
+        }
         let collaboration = capabilities.iter().any(|c| c == COLLABORATION_V1);
 
         let trusted = self.trust.contains(&remote);
@@ -511,8 +528,7 @@ impl Host {
                 version: me.version,
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
-                capabilities: capabilities.iter().filter(|capability|
-                    matches!(capability.as_str(), COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2 | REMOTE_LSP_V1 | PORT_FORWARD_V1 | GIT_V1)).cloned().collect(),
+                capabilities: capabilities.iter().filter(|capability| serves(capability)).cloned().collect(),
             },
         )
         .await?;
@@ -579,42 +595,52 @@ impl Host {
                     let reply = self.collaborate(owner.clone(), request).await?;
                     write_msg(&mut send, &Msg::CollabReply { reply }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ChooseAgentOption { session_id, approval_id, option_id } => {
                     self.terminals.choose_agent_option(&owner, &session_id, &approval_id, option_id).await?;
                     write_msg(&mut send, &Msg::AgentOptionChosen).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::SendAgentMessage { session_id, kind, request_id, text } => {
                     self.terminals.send_agent_message(&owner, &session_id, &kind, &request_id, &text).await?;
                     write_msg(&mut send, &Msg::AgentMessageSent).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ListInstalledAgents { refresh } => {
                     let agents = self.terminals.installed_agents(refresh).await?;
                     write_msg(&mut send, &Msg::InstalledAgents { agents }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::LaunchAgent { session_id, kind, allow_bypass } => {
                     self.terminals.launch_agent(&owner, &session_id, &kind, allow_bypass).await?;
                     write_msg(&mut send, &Msg::AgentLaunched).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ListTerminals => {
                     let sessions = self.terminals.list(&owner).await?;
                     write_msg(&mut send, &Msg::Terminals { sessions }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::EndTerminal { session_id } => {
                     self.terminals.end(&owner, &session_id).await?;
                     write_msg(&mut send, &Msg::TerminalEnded).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ListDir { path } => {
                     let listing = crate::dirs::list(&path).await?;
                     write_msg(&mut send, &Msg::DirListing { listing }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ChangeDir { session_id, path } => {
                     self.terminals.change_dir(&owner, &session_id, &path).await?;
                     write_msg(&mut send, &Msg::DirChanged).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ListEntries { path } => {
                     let listing = crate::remote_fs::list_entries(&path).await?;
                     write_msg(&mut send, &Msg::Entries { listing }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ReadFile { path, head } => {
                     let (meta, text) = if head {
                         crate::remote_ops::read_head(&path).await?
@@ -628,6 +654,7 @@ impl Host {
                         write_data(&mut send, chunk).await?;
                     }
                 }
+                #[cfg(feature = "host")]
                 Msg::Edit { request } => {
                     // 改动类的操作记一笔，便于被连方事后查；搜索、轮询这类只读的不记
                     if matches!(request, crate::remote_ops::EditRequest::CreateFile { .. } | crate::remote_ops::EditRequest::CreateDir { .. }
@@ -638,6 +665,7 @@ impl Host {
                     let reply = crate::remote_ops::handle(request).await?;
                     write_msg(&mut send, &Msg::EditDone { reply }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::WriteFile { path, size, bom, expected, force } => {
                     if size > crate::remote_fs::MAX_SAVE_BYTES { bail!("内容太大，最多保存 16 MB"); }
                     let mut body = Vec::with_capacity(size as usize);
@@ -653,21 +681,25 @@ impl Host {
                     debug!(session, path = %meta.path, "远程编辑：保存");
                     write_msg(&mut send, &Msg::FileSaved { meta }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::LspStart { language, file, root } => {
                     info!(session, %language, "对面在编辑器里启动了本机的语言服务");
                     crate::lsp::serve(recv, &mut send, &language, &file, &root).await?;
                     debug!(session, %language, "语言服务已结束");
                 }
+                #[cfg(feature = "host")]
                 Msg::ListPorts => {
                     let ports = crate::ports::listening().await?;
                     write_msg(&mut send, &Msg::Ports { ports }).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::ForwardPort { port } => {
                     let tcp = crate::ports::connect_local(port).await?;
                     debug!(session, port, "对面通过端口转发连了本机的端口");
                     write_msg(&mut send, &Msg::PortOpened).await?;
                     crate::ports::pipe(tcp, tokio::io::join(&mut recv, &mut send)).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::Exec { command, cwd, timeout_secs } => {
                     info!(session, bytes = command.len(), "对面要在本机跑一条命令");
                     debug!(session, %command, "远程执行");
@@ -690,6 +722,7 @@ impl Host {
                     info!(session, "对面要把文件推到本机指定目录");
                     self.files()?.serve_put(&peer, &mut send, &mut recv, dest).await?;
                 }
+                #[cfg(feature = "host")]
                 Msg::Open { cols, rows, session_id, persistent } => {
                     let attachment = if persistent {
                         Some(self.terminals.attach(&owner, session_id.as_deref(), cols, rows).await?)
@@ -718,6 +751,7 @@ impl Host {
         let _ = send.finish();
     }
 
+    #[cfg(feature = "host")]
     fn bump_terminals(&self, session: u64, delta: i32) {
         if let Some(e) = self.sessions.lock().unwrap().get_mut(&session) {
             e.summary.terminals = (e.summary.terminals as i32 + delta).max(0) as u32;

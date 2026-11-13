@@ -4,6 +4,7 @@ mod ai_hint;
 mod cli;
 mod links;
 mod permissions;
+#[cfg(desktop)]
 mod update;
 mod logging;
 
@@ -26,7 +27,9 @@ use p2pcli_core::presence::DeviceStatus;
 use p2pcli_core::store::{RecentDevice, TrustedDevice};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
@@ -42,6 +45,10 @@ const NEARBY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_s
 /// installed builds (Contents/MacOS on macOS). It is selected at package time.
 /// 软件版本（tauri.conf.json 里的），启动时记下，连接时告诉对方
 static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 手机端调到桌面专用功能时的回复
+#[cfg(mobile)]
+const MOBILE_UNSUPPORTED: &str = "手机上暂不支持这个功能";
 
 fn bundled_session_program() -> std::io::Result<Option<PathBuf>> {
     #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -145,6 +152,8 @@ impl HostDelegate for UiDelegate {
         // 要在把窗口带到前面之前看：用户正看着软件就只弹窗；没在看（在别的软件里、窗口最小化或藏在托盘）才发系统通知
         let in_use = window_in_use(&self.app);
         show_main(&self.app);
+        // 任务栏、程序坞里闪一下；手机上没有
+        #[cfg(desktop)]
         if let Some(w) = self.app.get_webview_window("main") {
             let _ = w.request_user_attention(Some(tauri::UserAttentionType::Critical));
         }
@@ -193,6 +202,8 @@ impl HostDelegate for UiDelegate {
         let (tx, rx) = oneshot::channel();
         self.pending_files.lock().unwrap().insert(req.id, tx);
         show_main(&self.app);
+        // 任务栏、程序坞里闪一下；手机上没有
+        #[cfg(desktop)]
         if let Some(w) = self.app.get_webview_window("main") {
             let _ = w.request_user_attention(Some(tauri::UserAttentionType::Critical));
         }
@@ -482,15 +493,30 @@ fn refresh_password(state: State<'_, AppState>) -> String {
     state.node().host.regenerate_password()
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn check_update(app: AppHandle, state: State<'_, AppState>) -> Result<Option<update::UpdateView>, String> {
     let proxy = state.settings.lock().unwrap().proxy.clone();
     update::check(&app, proxy).await
 }
 
+/// 手机上的更新走应用商店，软件自己不查
+#[cfg(mobile)]
+#[tauri::command]
+async fn check_update() -> Result<Option<()>, String> {
+    Ok(None)
+}
+
+#[cfg(desktop)]
 #[tauri::command]
 async fn install_update(app: AppHandle, progress: Channel<update::UpdateProgress>) -> Result<(), String> {
     update::install(&app, progress).await
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+async fn install_update() -> Result<(), String> {
+    Err(MOBILE_UNSUPPORTED.into())
 }
 
 #[tauri::command]
@@ -529,6 +555,62 @@ fn transfers(state: State<'_, AppState>) -> Vec<Transfer> {
     state.node().files.transfers()
 }
 
+/// 手机上选好要发的文件：界面把文件内容整个传过来（文件名放在 x-file-name 头里，URL 编码），
+/// 先存进缓存目录，返回存好的路径，再像普通文件一样发。安卓的系统选择框给的是 content:// 地址，
+/// 不是文件路径，发文件那一套直接用不了
+#[cfg(mobile)]
+#[tauri::command]
+fn stage_file(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("文件内容不对".into());
+    };
+    let name = request.headers().get("x-file-name")
+        .and_then(|v| v.to_str().ok())
+        .and_then(percent_decode)
+        .ok_or("没有文件名")?;
+    // 只要最后一段，不让文件名带着目录跑到缓存目录外面去
+    let name = Path::new(&name).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty() && *n != "." && *n != "..")
+        .ok_or("文件名不对")?.to_string();
+    // 每个文件一个子目录：同名的文件各放各的，发过去还是原来的名字
+    let dir = outgoing_dir(&app)?.join(format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| format!("存不下这个文件：{e}"))?;
+    Ok(path.display().to_string())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn stage_file() -> Result<String, String> {
+    Err("桌面端直接按路径发文件".into())
+}
+
+/// 手机上等着发的文件放在这；每次启动清空，发完的不会一直占地方
+#[cfg(mobile)]
+fn outgoing_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_cache_dir().map_err(|e| e.to_string())?.join("outgoing"))
+}
+
+/// 解开 encodeURIComponent 编出来的文件名
+#[cfg(mobile)]
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// 弹系统的选择框选要发的文件或文件夹，没选返回空
 #[tauri::command]
 async fn pick_paths(app: AppHandle, folders: bool) -> Result<Vec<String>, String> {
@@ -538,7 +620,11 @@ async fn pick_paths(app: AppHandle, folders: bool) -> Result<Vec<String>, String
     let done = move |picked: Option<Vec<FilePath>>| {
         let _ = tx.send(picked.unwrap_or_default());
     };
+    #[cfg(desktop)]
     if folders { dialog.pick_folders(done) } else { dialog.pick_files(done) }
+    // 手机的系统选择框不能选文件夹
+    #[cfg(mobile)]
+    if folders { return Err(MOBILE_UNSUPPORTED.into()) } else { dialog.pick_files(done) }
     let picked = rx.await.map_err(|e| e.to_string())?;
     Ok(picked.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect())
 }
@@ -932,6 +1018,7 @@ struct EditorBootstrap {
 }
 
 /// 编辑器窗口按设备开，同一台设备只开一个
+#[cfg(desktop)]
 fn editor_label(endpoint_id: &str) -> String {
     let id: String = endpoint_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
     format!("editor-{id}")
@@ -939,6 +1026,14 @@ fn editor_label(endpoint_id: &str) -> String {
 
 /// 打开（或叫到前面）某台设备的代码编辑器窗口。initial_root 只在新开窗口时用；
 /// request 是要它做的事（终端里点了文件、目录选择里点了“在编辑器中打开”）
+#[cfg(mobile)]
+#[tauri::command]
+fn open_editor_window() -> Result<(), String> {
+    // 手机上只有一个窗口，编辑器以后做成整页
+    Err(MOBILE_UNSUPPORTED.into())
+}
+
+#[cfg(desktop)]
 #[tauri::command]
 fn open_editor_window(app: AppHandle, state: State<'_, AppState>, endpoint_id: String, device_name: String, initial_root: Option<String>, request: Option<EditorRequest>) -> Result<(), String> {
     let label = editor_label(&endpoint_id);
@@ -1115,6 +1210,7 @@ async fn installed_agents(state: State<'_, AppState>, conn_id: u64, refresh: boo
 
 #[tauri::command]
 async fn local_installed_agents(state: State<'_, AppState>, refresh: bool) -> Result<Vec<p2pcli_core::launchers::InstalledAgent>, String> {
+    // 手机上没有命令行 AI，core 那边直接回空列表
     state.node().host.terminals.installed_agents(refresh).await.map_err(|e| format!("{e:#}"))
 }
 
@@ -1326,7 +1422,7 @@ async fn save_settings(
         proxy: s.proxy.clone(),
         relays: effective_relay(&s).map(|r| r.split(',').map(|u| u.trim().to_string()).collect()).unwrap_or_default(),
         lan: true,
-        lan_visible: !s.lan_hidden,
+        lan_visible: cfg!(desktop) && !s.lan_hidden,
         agent_commands: s.agent_commands.clone(),
         app_version: APP_VERSION.get().cloned(),
         ..Default::default()
@@ -1375,6 +1471,7 @@ fn selftest_report(path: String, report: serde_json::Value) -> Result<(), String
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
+        #[cfg(desktop)]
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
@@ -1401,15 +1498,25 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_window_controls::init());
 
-    let app = builder
+    // 单实例和自动更新只有桌面端有：手机系统自己保证只开一份，更新走应用商店
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::PendingUpdate::default());
+
+    // 手机：链接交给系统浏览器打开；扫桌面端显示的二维码连接
+    #[cfg(mobile)]
+    let builder = builder
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_barcode_scanner::init());
+
+    let app = builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(update::PendingUpdate::default())
         .setup(|app| {
             // 数据目录可以用环境变量指定，方便一台机器上开两份做测试
             let data_dir = match std::env::var_os("P2PCLI_DATA_DIR") {
@@ -1418,6 +1525,12 @@ pub fn run() {
             };
             std::fs::create_dir_all(&data_dir)?;
             init_logging(&data_dir);
+            #[cfg(mobile)]
+            {
+                links::init(app.handle());
+                // 上次没发完或者发完留下的暂存文件
+                if let Ok(dir) = outgoing_dir(app.handle()) { let _ = std::fs::remove_dir_all(dir); }
+            }
             let _ = APP_VERSION.set(app.package_info().version.to_string());
             info!(pid = std::process::id(), version = env!("CARGO_PKG_VERSION"),
                 development = cfg!(debug_assertions), executable = ?std::env::current_exe(), "应用进程启动（新一次运行）");
@@ -1437,7 +1550,8 @@ pub fn run() {
                     .map(|r| r.split(',').map(|u| u.trim().to_string()).collect())
                     .unwrap_or_default(),
                 lan: true,
-                lan_visible: !settings.lan_hidden,
+                // 手机不在局域网里显示自己：它不能被连，显示出来别人点了也连不上
+                lan_visible: cfg!(desktop) && !settings.lan_hidden,
                 agent_commands: settings.agent_commands.clone(),
                 app_version: APP_VERSION.get().cloned(),
                 ..Default::default()
@@ -1460,7 +1574,8 @@ pub fn run() {
                 local_conn: AtomicU64::new(0),
             });
 
-            // 本机自己也是一台能开终端的设备：建一条常驻连接，不走网络
+            // 本机自己也是一台能开终端的设备：建一条常驻连接，不走网络。手机上没有本机终端，local_conn 留 0
+            #[cfg(desktop)]
             {
                 let state = app.state::<AppState>();
                 let local = tauri::async_runtime::block_on(state.node().local_remote());
@@ -1469,6 +1584,7 @@ pub fn run() {
                 state.local_conn.store(conn_id, Ordering::Relaxed);
             }
 
+            #[cfg(desktop)]
             update::auto_install_for_test(app.handle());
 
             // 本机控制口：终端里的 p2pcli 通过它让软件发文件、列设备
@@ -1477,11 +1593,14 @@ pub fn run() {
             if let Err(e) = tauri::async_runtime::block_on(p2pcli_core::control::serve(&data_dir, source)) {
                 warn!("本机控制口没起来，命令行 p2pcli 用不了：{e:#}");
             }
-            let dir = data_dir.clone();
-            std::thread::spawn(move || cli::auto_install(&dir));
-            // 给本机的 AI 装 p2pcli 使用说明，它们新开的会话就知道怎么用
-            let hint_on = !app.state::<AppState>().settings.lock().unwrap().ai_hint_off;
-            std::thread::spawn(move || ai_hint::auto_install(hint_on));
+            // 装命令行 p2pcli、给本机的 AI 装使用说明，它们新开的会话就知道怎么用。手机上没有终端和命令行 AI
+            #[cfg(desktop)]
+            {
+                let dir = data_dir.clone();
+                std::thread::spawn(move || cli::auto_install(&dir));
+                let hint_on = !app.state::<AppState>().settings.lock().unwrap().ai_hint_off;
+                std::thread::spawn(move || ai_hint::auto_install(hint_on));
+            }
 
             // 传输进度：有变化就推给界面
             let handle = app.handle().clone();
@@ -1545,6 +1664,9 @@ pub fn run() {
                     .build()?;
             }
 
+            // 托盘图标：只有桌面端有
+            #[cfg(desktop)]
+            {
             let show = MenuItem::with_id(app, "show", "显示 P2PCLI", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -1571,6 +1693,7 @@ pub fn run() {
             }
             if let Err(e) = tray.build(app) {
                 warn!("托盘图标创建失败：{e}");
+            }
             }
             Ok(())
         })
@@ -1616,6 +1739,7 @@ pub fn run() {
             send_files,
             transfers,
             pick_paths,
+            stage_file,
             reveal_path,
             open_folder,
             cli_status,

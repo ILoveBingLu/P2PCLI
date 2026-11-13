@@ -11,7 +11,7 @@ name = "p2pcli"
 path = "src/main.rs"
 
 [dependencies]
-p2pcli-core.workspace = true
+p2pcli-core = { workspace = true, features = ["host"] }
 tokio.workspace = true
 anyhow.workspace = true
 serde.workspace = true

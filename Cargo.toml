@@ -13,7 +13,8 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-p2pcli-core = { path = "crates/core" }
+# 默认不开 host（手机端只当连接的一方）；要被连的成员自己写 features = ["host"]
+p2pcli-core = { path = "crates/core", default-features = false }
 # 选路接口标着不稳定，锁死版本，升级时要重看 path.rs
 iroh = { version = "=1.4.1", features = ["unstable-custom-transports", "unstable-net-report"] }
 tokio = { version = "1", features = ["full"] }

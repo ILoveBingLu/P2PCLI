@@ -40,6 +40,8 @@ pub enum RejectCode {
     /// 密码错太多次，暂时锁住
     Locked,
     Version,
+    /// 对方是手机：只能连别人，不能被连接。老版本认不出这个原因，只会报对方回了意外的消息
+    ControllerOnly,
 }
 
 impl RejectCode {
@@ -51,6 +53,7 @@ impl RejectCode {
             RejectCode::Timeout => "对方没有响应连接请求",
             RejectCode::Locked => "密码错误次数太多，请稍后再试",
             RejectCode::Version => "两边软件版本不兼容，请更新",
+            RejectCode::ControllerOnly => "对方是手机，只能用来连别的设备，不能被连接",
         }
     }
 }

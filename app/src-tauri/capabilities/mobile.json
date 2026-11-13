@@ -1,0 +1,9 @@
+{
+  "identifier": "mobile",
+  "description": "手机端主窗口另外要的权限：扫桌面端显示的二维码连接",
+  "platforms": ["android", "iOS"],
+  "windows": ["main"],
+  "permissions": [
+    "barcode-scanner:default"
+  ]
+}

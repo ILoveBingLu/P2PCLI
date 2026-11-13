@@ -7,7 +7,7 @@ license.workspace = true
 # 开发和跨机测试用，不随软件发给用户
 
 [dependencies]
-p2pcli-core.workspace = true
+p2pcli-core = { workspace = true, features = ["host"] }
 iroh.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
