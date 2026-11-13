@@ -116,9 +116,13 @@ jobs:
 
       - name: 装 Rust、XcodeGen、Metal 工具链
         run: |
-          command -v rustup >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.cargo/bin/rustup" target add aarch64-apple-ios
+          # 打包机一般自带 Rust；没有才装
+          if ! command -v rustup >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            export PATH="$HOME/.cargo/bin:$PATH"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup target add aarch64-apple-ios
           brew install xcodegen
           # 终端控件 SwiftTerm 带 Metal 着色器
           xcodebuild -downloadComponent MetalToolchain
