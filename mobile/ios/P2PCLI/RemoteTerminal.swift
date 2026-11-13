@@ -147,6 +147,9 @@ final class RemoteTerminal: Identifiable {
 
     func focus() { _ = view.becomeFirstResponder() }
 
+    /// 收起键盘
+    func unfocus() { _ = view.resignFirstResponder() }
+
     /// 关掉手机上的这个终端；对方电脑上的会话接着跑
     func close() {
         handle?.detach()

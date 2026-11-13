@@ -1173,5 +1173,14 @@
   "这张图片里没找到二维码": "No QR code found in this image",
   "“文件” App › 我的 iPhone › P2PCLI › Inbox": "Files app › On My iPhone › P2PCLI › Inbox",
   "在“文件”里打开": "Open in Files",
-  "选择工作目录": "Choose working directory"
+  "选择工作目录": "Choose working directory",
+  "AI 面板": "AI panel",
+  "键盘": "Keyboard",
+  "点这里打字": "Tap here to type",
+  "键盘会出现在下半屏，终端留在上面": "The keyboard opens on the lower half; the terminal stays on top",
+  "中断": "Interrupt",
+  "切换模式": "Switch mode",
+  "回车": "Enter",
+  "给 {{name}} 写指令": "Write to {{name}}",
+  "下半屏用法": "Lower half"
 }
