@@ -6,6 +6,7 @@ import { t } from '../common/I18n';
 import { AgentView, ApprovalChoice, SessionView } from '../common/Model';
 import { pathText, sessionTitles } from '../common/Format';
 import { AgentStateLabel, SessionTile } from '../common/Widgets';
+import { AgentBar, DirPicker } from './AgentBar';
 
 /** 网页（终端）发回来的消息 */
 interface WebMsg {
@@ -37,6 +38,7 @@ export struct TerminalPage {
   @Local draft: string = '';
   @Local showKeys: boolean = false;
   @Local showSwitch: boolean = false;
+  @Local showDir: boolean = false;
   private controller: webview.WebviewController = new webview.WebviewController();
   private ports: webview.WebMessagePort[] = [];
   private timer: number = -1;
@@ -58,6 +60,11 @@ export struct TerminalPage {
 
   term(): TermModel | undefined {
     return this.core.term(this.termKey);
+  }
+
+  session(): SessionView | null {
+    const term = this.term();
+    return term !== undefined ? (this.sessions().find((s: SessionView) => s.id === term.sessionId) ?? null) : null;
   }
 
   sessions(): SessionView[] {
@@ -175,12 +182,21 @@ export struct TerminalPage {
           .layoutWeight(1)
           .width('100%')
           .backgroundColor(Hero.terminal)
+          // 三个面板各挂一个组件：同一个组件挂两个 bindSheet，后挂的会把前一个顶掉
+          .bindSheet(this.showDir!!, this.dirSheet(), {
+            height: SheetSize.LARGE,
+            backgroundColor: Hero.surface,
+            title: { title: t('选择工作目录') }
+          })
 
           this.approvalPanel()
           if (this.composing && this.term()?.state === 'open') {
             this.composeBar()
           }
           if (this.term()?.state === 'open') {
+            AgentBar({ term: this.term() as TermModel, session: this.session(), onPickDir: () => {
+              this.showDir = true;
+            } })
             this.keyBar()
           }
         }
@@ -221,6 +237,15 @@ export struct TerminalPage {
         this.showSwitch = false;
       }
     })
+  }
+
+  @Builder
+  dirSheet() {
+    if (this.term() !== undefined) {
+      DirPicker({ term: this.term() as TermModel, session: this.session(), onDone: () => {
+        this.showDir = false;
+      } })
+    }
   }
 
   @Builder

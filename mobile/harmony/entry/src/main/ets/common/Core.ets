@@ -8,8 +8,8 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import p2pcli from 'libp2pcli.so';
 import { P2p, Terminal } from 'libp2pcli.so';
 import {
-  AppEvent, Connected, DeviceView, FileRequestView, MobileConfig, MobileSettings, Overview, PairInfo, parseError,
-  SessionView, SettingsView, TransferView
+  AppEvent, Connected, DeviceView, DirListingView, FileRequestView, InstalledAgentView, MobileConfig, MobileSettings,
+  Overview, PairInfo, parseError, SessionView, SettingsView, TransferView
 } from './Model';
 import { t, tr } from './I18n';
 
@@ -21,6 +21,19 @@ export class SessionsState {
   constructor(list: SessionView[] | null, error: string | null) {
     this.list = list;
     this.error = error;
+  }
+}
+
+/** 一条连接上检测到的命令行 AI；list 为空是还没检测完 */
+export class AgentsState {
+  list: InstalledAgentView[] | null = null;
+  error: string | null = null;
+  scanning: boolean = false;
+
+  constructor(list: InstalledAgentView[] | null, error: string | null, scanning: boolean) {
+    this.list = list;
+    this.error = error;
+    this.scanning = scanning;
   }
 }
 
@@ -206,6 +219,8 @@ export class Core {
   @Trace conns: Map<string, Connected> = new Map();
   /** 各设备的会话列表：公钥 → 列表 */
   @Trace sessions: Map<string, SessionsState> = new Map();
+  /** 各连接上装了的 AI：连接编号 → 检测结果（被控端还有五分钟缓存） */
+  @Trace agents: Map<number, AgentsState> = new Map();
   @Trace terms: TermModel[] = [];
   /** 正在连哪台设备（公钥）；手输设备码时是 "new" */
   @Trace connecting: string | null = null;
@@ -569,6 +584,69 @@ export class Core {
     p.chooseAgentOption(term.connId, term.sessionId, approvalId, optionId).catch((e: Error) => {
       this.notify(tr(parseError(e).detail));
     }).finally(() => this.loadSessions(term.endpointId));
+  }
+
+  // ---- 启动 AI、选工作目录 ----
+
+  private setAgents(connId: number, state: AgentsState): void {
+    const next = new Map<number, AgentsState>(this.agents);
+    next.set(connId, state);
+    this.agents = next;
+  }
+
+  /** 检测对方电脑上装了哪些命令行 AI；已经有结果时不重复检测，refresh 时强制重新检测 */
+  scanAgents(connId: number, refresh: boolean): void {
+    const p = this.p2p;
+    if (p === undefined) {
+      return;
+    }
+    const current = this.agents.get(connId);
+    if (current !== undefined && (current.scanning || (!refresh && current.list !== null))) {
+      return;
+    }
+    const old = current?.list ?? null;
+    this.setAgents(connId, new AgentsState(old, null, true));
+    p.installedAgents(connId, refresh).then((text: string) => {
+      this.setAgents(connId, new AgentsState(JSON.parse(text) as InstalledAgentView[], null, false));
+    }).catch((e: Error) => {
+      const detail = tr(parseError(e).detail);
+      this.setAgents(connId, new AgentsState(old, detail, false));
+      if (refresh) {
+        this.notify(t('检测 AI 失败：{{e}}', ['e', detail]));
+      }
+    });
+  }
+
+  /** 在终端的会话里启动一个 AI（会话要停在空闲的命令提示符） */
+  launchAgent(term: TermModel, kind: string, allowBypass: boolean): Promise<void> {
+    const p = this.p2p;
+    if (p === undefined || term.sessionId === null) {
+      return Promise.resolve();
+    }
+    return p.launchAgent(term.connId, term.sessionId, kind, allowBypass).catch((e: Error) => {
+      this.notify(t('启动失败：{{e}}', ['e', tr(parseError(e).detail)]));
+    }).finally(() => this.loadSessions(term.endpointId));
+  }
+
+  /** 对方电脑上某个目录的子目录；路径空着是用户目录 */
+  listDir(connId: number, path: string): Promise<DirListingView> {
+    const p = this.p2p;
+    if (p === undefined) {
+      return Promise.reject(new Error(t('连接已断开')));
+    }
+    return p.listDir(connId, path).then((text: string) => JSON.parse(text) as DirListingView);
+  }
+
+  /** 让终端的会话切到这个目录；出错时返回原因 */
+  changeDir(term: TermModel, path: string): Promise<string | null> {
+    const p = this.p2p;
+    if (p === undefined || term.sessionId === null) {
+      return Promise.resolve(t('连接已断开'));
+    }
+    return p.changeDir(term.connId, term.sessionId, path).then((): string | null => {
+      this.loadSessions(term.endpointId);
+      return null;
+    }).catch((e: Error): string | null => tr(parseError(e).detail));
   }
 
   copyText(text: string): void {
