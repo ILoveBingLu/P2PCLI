@@ -10,7 +10,7 @@ struct TerminalScreen: View {
     @State private var panel: Panel?
 
     enum Panel: String, Identifiable {
-        case keys, switcher
+        case keys, switcher, dir
         var id: String { rawValue }
     }
 
@@ -67,6 +67,7 @@ struct TerminalScreen: View {
             switch p {
             case .keys: KeysPanel(term: term).presentationDetents([.height(320)])
             case .switcher: SwitchPanel(current: term).presentationDetents([.medium, .large])
+            case .dir: DirPickerSheet(term: term, session: sessions(term).first { $0.id == term.sessionId })
             }
         }
         // AI 状态隔几秒刷新一次
@@ -140,10 +141,15 @@ struct TerminalScreen: View {
             .padding(.horizontal, 8).padding(.top, 8)
         }
         if live {
+            AgentBar(term: term, session: sessions(term).first { $0.id == term.sessionId }) { panel = .dir }
             KeyBar(term: term, composing: composing,
                    onCompose: { composing.toggle() },
                    onMore: { panel = .keys })
         }
+    }
+
+    private func sessions(_ term: RemoteTerminal) -> [SessionView] {
+        core.sessions[term.endpointId]?.list ?? []
     }
 
     private func send(_ term: RemoteTerminal) {
