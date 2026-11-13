@@ -21,6 +21,8 @@ import kotlinx.coroutines.withContext
 import uniffi.p2pcli_mobile.AppListener
 import uniffi.p2pcli_mobile.Connected
 import uniffi.p2pcli_mobile.DeviceView
+import uniffi.p2pcli_mobile.DirListingView
+import uniffi.p2pcli_mobile.InstalledAgentView
 import uniffi.p2pcli_mobile.FileRequestView
 import uniffi.p2pcli_mobile.MobileConfig
 import uniffi.p2pcli_mobile.MobileSettings
@@ -53,6 +55,9 @@ sealed interface StartState {
 /** 一台设备的会话列表；list 为空是还没读到 */
 data class SessionsState(val list: List<SessionView>? = null, val error: String? = null)
 
+/** 一条连接上检测到的命令行 AI；list 为空是还没检测完 */
+data class AgentsState(val list: List<InstalledAgentView>? = null, val error: String? = null, val scanning: Boolean = false)
+
 /** 连接面板：新连一台设备，或者连某台设备时要填密码 */
 data class ConnectPrompt(
     /** 已知是哪台设备（从列表里点的）；手输设备码时是空 */
@@ -79,6 +84,8 @@ class Core(private val app: Application) : AppListener {
     val conns = MutableStateFlow<Map<String, Connected>>(emptyMap())
     /** 各设备的会话列表：公钥 → 列表 */
     val sessions = MutableStateFlow<Map<String, SessionsState>>(emptyMap())
+    /** 各连接上装了的 AI：连接编号 → 检测结果（被控端还有五分钟缓存） */
+    val agents = MutableStateFlow<Map<ULong, AgentsState>>(emptyMap())
     val terms = MutableStateFlow<List<RemoteTerminal>>(emptyList())
     val stack = MutableStateFlow<List<Screen>>(listOf(Screen.Home))
     /** 正在连哪台设备（公钥）；手输设备码时是 "new" */
@@ -379,6 +386,62 @@ class Core(private val app: Application) : AppListener {
                 notices.tryEmit(errorText(e))
             } finally {
                 loadSessions(term.endpointId)
+            }
+        }
+    }
+
+    // ---- 启动 AI、选工作目录 ----
+
+    /** 检测对方电脑上装了哪些命令行 AI；已经有结果时不重复检测，refresh 时强制重新检测 */
+    fun scanAgents(connId: ULong, refresh: Boolean = false) {
+        val p = p2p ?: return
+        val current = agents.value[connId]
+        if (current?.scanning == true || (!refresh && current?.list != null)) return
+        agents.update { it + (connId to (current ?: AgentsState()).copy(scanning = true, error = null)) }
+        scope.launch {
+            try {
+                val list = p.installedAgents(connId, refresh)
+                agents.update { it + (connId to AgentsState(list, null, false)) }
+            } catch (e: Exception) {
+                agents.update { it + (connId to AgentsState(current?.list, errorText(e), false)) }
+                if (refresh) notices.tryEmit(t("检测 AI 失败：{{e}}", "e" to errorText(e)))
+            }
+        }
+    }
+
+    /** 在终端的会话里启动一个 AI（会话要停在空闲的命令提示符） */
+    fun launchAgent(term: RemoteTerminal, kind: String, allowBypass: Boolean, onDone: () -> Unit) {
+        val p = p2p ?: return onDone()
+        val session = term.sessionId ?: return onDone()
+        scope.launch {
+            try {
+                p.launchAgent(term.connId, session, kind, allowBypass)
+            } catch (e: Exception) {
+                notices.tryEmit(t("启动失败：{{e}}", "e" to errorText(e)))
+            } finally {
+                onDone()
+                loadSessions(term.endpointId)
+            }
+        }
+    }
+
+    /** 对方电脑上某个目录的子目录；路径空着是用户目录。出错时抛出 */
+    suspend fun listDir(connId: ULong, path: String): DirListingView {
+        val p = p2p ?: error(t("连接已断开"))
+        return p.listDir(connId, path)
+    }
+
+    /** 让终端的会话切到这个目录；出错时把原因交给 onDone */
+    fun changeDir(term: RemoteTerminal, path: String, onDone: (String?) -> Unit) {
+        val p = p2p ?: return onDone(t("连接已断开"))
+        val session = term.sessionId ?: return onDone(t("连接已断开"))
+        scope.launch {
+            try {
+                p.changeDir(term.connId, session, path)
+                loadSessions(term.endpointId)
+                onDone(null)
+            } catch (e: Exception) {
+                onDone(errorText(e))
             }
         }
     }

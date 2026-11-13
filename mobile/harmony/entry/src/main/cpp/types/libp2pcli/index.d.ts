@@ -14,6 +14,10 @@ export class P2p {
   listSessions(connId: number): Promise<string>;
   endSession(connId: number, sessionId: string): Promise<void>;
   chooseAgentOption(connId: number, sessionId: string, approvalId: string, optionId: number): Promise<void>;
+  installedAgents(connId: number, refresh: boolean): Promise<string>;
+  launchAgent(connId: number, sessionId: string, kind: string, allowBypass: boolean): Promise<void>;
+  listDir(connId: number, path: string): Promise<string>;
+  changeDir(connId: number, sessionId: string, path: string): Promise<void>;
   openTerminal(connId: number, sessionId: string | null, cols: number, rows: number,
     onOutput: (data: Uint8Array) => void, onClosed: (info: string) => void): Promise<Terminal>;
   sendFiles(target: string, paths: string[]): string;

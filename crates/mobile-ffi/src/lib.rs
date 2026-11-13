@@ -331,6 +331,39 @@ impl P2p {
         .await
     }
 
+    /// 对方电脑上装了哪些命令行 AI（Claude Code、Codex 这些）。被控端有五分钟缓存，refresh 为真时重新检测
+    pub async fn installed_agents(&self, conn_id: u64, refresh: bool) -> Result<Vec<InstalledAgentView>, P2pError> {
+        let remote = self.remote(conn_id)?;
+        self.run(async move {
+            let agents = remote.installed_agents(refresh).await.map_err(P2pError::from_anyhow)?;
+            Ok(agents.into_iter().map(|a| InstalledAgentView { kind: a.kind, name: a.name }).collect())
+        })
+        .await
+    }
+
+    /// 在会话里启动一个命令行 AI。会话要停在空闲的命令提示符；
+    /// allow_bypass 为真时 Claude Code 带上允许之后切换成全部放行的参数
+    pub async fn launch_agent(&self, conn_id: u64, session_id: String, kind: String, allow_bypass: bool) -> Result<(), P2pError> {
+        let remote = self.remote(conn_id)?;
+        self.run(async move { remote.launch_agent(session_id, kind, allow_bypass).await.map_err(P2pError::from_anyhow) }).await
+    }
+
+    /// 对方电脑上某个目录的子目录（选工作目录用）；路径空着是用户目录
+    pub async fn list_dir(&self, conn_id: u64, path: String) -> Result<DirListingView, P2pError> {
+        let remote = self.remote(conn_id)?;
+        self.run(async move {
+            let l = remote.list_dir(path).await.map_err(P2pError::from_anyhow)?;
+            Ok(DirListingView { path: l.path, parent: l.parent, dirs: l.dirs, truncated: l.truncated })
+        })
+        .await
+    }
+
+    /// 让会话切到这个目录（终端 cd 过去）。会话要停在空闲的命令提示符
+    pub async fn change_dir(&self, conn_id: u64, session_id: String, path: String) -> Result<(), P2pError> {
+        let remote = self.remote(conn_id)?;
+        self.run(async move { remote.change_dir(session_id, path).await.map_err(P2pError::from_anyhow) }).await
+    }
+
     /// 打开终端：session_id 为空是新建一个后台会话，不为空是接上已有的。
     /// 输出从 listener 送来；返回的 Terminal 用来打字、改尺寸、关掉
     pub async fn open_terminal(

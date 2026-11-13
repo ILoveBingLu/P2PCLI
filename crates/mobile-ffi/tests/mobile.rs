@@ -149,6 +149,26 @@ fn connect_open_terminal_and_end_session() {
     assert_eq!(term2.session_id(), session);
     term2.write(b"echo back-$((1+1))\r".to_vec());
     again.wait_for("back-2");
+
+    // 选工作目录：列出上一级能看到它，等终端回到空闲提示符再切过去，pwd 看到新目录
+    let workdir = temp_dir("ffi-workdir");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let name = workdir.file_name().unwrap().to_string_lossy().to_string();
+    let listing = wait(phone.list_dir(conn.conn_id, workdir.parent().unwrap().display().to_string())).expect("应该列出目录");
+    assert!(listing.dirs.iter().any(|d| *d == name), "目录列表：{listing:?}");
+    for _ in 0..50 {
+        let ready = wait(phone.list_sessions(conn.conn_id)).unwrap().iter().any(|s| s.id == session && s.shell_ready);
+        if ready {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    wait(phone.change_dir(conn.conn_id, session.clone(), workdir.display().to_string())).expect("应该切过去");
+    term2.write(b"pwd\r".to_vec());
+    again.wait_for(&name);
+
+    // 检测装了的 AI：能调通就行（测试机上可能一个都没装）
+    assert!(wait(phone.installed_agents(conn.conn_id, true)).is_ok());
     term2.detach();
 
     // 结束会话，列表里没了

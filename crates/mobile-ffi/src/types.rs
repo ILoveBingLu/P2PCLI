@@ -197,6 +197,29 @@ impl SessionView {
     }
 }
 
+/// 对方电脑上装了的一个命令行 AI：点一下在会话里启动
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct InstalledAgentView {
+    /// claude、codex 这种稳定标识，按它配图标
+    pub kind: String,
+    pub name: String,
+}
+
+/// 对方电脑上一个目录里的子目录（选工作目录用）
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DirListingView {
+    /// 实际列出的目录（绝对路径）
+    pub path: String,
+    /// 上一级；已经是根目录时没有
+    pub parent: Option<String>,
+    /// 子目录名，按名字排好，点开头的隐藏目录放后面
+    pub dirs: Vec<String>,
+    /// 子目录太多只回了一部分
+    pub truncated: bool,
+}
+
 /// 设备列表里的一台设备：连接历史、后台探测、局域网发现、备注合在一起，界面直接显示
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]

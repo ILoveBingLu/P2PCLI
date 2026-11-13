@@ -244,6 +244,7 @@ fun TerminalScreen(core: Core, key: Int) {
         }
 
         if (live) {
+            AgentBar(core, term, list.firstOrNull { it.id == term.sessionId }) { panel = "dir" }
             KeyBar(
                 ctrl = ctrl, composing = composing,
                 onCtrl = { ctrl = !ctrl }, onCompose = { composing = !composing },
@@ -308,6 +309,7 @@ fun TerminalScreen(core: Core, key: Int) {
             Spacer(Modifier.height(8.dp))
             SheetAction(Lucide.Plus, t("在 {{name}} 上新建终端", "name" to deviceName(term.endpointId)), { panel = null; core.openTerminal(term.endpointId, null) })
         }
+        "dir" -> DirPickerSheet(core, term, list.firstOrNull { it.id == term.sessionId }) { panel = null }
         "more" -> HeroSheet(onDismiss = { panel = null }, title = title) {
             SheetAction(Lucide.Plus, t("新建终端"), { panel = null; core.openTerminal(term.endpointId, null) })
             SheetAction(Lucide.X, t("关闭这个终端"), { panel = null; core.closeTerminal(term.key) }, description = t("会话在对方电脑上接着运行，之后还能打开"))

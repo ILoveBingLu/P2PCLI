@@ -152,6 +152,30 @@ impl P2p {
             .map_err(err)
     }
 
+    /// 对方电脑上装了哪些命令行 AI：InstalledAgentView 数组的 JSON
+    #[napi]
+    pub async fn installed_agents(&self, conn_id: i64, refresh: bool) -> Result<String> {
+        self.inner.installed_agents(conn_id as u64, refresh).await.map(|v| to_json(&v)).map_err(err)
+    }
+
+    /// 在会话里启动一个命令行 AI（会话要停在空闲的命令提示符）
+    #[napi]
+    pub async fn launch_agent(&self, conn_id: i64, session_id: String, kind: String, allow_bypass: bool) -> Result<()> {
+        self.inner.launch_agent(conn_id as u64, session_id, kind, allow_bypass).await.map_err(err)
+    }
+
+    /// 对方电脑上某个目录的子目录：DirListingView 的 JSON；路径空着是用户目录
+    #[napi]
+    pub async fn list_dir(&self, conn_id: i64, path: String) -> Result<String> {
+        self.inner.list_dir(conn_id as u64, path).await.map(|v| to_json(&v)).map_err(err)
+    }
+
+    /// 让会话切到这个目录（会话要停在空闲的命令提示符）
+    #[napi]
+    pub async fn change_dir(&self, conn_id: i64, session_id: String, path: String) -> Result<()> {
+        self.inner.change_dir(conn_id as u64, session_id, path).await.map_err(err)
+    }
+
     /// 打开终端：session_id 为空是新建。on_output 收终端输出的原始字节；
     /// on_closed 收 {"exit_code":…,"reason":…}（程序退出时有 exit_code，连接断了时有 reason）
     #[napi]
