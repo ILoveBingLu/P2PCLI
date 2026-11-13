@@ -13,7 +13,9 @@ if (-not $deveco) {
 if (-not $deveco -or -not (Test-Path "$deveco\tools\hvigor\bin\hvigorw.js")) { throw "找不到 DevEco Studio：设环境变量 DEVECO_HOME 指向它的安装目录" }
 $env:DEVECO_SDK_HOME = "$deveco\sdk"
 $node = "$deveco\tools\node\node.exe"
-$env:PATH = "$deveco\tools\node;$env:PATH"
+# 打 HAP 的最后一步要 Java：用 DevEco Studio 自带的
+$env:JAVA_HOME = "$deveco\jbr"
+$env:PATH = "$deveco\tools\node;$deveco\jbr\bin;$env:PATH"
 
 # hvigor 不认带中文（等非英文字符）的工程路径，目录链接、subst 虚拟盘符也绕不开（它会找到真实路径）：
 # 代码要放在纯英文的路径下，DevEco Studio 里打开也一样
