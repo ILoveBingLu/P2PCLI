@@ -91,7 +91,7 @@ fun TerminalScreen(core: Core, key: Int) {
     val view = remember { TerminalCanvasView(context, modifiers) }
     var selecting by remember { mutableStateOf(false) }
     view.onSelectionChanged = { selecting = it }
-    val copy = {
+    val copy: () -> Unit = {
         val text = view.selectedText()
         if (text != null) {
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -100,7 +100,7 @@ fun TerminalScreen(core: Core, key: Int) {
         }
         view.clearSelection()
     }
-    val paste = {
+    val paste: () -> Unit = {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }?.let { term.paste(it) }
     }
