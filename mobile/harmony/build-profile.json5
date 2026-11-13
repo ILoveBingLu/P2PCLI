@@ -1,4 +1,5 @@
 // 鸿蒙工程：用 DevEco Studio 打开 mobile/harmony。打包前先跑 build-rust.ps1 编 Rust 库（libp2pcli.so）。
+// 代码要放在纯英文的路径下：鸿蒙的打包工具（hvigor）不认带中文的路径。
 // 签名：DevEco Studio → File → Project Structure → Signing Configs → 勾选 Automatically generate signature（要登录华为账号），
 // 生成的签名配置写在本机，不进仓库
 {
