@@ -1,0 +1,2 @@
+"NSCameraUsageDescription" = "扫描电脑上 P2PCLI 显示的二维码，连接那台电脑。";
+"NSLocalNetworkUsageDescription" = "找到同一个网络里运行 P2PCLI 的电脑，直接连接它们。";
