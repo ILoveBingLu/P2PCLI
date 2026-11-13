@@ -49,6 +49,16 @@ test("release manifest embeds signatures and hashes every published artifact", a
   }
 });
 
+test("phone packages are optional and hashed only when present", async (t) => {
+  const dir = await fixture(t);
+  const [apk, ipa] = mobileArtifacts(version);
+  await rm(path.join(dir, apk));
+  await prepareRelease({ ...options, dir });
+  const sums = await readFile(path.join(dir, "SHA256SUMS"), "utf8");
+  assert.ok(!sums.includes(apk));
+  assert.ok(sums.includes(`  ${ipa}`));
+});
+
 test("a missing Linux package or signature prevents publication", async (t) => {
   const dir = await fixture(t);
   const file = path.join(dir, `P2PCLI_${version}_arm64.rpm.sig`);
