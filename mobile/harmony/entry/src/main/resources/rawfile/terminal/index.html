@@ -1,0 +1,75 @@
+<!doctype html>
+<!-- 鸿蒙版的终端：ArkWeb 里跑 xterm.js（和桌面同一个），和 ArkTS 经消息端口通信：
+     ArkTS → 网页：ArrayBuffer 是终端输出；字符串是命令 JSON（paste、arrow、copy、focus、font）
+     网页 → ArkTS：JSON 字符串，t 是 in（键盘输入）、size（几列几行）、copy（选中的文字）、ready -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<link rel="stylesheet" href="xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #111114; overflow: hidden; }
+  #t { position: absolute; top: 4px; left: 6px; right: 2px; bottom: 0; }
+  .xterm .xterm-viewport { background-color: #111114 !important; }
+</style>
+</head>
+<body>
+<div id="t"></div>
+<script src="xterm.js"></script>
+<script>
+  const term = new Terminal({
+    fontFamily: 'HarmonyOS Sans Mono, Menlo, monospace',
+    fontSize: 13,
+    scrollback: 5000,
+    allowProposedApi: true,
+    theme: { background: '#111114', foreground: '#E4E4E7', cursor: '#0485F7', selectionBackground: 'rgba(4,133,247,0.4)' },
+  });
+  term.open(document.getElementById('t'));
+  let port = null;
+  const pending = [];
+  const send = (obj) => { const s = JSON.stringify(obj); if (port) port.postMessage(s); else pending.push(s); };
+
+  // 按容器大小算几列几行（和 xterm 的 fit 插件一样的算法）
+  let last = '';
+  function fit() {
+    const dims = term._core._renderService.dimensions;
+    const el = document.getElementById('t');
+    if (!dims.css.cell.width || !dims.css.cell.height) return;
+    const cols = Math.max(2, Math.floor(el.clientWidth / dims.css.cell.width));
+    const rows = Math.max(1, Math.floor(el.clientHeight / dims.css.cell.height));
+    if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+    const key = cols + 'x' + rows;
+    if (key !== last) { last = key; send({ t: 'size', cols, rows }); }
+  }
+  new ResizeObserver(() => fit()).observe(document.getElementById('t'));
+
+  term.onData((d) => send({ t: 'in', d }));
+  term.onBinary((d) => send({ t: 'in', d }));
+
+  function command(c) {
+    if (c.cmd === 'paste') term.paste(c.text);
+    else if (c.cmd === 'arrow') {
+      // 程序开了“应用光标模式”（vim、less 这些）时发的不一样
+      const app = term.modes.applicationCursorKeysMode;
+      send({ t: 'in', d: (app ? '\x1bO' : '\x1b[') + c.dir });
+    } else if (c.cmd === 'copy') { send({ t: 'copy', d: term.getSelection() }); term.clearSelection(); }
+    else if (c.cmd === 'focus') term.focus();
+    else if (c.cmd === 'font') { term.options.fontSize = c.size; fit(); }
+  }
+
+  window.addEventListener('message', (e) => {
+    if (e.data !== 'init' || !e.ports || !e.ports.length) return;
+    port = e.ports[0];
+    port.onmessage = (ev) => {
+      const data = ev.data;
+      if (typeof data === 'string') command(JSON.parse(data));
+      else term.write(new Uint8Array(data));
+    };
+    while (pending.length) port.postMessage(pending.shift());
+    send({ t: 'ready' });
+    last = '';
+    fit();
+  });
+</script>
+</body>
+</html>
