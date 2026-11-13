@@ -83,7 +83,8 @@ fun Root(core: Core) {
             }
             StartState.Ready -> BoxWithConstraints(Modifier.fillMaxSize()) {
                 // 宽屏（折叠屏展开、平板、横屏）左右两栏；窄屏一页一页进
-                val wide = maxWidth >= 700.dp
+                val width = maxWidth
+                val wide = width >= 700.dp
                 SideEffect { core.wide = wide }
                 val sidebarHidden by core.sidebarHidden.collectAsStateWithLifecycle()
                 if (wide) {
@@ -92,7 +93,7 @@ fun Root(core: Core) {
                         val collapse = sidebarHidden && top is Screen.Term
                         AnimatedVisibility(!collapse, enter = expandHorizontally(), exit = shrinkHorizontally()) {
                             Row {
-                                Box(Modifier.width((maxWidth * 0.38f).coerceIn(320.dp, 420.dp)).fillMaxHeight()) {
+                                Box(Modifier.width((width * 0.38f).coerceIn(320.dp, 420.dp)).fillMaxHeight()) {
                                     HomeScreen(core, selected = top)
                                 }
                                 Box(Modifier.width(1.dp).fillMaxHeight().background(Hero.Line))
