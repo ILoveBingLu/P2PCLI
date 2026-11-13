@@ -21,6 +21,19 @@ import { SettingsPage } from './SettingsPage';
 struct Index {
   @Local core: Core = Core.shared;
   @Local i18n: I18n = I18n.shared;
+  /** 面板开关：跟着 core.prompt、core.fileRequest 走，用户下滑关掉时反过来清掉它们 */
+  @Local showConnect: boolean = false;
+  @Local showFileRequest: boolean = false;
+
+  @Monitor('core.prompt')
+  onPrompt(): void {
+    this.showConnect = this.core.prompt !== null;
+  }
+
+  @Monitor('core.fileRequest')
+  onFileRequest(): void {
+    this.showFileRequest = this.core.fileRequest !== null;
+  }
 
   aboutToAppear(): void {
     hilog.info(0x0001, 'p2pcli', 'index: appear');
@@ -101,7 +114,7 @@ struct Index {
       .minContentWidth(360)
       .navDestination(this.pageMap)
       .backgroundColor(Hero.background)
-      .bindSheet(this.core.prompt !== null, this.connectSheet(), {
+      .bindSheet(this.showConnect!!, this.connectSheet(), {
         height: SheetSize.LARGE,
         backgroundColor: Hero.surface,
         title: { title: this.core.prompt?.endpointId ? t('连接 {{name}}', ['name', this.core.prompt?.name ?? t('设备')]) : t('连接新设备') },
@@ -112,7 +125,7 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .bindSheet(this.core.fileRequest !== null, this.fileRequestSheet(), {
+      .bindSheet(this.showFileRequest!!, this.fileRequestSheet(), {
         height: SheetSize.FIT_CONTENT,
         backgroundColor: Hero.surface,
         title: { title: t('{{name}} 想发文件给你', ['name', this.core.fileRequest?.name ?? '']) },
