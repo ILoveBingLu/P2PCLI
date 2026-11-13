@@ -102,11 +102,11 @@ struct Index {
       // 首页是最上层：不要返回箭头
       .hideBackButton(true)
       .menus([
-        { value: t('扫码连接'), icon: $r('app.media.lucide_scan_line_accent'), action: () => this.scan() },
-        { value: t('设置'), icon: $r('app.media.lucide_settings_accent'), action: () => this.core.openSettings() }
+        { value: t('扫码连接'), icon: $r('app.media.menu_scan_line'), action: () => this.scan() },
+        { value: t('设置'), icon: $r('app.media.menu_settings'), action: () => this.core.openSettings() }
       ])
       .toolbarConfiguration([
-        { value: t('连接新设备'), icon: $r('app.media.lucide_plus_accent'), action: () => this.core.newPrompt() }
+        { value: t('连接新设备'), icon: $r('app.media.menu_plus'), action: () => this.core.newPrompt() }
       ])
       .mode(NavigationMode.Auto)
       .navBarWidth(360)

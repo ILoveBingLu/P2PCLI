@@ -199,16 +199,16 @@ export struct TerminalPage {
     }
     .title(this.title())
     .menus([
-      { value: t('开着的终端'), icon: $r('app.media.lucide_square_terminal_accent'), action: () => {
+      { value: t('开着的终端'), icon: $r('app.media.menu_square_terminal'), action: () => {
         this.showSwitch = true;
       } },
-      { value: t('新建终端'), icon: $r('app.media.lucide_plus_accent'), action: () => {
+      { value: t('新建终端'), icon: $r('app.media.menu_plus'), action: () => {
         const term = this.term();
         if (term !== undefined) {
           this.core.openTerminal(term.endpointId, null, true);
         }
       } },
-      { value: t('关闭这个终端'), icon: $r('app.media.lucide_x_accent'), action: () => {
+      { value: t('关闭这个终端'), icon: $r('app.media.menu_x'), action: () => {
         this.core.closeTerminal(this.termKey);
       } }
     ])

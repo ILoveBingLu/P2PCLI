@@ -199,7 +199,7 @@ export struct SettingsPage {
     }
     .title(t('设置'))
     .menus([
-      { value: t('保存'), icon: $r('app.media.lucide_check_accent'), isEnabled: !this.core.savingSettings, action: () => {
+      { value: t('保存'), icon: $r('app.media.menu_check'), isEnabled: !this.core.savingSettings, action: () => {
         const v = this.core.settings;
         if (v !== null && this.dirty(v)) {
           this.core.saveSettings(this.next(v)).then((e: string | null) => {

@@ -6,11 +6,15 @@
   每个图标按用到的颜色各出一份：lucide_<名字>（白）、lucide_<名字>_accent（蓝）、_muted（灰）、_danger（红）、_warning（黄）
 - 系统图标（苹果、Windows、Linux、安卓、鸿蒙）：桌面的 SVG，改成白色
 - 各家 AI 的图标、logo：直接用安卓、iOS 已经渲染好的 PNG
+- 标题栏、工具栏按钮的图标（menu_<名字>.png）：系统给这些位置的 SVG 统一上色时会把封闭的图形填满，
+  所以这几个用 Chrome 渲染成 PNG（系统不给 PNG 上色），线条还是 lucide 的
 - 终端：xterm.js 和样式拷进 rawfile/terminal（和桌面同一个版本）
 """
 import os
 import re
 import shutil
+import subprocess
+import tempfile
 
 REPO = os.getcwd()
 MEDIA = os.path.join(REPO, "mobile/harmony/entry/src/main/resources/base/media")
@@ -24,6 +28,8 @@ LUCIDE = [
 ]
 COLORS = {"": "#FCFCFC", "_accent": "#0485F7", "_muted": "#9F9FA9", "_danger": "#DB3B3E", "_warning": "#F5A524"}
 PLATFORMS = ["apple", "windows", "linux", "android", "harmonyos"]
+MENU = ["scan-line", "settings", "plus", "file-up", "refresh-cw", "square-terminal", "x", "check"]
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
 def num(a, k):
@@ -70,7 +76,7 @@ def lucide_paths(name):
 def main():
     os.makedirs(MEDIA, exist_ok=True)
     for f in os.listdir(MEDIA):
-        if f.startswith(("lucide_", "platform_", "agent_")) or f == "logo.png":
+        if f.startswith(("lucide_", "platform_", "agent_", "menu_")) or f == "logo.png":
             os.remove(os.path.join(MEDIA, f))
     for name in LUCIDE:
         for suffix, color in COLORS.items():
@@ -95,6 +101,19 @@ def main():
             shutil.copy(os.path.join(nodpi, f), os.path.join(MEDIA, f))
     # logo：和 Mac、iOS 同一个液态玻璃图标（iOS 那边由 Icon Composer 渲染好的）
     shutil.copy(os.path.join(REPO, "mobile/ios/P2PCLI/Assets.xcassets/logo.imageset/logo.png"), os.path.join(MEDIA, "logo.png"))
+
+    # 标题栏、工具栏的图标：渲染成 72px 的 PNG（24vp × 3）
+    with tempfile.TemporaryDirectory() as tmp:
+        for name in MENU:
+            src = os.path.join(MEDIA, f"lucide_{name.replace('-', '_')}_accent.svg")
+            page = os.path.join(tmp, "p.html")
+            with open(page, "w") as f:
+                f.write(f'<!doctype html><html><body style="margin:0;background:transparent">'
+                        f'<img src="file://{src}" style="display:block;width:72px;height:72px"></body></html>')
+            subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--default-background-color=00000000",
+                            f"--user-data-dir={tmp}/profile", "--allow-file-access-from-files", "--window-size=72,72",
+                            f"--screenshot={os.path.join(MEDIA, 'menu_' + name.replace('-', '_') + '.png')}", f"file://{page}"],
+                           check=True, capture_output=True)
 
     term = os.path.join(RAW, "terminal")
     os.makedirs(term, exist_ok=True)
