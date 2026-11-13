@@ -84,6 +84,8 @@ struct Index {
       }
       .title(this.brandTitle())
       .titleMode(NavigationTitleMode.Mini)
+      // 首页是最上层：不要返回箭头
+      .hideBackButton(true)
       .menus([
         { value: t('扫码连接'), icon: $r('app.media.lucide_scan_line_accent'), action: () => this.scan() },
         { value: t('设置'), icon: $r('app.media.lucide_settings_accent'), action: () => this.core.openSettings() }
