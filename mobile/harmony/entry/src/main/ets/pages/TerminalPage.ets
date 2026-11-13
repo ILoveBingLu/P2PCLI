@@ -214,8 +214,8 @@ export struct TerminalPage {
       }
     }
     .title(this.title())
-    // 终端的底色延伸到底部手势条下面，按键条仍然停在安全区上方
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+    // 终端的底色延伸到状态栏、手势条下面，标题和按键条仍然在安全区里
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .menus([
       { value: t('开着的终端'), icon: $r('app.media.menu_square_terminal'), action: () => {
         this.showSwitch = true;
