@@ -186,6 +186,15 @@ export struct TerminalPage {
         }
         .width('100%')
         .height('100%')
+        // 两个面板挂在不同的组件上：同一个组件挂两个 bindSheet，后挂的会把前一个顶掉
+        .bindSheet(this.showKeys, this.keysPanel(), {
+          height: SheetSize.FIT_CONTENT,
+          backgroundColor: Hero.surface,
+          title: { title: t('更多按键') },
+          onDisappear: () => {
+            this.showKeys = false;
+          }
+        })
       }
     }
     .title(this.title())
@@ -204,14 +213,6 @@ export struct TerminalPage {
       } }
     ])
     .backgroundColor(Hero.terminal)
-    .bindSheet(this.showKeys, this.keysPanel(), {
-      height: SheetSize.FIT_CONTENT,
-      backgroundColor: Hero.surface,
-      title: { title: t('更多按键') },
-      onDisappear: () => {
-        this.showKeys = false;
-      }
-    })
     .bindSheet(this.showSwitch, this.switchPanel(), {
       height: SheetSize.MEDIUM,
       backgroundColor: Hero.surface,

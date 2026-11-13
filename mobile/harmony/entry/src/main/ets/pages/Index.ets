@@ -79,6 +79,8 @@ struct Index {
 
   build() {
     if (this.core.startState === 'ready') {
+      // 两个面板挂在不同的组件上：同一个组件挂两个 bindSheet，后挂的会把前一个顶掉
+      Stack() {
       Navigation(this.core.stack) {
         this.home()
       }
@@ -107,6 +109,9 @@ struct Index {
           this.core.prompt = null;
         }
       })
+      }
+      .width('100%')
+      .height('100%')
       .bindSheet(this.core.fileRequest !== null, this.fileRequestSheet(), {
         height: SheetSize.FIT_CONTENT,
         backgroundColor: Hero.surface,
