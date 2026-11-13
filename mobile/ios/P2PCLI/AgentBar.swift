@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// 终端下面一行：最左边是当前工作目录（点开选目录），后面是对方电脑上装了的命令行 AI，点一下在这个会话里启动。
-/// 和桌面一样，终端停在空闲的命令提示符、还没在跑 AI 时才能启动；跑着程序时目录只能看不能切
+/// 和桌面一样，终端停在空闲的命令提示符、还没在跑 AI 时才能启动；跑着程序时目录只能看不能切。
+/// 这个会话里在跑 AI 时整行不显示
 struct AgentBar: View {
     @Environment(Core.self) private var core
     let term: RemoteTerminal
@@ -13,6 +14,10 @@ struct AgentBar: View {
         let state = core.agents[term.connId]
         let idle = session?.shellReady == true && session?.agent == nil
         let path = Format.shortPath(session?.currentPath)
+        if session?.agent == nil { row(state: state, idle: idle, path: path) }
+    }
+
+    private func row(state: AgentsState?, idle: Bool, path: String) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             GlassGroup(spacing: 6) {
                 HStack(spacing: 6) {

@@ -47,7 +47,8 @@ import uniffi.p2pcli_mobile.SessionView
 
 /**
  * 终端下面一行：最左边是当前工作目录（点开选目录），后面是对方电脑上装了的命令行 AI，点一下在这个会话里启动。
- * 和桌面一样，终端停在空闲的命令提示符、还没在跑 AI 时才能启动；跑着程序时目录只能看不能切
+ * 和桌面一样，终端停在空闲的命令提示符、还没在跑 AI 时才能启动；跑着程序时目录只能看不能切。
+ * 这个会话里在跑 AI 时整行不显示
  */
 @Composable
 fun AgentBar(core: Core, term: RemoteTerminal, session: SessionView?, onPickDir: () -> Unit) {
@@ -63,6 +64,8 @@ fun AgentBar(core: Core, term: RemoteTerminal, session: SessionView?, onPickDir:
             core.launchAgent(term, a.kind, bypass) { launching = null }
         }
     }
+
+    if (session?.agent != null) return
 
     Row(
         Modifier.fillMaxWidth().background(Hero.Background).horizontalScroll(rememberScrollState())

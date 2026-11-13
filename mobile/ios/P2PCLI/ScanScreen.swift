@@ -18,8 +18,8 @@ struct ScanScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if canScan {
+                // 只放相机画面：系统扫码控件认到码时自己会框出来，不另画取景框
                 Scanner { handle($0) }.ignoresSafeArea()
-                Viewfinder()
             } else {
                 VStack(spacing: 12) {
                     Icon(permission == .denied || permission == .restricted ? "triangle-alert" : "scan-line", size: 44)
@@ -120,32 +120,6 @@ struct ScanScreen: View {
         request.symbologies = [.qr]
         try? VNImageRequestHandler(ciImage: image).perform([request])
         return (request.results ?? []).compactMap(\.payloadStringValue)
-    }
-}
-
-/// 取景框：四个角加一条上下扫的线
-private struct Viewfinder: View {
-    @State private var down = false
-
-    var body: some View {
-        GeometryReader { geo in
-            let side = min(geo.size.width, geo.size.height) * 0.62
-            ZStack {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(.white.opacity(0.9), style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [side * 0.18, side * 0.82],
-                                                                     dashPhase: side * 0.09))
-                Capsule()
-                    .fill(LinearGradient(colors: [.clear, Hero.accent, .clear], startPoint: .leading, endPoint: .trailing))
-                    .frame(height: 3)
-                    .padding(.horizontal, 18)
-                    .offset(y: down ? side / 2 - 24 : -side / 2 + 24)
-                    .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: down)
-            }
-            .frame(width: side, height: side)
-            .position(x: geo.size.width / 2, y: geo.size.height / 2)
-        }
-        .allowsHitTesting(false)
-        .onAppear { down = true }
     }
 }
 
