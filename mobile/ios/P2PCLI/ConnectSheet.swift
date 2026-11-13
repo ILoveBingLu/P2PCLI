@@ -74,8 +74,6 @@ struct ConnectSheet: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Hero.background)
             .navigationTitle(known ? t("连接 {{name}}", ["name": prompt.name ?? t("设备")]) : t("连接新设备"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
