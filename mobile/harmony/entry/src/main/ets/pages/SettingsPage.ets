@@ -4,6 +4,7 @@ import { Hero } from '../common/Hero';
 import { I18n, t } from '../common/I18n';
 import { MobileSettings, ServerPreset, SettingsView } from '../common/Model';
 import { sectionHeader } from '../common/Widgets';
+import { barGlass } from '../common/Glass';
 
 const REPO_URL = 'https://github.com/ILoveBingLu/P2PCLI';
 
@@ -233,7 +234,7 @@ export struct SettingsPage {
         .width('100%').height('100%').padding({ left: 16, right: 16 }).scrollBar(BarState.Off)
       }
     }
-    .title(t('设置'))
+    .title(t('设置'), { systemMaterial: barGlass() })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .menus([
       { value: t('保存'), icon: $r('app.media.menu_check'), isEnabled: !this.core.savingSettings, action: () => {

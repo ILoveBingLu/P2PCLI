@@ -7,6 +7,7 @@ import { AgentView, ApprovalChoice, SessionView } from '../common/Model';
 import { pathText, sessionTitles } from '../common/Format';
 import { AgentStateLabel, SessionTile } from '../common/Widgets';
 import { AgentBar, DirPicker } from './AgentBar';
+import { barGlass, GlassButton, sheetBackground } from '../common/Glass';
 
 /** 网页（终端）发回来的消息 */
 interface WebMsg {
@@ -185,7 +186,7 @@ export struct TerminalPage {
           // 三个面板各挂一个组件：同一个组件挂两个 bindSheet，后挂的会把前一个顶掉
           .bindSheet(this.showDir!!, this.dirSheet(), {
             height: SheetSize.LARGE,
-            backgroundColor: Hero.surface,
+            backgroundColor: sheetBackground(),
             title: { title: t('选择工作目录') }
           })
 
@@ -205,7 +206,7 @@ export struct TerminalPage {
         // 两个面板挂在不同的组件上：同一个组件挂两个 bindSheet，后挂的会把前一个顶掉
         .bindSheet(this.showKeys, this.keysPanel(), {
           height: SheetSize.FIT_CONTENT,
-          backgroundColor: Hero.surface,
+          backgroundColor: sheetBackground(),
           title: { title: t('更多按键') },
           onDisappear: () => {
             this.showKeys = false;
@@ -213,7 +214,7 @@ export struct TerminalPage {
         })
       }
     }
-    .title(this.title())
+    .title(this.title(), { systemMaterial: barGlass() })
     // 终端的底色延伸到状态栏、手势条下面，标题和按键条仍然在安全区里
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .menus([
@@ -233,7 +234,7 @@ export struct TerminalPage {
     .backgroundColor(Hero.terminal)
     .bindSheet(this.showSwitch, this.switchPanel(), {
       height: SheetSize.MEDIUM,
-      backgroundColor: Hero.surface,
+      backgroundColor: sheetBackground(),
       title: { title: t('开着的终端'), subtitle: this.subtitle() },
       onDisappear: () => {
         this.showSwitch = false;
@@ -354,7 +355,8 @@ export struct TerminalPage {
 
   @Builder
   keyButton(label: string, icon: Resource | null, active: boolean, action: () => void) {
-    Stack() {
+    // 系统按钮承载沉浸光感材质（common/Glass.ets）；按下的 Ctrl、Alt 叠一层蓝
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
       if (icon !== null) {
         Image(icon).width(18).height(18)
       } else {
@@ -362,10 +364,10 @@ export struct TerminalPage {
           .fontColor(active ? Hero.accent : Hero.foreground)
       }
     }
-    .layoutWeight(1).height(40).borderRadius(10)
-    .backgroundColor(active ? '#380485F7' : Hero.tile)
+    .layoutWeight(1).height(40).borderRadius(10).padding(0)
     .accessibilityText(label)
     .onClick(action)
+    .attributeModifier(new GlassButton(active ? '#380485F7' : Hero.tile, active ? '#590485F7' : undefined))
   }
 
   /** “⋯”里不常用的键：按一下就发，面板跟着关上，回到终端 */
