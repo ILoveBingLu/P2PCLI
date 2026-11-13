@@ -188,7 +188,11 @@ export interface TermCommand {
 /** 整个 App 的状态和操作。Rust 那边的接口都在这里调；界面只读这里的状态、调这里的方法 */
 @ObservedV2
 export class Core {
-  static readonly shared: Core = new Core();
+  /** 整个 App 一个。实例在类定义之后才创建（文件末尾）：静态字段里直接 new 的话，
+   *  @ObservedV2 还没套上去，界面感知不到它的变化 */
+  static get shared(): Core {
+    return sharedCore;
+  }
   ctx?: common.UIAbilityContext;
   p2p?: P2p;
   /** 页面：首页是 Navigation 的主页，设备、终端、设置一层层推进去 */
@@ -632,3 +636,5 @@ export class Core {
     });
   }
 }
+
+const sharedCore: Core = new Core();
