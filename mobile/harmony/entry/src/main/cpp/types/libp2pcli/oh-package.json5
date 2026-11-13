@@ -1,0 +1,6 @@
+{
+  "name": "libp2pcli.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "P2PCLI 的 Rust 库（crates/harmony-ffi）"
+}

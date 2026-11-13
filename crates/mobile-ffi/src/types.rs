@@ -11,6 +11,8 @@ use p2pcli_core::proto::{RejectCode, TerminalSession};
 use p2pcli_core::rendezvous::RdvStatus;
 
 /// 牵线服务器的状态：没连上时只能连同一个局域网里的设备
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "state", rename_all = "snake_case"))]
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum ServerState {
     /// 没配牵线服务器
@@ -31,6 +33,8 @@ impl From<RdvStatus> for ServerState {
 }
 
 /// 走的是哪条路：直连（IPv6、IPv4）还是中继
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum PathKind {
     Ipv6,
@@ -52,6 +56,7 @@ impl From<CorePathKind> for PathKind {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct PathView {
     pub kind: PathKind,
@@ -66,6 +71,8 @@ impl From<PathInfo> for PathView {
 }
 
 /// 连接历史里一台设备在不在线（后台探测的结果）
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum Presence {
     /// 还没探测，或者正在探测
@@ -87,6 +94,8 @@ impl From<PresenceState> for Presence {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum AgentState {
     Working,
@@ -95,6 +104,7 @@ pub enum AgentState {
     Idle,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ApprovalChoice {
     pub id: u64,
@@ -102,6 +112,7 @@ pub struct ApprovalChoice {
 }
 
 /// AI 弹出的确认框：选项直接在手机上点，不用到终端里按方向键
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ApprovalView {
     pub id: String,
@@ -110,6 +121,7 @@ pub struct ApprovalView {
 }
 
 /// 会话里认出来的命令行 AI
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct AgentView {
     /// claude、codex 这种稳定标识，按它配图标
@@ -143,6 +155,7 @@ impl From<AgentInfo> for AgentView {
 }
 
 /// 对方电脑上的一个后台会话（tmux），手机关掉终端它也接着跑
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct SessionView {
     pub id: String,
@@ -185,6 +198,7 @@ impl SessionView {
 }
 
 /// 设备列表里的一台设备：连接历史、后台探测、局域网发现、备注合在一起，界面直接显示
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct DeviceView {
     pub endpoint_id: String,
@@ -205,6 +219,7 @@ pub struct DeviceView {
     pub sessions_live: bool,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Overview {
     /// 本机（手机）的名字
@@ -219,6 +234,7 @@ pub struct Overview {
     pub inbox_dir: String,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct NearbyView {
     pub endpoint_id: String,
@@ -234,6 +250,7 @@ impl From<NearbyDevice> for NearbyView {
 }
 
 /// 连上一台设备
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Connected {
     /// 之后开终端、读会话都用这个编号
@@ -246,6 +263,8 @@ pub struct Connected {
     pub path: PathView,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum TransferState {
     Connecting,
@@ -256,6 +275,7 @@ pub enum TransferState {
     Failed,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct TransferView {
     pub id: String,
@@ -297,6 +317,7 @@ impl From<Transfer> for TransferView {
 }
 
 /// 没配对过的设备要发文件给手机，问收不收
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct FileRequestView {
     pub id: u64,
@@ -315,6 +336,8 @@ impl From<FileRequest> for FileRequestView {
 }
 
 /// 连不上的原因：要密码、密码不对时界面弹出填密码，别的提示一下就行
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum RejectReason {
     NeedPassword,

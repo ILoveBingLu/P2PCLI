@@ -4,6 +4,7 @@
 
 use url::Url;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct PairInfo {
     /// 9 位设备码；牵线服务器没连上时没有
