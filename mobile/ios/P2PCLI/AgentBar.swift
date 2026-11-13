@@ -137,17 +137,21 @@ struct DirPickerSheet: View {
     @State private var changing = false
 
     var body: some View {
-        let canChange = session?.shellReady == true && session?.agent == nil
+        // Windows 电脑上在盘的根目录点上一级，是“所有磁盘”这一层（路径是 \），只能选盘进去，不能切过去
+        let atDrives = listing?.path == "\\"
+        let canChange = session?.shellReady == true && session?.agent == nil && !atDrives
         let dirs = (listing?.dirs ?? []).filter { filter.isEmpty || $0.localizedCaseInsensitiveContains(filter) }
         NavigationStack {
             List {
                 Section {
-                    Text(listing?.path ?? session?.currentPath ?? "").font(.system(size: 12.5, design: .monospaced))
+                    Text(atDrives ? t("所有磁盘") : listing?.path ?? session?.currentPath ?? "").font(.system(size: 12.5, design: .monospaced))
                         .foregroundStyle(Hero.muted)
                     if let error {
                         Label { Text(tr(error)) } icon: { Icon("triangle-alert", size: 15) }.foregroundStyle(Hero.danger)
                     }
-                    if !canChange {
+                    if atDrives {
+                        Text(t("先选一个盘")).font(.footnote).foregroundStyle(Hero.muted)
+                    } else if !canChange {
                         Text(session?.agent.map { t("{{name}} 正在运行，退出后才能切换目录", ["name": $0.name]) }
                              ?? t("终端不在空闲提示符，完成当前输入或退出程序后才能切换"))
                             .font(.footnote).foregroundStyle(Hero.warning)

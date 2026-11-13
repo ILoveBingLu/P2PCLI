@@ -1183,5 +1183,7 @@
   "回车": "Enter",
   "给 {{name}} 写指令": "Write to {{name}}",
   "下半屏用法": "Lower half",
-  "收起键盘": "Hide keyboard"
+  "收起键盘": "Hide keyboard",
+  "所有磁盘": "All drives",
+  "先选一个盘": "Choose a drive first"
 }

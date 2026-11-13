@@ -232,6 +232,10 @@ export struct SettingsPage {
           }
         }
         .width('100%').height('100%').padding({ left: 16, right: 16 }).scrollBar(BarState.Off)
+        // 列表延伸到底部手势条下面，内容从手势条后面滚过去，不留一条空的底色；
+        // 末尾多留一段，最后一项能滚到手势条上面
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+        .contentEndOffset(36)
       }
     }
     .title(t('设置'), { systemMaterial: barGlass() })
