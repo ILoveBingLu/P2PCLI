@@ -118,7 +118,7 @@ struct Index {
       .minContentWidth(360)
       .navDestination(this.pageMap)
       .backgroundColor(Hero.background)
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .bindSheet(this.showConnect!!, this.connectSheet(), {
         height: SheetSize.LARGE,
         backgroundColor: Hero.surface,

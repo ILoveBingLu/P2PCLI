@@ -137,8 +137,8 @@ export struct DevicePage {
       .width('100%').height('100%').padding({ left: 16, right: 16 }).scrollBar(BarState.Off)
     }
     .title(this.device()?.remark ?? this.device()?.name ?? this.conn()?.name ?? t('设备'))
-    // 页面背景延伸到底部手势条下面（系统的安全区），不留一条窗口的黑底
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+    // 页面背景延伸到顶部状态栏、底部手势条下面（系统的安全区），不留窗口的黑底
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .menus(this.conn() !== undefined ? [
       { value: t('新建终端'), icon: $r('app.media.menu_plus'), action: () => this.core.openTerminal(this.endpointId, null, true) },
       { value: t('发送文件'), icon: $r('app.media.menu_file_up'), action: () => this.pickFiles() },

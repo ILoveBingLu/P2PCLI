@@ -234,7 +234,7 @@ export struct SettingsPage {
       }
     }
     .title(t('设置'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .menus([
       { value: t('保存'), icon: $r('app.media.menu_check'), isEnabled: !this.core.savingSettings, action: () => {
         const v = this.core.settings;
