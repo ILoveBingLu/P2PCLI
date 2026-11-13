@@ -118,11 +118,11 @@ extension View {
         if #available(iOS 26.0, *) {
             self.toolbar {
                 ToolbarItem(placement: .largeTitle) {
-                    HStack(spacing: 10) {
-                        Image("logo").resizable().frame(width: 36, height: 36).accessibilityHidden(true)
-                        Text("P2PCLI").font(.largeTitle.bold())
+                    // 和按钮同一行：位置不够（iPad、iPhone Duo 展开时的侧栏）时字自动缩小，不压到按钮上
+                    HStack(spacing: 9) {
+                        Image("logo").resizable().frame(width: 32, height: 32).accessibilityHidden(true)
+                        Text("P2PCLI").font(.title.bold()).lineLimit(1).minimumScaleFactor(0.6)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isHeader)
                 }
