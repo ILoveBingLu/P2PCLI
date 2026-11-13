@@ -1,5 +1,7 @@
 package io.github.ilovebinglu.p2pcli.ui
 
+import io.github.ilovebinglu.p2pcli.t
+import io.github.ilovebinglu.p2pcli.tr
 import android.content.ClipboardManager
 import android.content.Context
 import android.view.KeyEvent
@@ -63,7 +65,7 @@ fun TerminalScreen(core: Core, key: Int) {
     val context = LocalContext.current
     val list = sessionsMap[term.endpointId]?.list.orEmpty()
     val agent = if (term.state == RemoteTerminal.State.OPEN) list.firstOrNull { it.id == term.sessionId }?.agent else null
-    val title = term.sessionId?.let { sessionTitles(list)[it] } ?: "新终端"
+    val title = term.sessionId?.let { sessionTitles(list)[it] } ?: t("新终端")
     fun deviceName(endpointId: String) = overview?.devices?.firstOrNull { it.endpointId == endpointId }?.let { it.remark ?: it.name }
         ?: conns[endpointId]?.name ?: ""
     var ctrl by remember { mutableStateOf(false) }
@@ -104,6 +106,12 @@ fun TerminalScreen(core: Core, key: Int) {
                 },
                 onBack = { core.back() },
                 actions = {
+                    // 宽屏：收起、展开左边的列表（和桌面的侧边栏一样）
+                    if (core.wide) {
+                        val hidden by core.sidebarHidden.collectAsStateWithLifecycle()
+                        HeroIconButton(if (hidden) Lucide.PanelLeftOpen else Lucide.PanelLeftClose, if (hidden) t("展开侧边栏") else t("收起侧边栏"),
+                            { core.sidebarHidden.value = !hidden })
+                    }
                     // 开着几个终端：点开切换
                     Box(
                         Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).clickable { panel = "switch" },
@@ -114,7 +122,7 @@ fun TerminalScreen(core: Core, key: Int) {
                             contentAlignment = Alignment.Center,
                         ) { Text("${terms.size}", color = Hero.Foreground, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                     }
-                    HeroIconButton(Lucide.Ellipsis, "更多", { panel = "more" })
+                    HeroIconButton(Lucide.Ellipsis, t("更多"), { panel = "more" })
                 },
             )
         }
@@ -132,7 +140,7 @@ fun TerminalScreen(core: Core, key: Int) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Spinner(18.dp)
-                    Text("正在打开终端…", color = Hero.Muted, fontSize = 14.sp)
+                    Text(t("正在打开终端…"), color = Hero.Muted, fontSize = 14.sp)
                 }
                 RemoteTerminal.State.CLOSED -> Box(
                     Modifier.fillMaxSize().background(Hero.Terminal.copy(alpha = 0.82f)).padding(20.dp),
@@ -143,11 +151,11 @@ fun TerminalScreen(core: Core, key: Int) {
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(if (term.exited) "这个终端已经结束" else "连接已断开", color = Hero.Foreground, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                        Text(if (term.exited) t("这个终端已经结束") else t("连接已断开"), color = Hero.Foreground, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                         term.note?.let { Text(it, color = Hero.Foreground, fontSize = 13.5.sp) }
-                        Text("会话还在对方电脑上运行的话，重新连上就能接着用。", color = Hero.Muted, fontSize = 13.5.sp)
-                        HeroButton(if (term.exited) "新建终端" else "重新连接", { core.reopen(term) }, Modifier.fillMaxWidth())
-                        HeroButton("关闭", { core.closeTerminal(term.key) }, Modifier.fillMaxWidth(), kind = ButtonKind.Ghost)
+                        Text(t("会话还在对方电脑上运行的话，重新连上就能接着用。"), color = Hero.Muted, fontSize = 13.5.sp)
+                        HeroButton(if (term.exited) t("新建终端") else t("重新连接"), { core.reopen(term) }, Modifier.fillMaxWidth())
+                        HeroButton(t("关闭"), { core.closeTerminal(term.key) }, Modifier.fillMaxWidth(), kind = ButtonKind.Ghost)
                     }
                 }
                 else -> {}
@@ -163,7 +171,7 @@ fun TerminalScreen(core: Core, key: Int) {
                         .verticalScroll(rememberScrollState()).padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text("${agent.name} · 等待确认", color = Hero.Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                    Text(t("{{name}} · 等待确认", "name" to agent.name), color = Hero.Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
                     Text(approval.context, color = Hero.Foreground, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
                     approval.options.forEach { opt ->
                         Row(
@@ -197,7 +205,7 @@ fun TerminalScreen(core: Core, key: Int) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 HeroTextField(
-                    draft, { draft = it }, agent?.let { "发给 ${it.name}" } ?: "输入命令，发送后自动回车",
+                    draft, { draft = it }, agent?.let { t("发给 {{name}}", "name" to it.name) } ?: t("输入命令，发送后自动回车"),
                     modifier = Modifier.weight(1f), imeAction = ImeAction.Send, onImeAction = send,
                     singleLine = false, radius = 21.dp, background = Hero.Surface,
                 )
@@ -205,7 +213,7 @@ fun TerminalScreen(core: Core, key: Int) {
                     Modifier.size(44.dp).clip(RoundedCornerShape(22.dp)).background(if (draft.isNotEmpty()) Hero.Accent else Hero.Default)
                         .clickable(enabled = draft.isNotEmpty(), onClick = send),
                     contentAlignment = Alignment.Center,
-                ) { Icon(Lucide.SendHorizontal, "发送", Modifier.size(20.dp), tint = Color.White) }
+                ) { Icon(Lucide.SendHorizontal, t("发送"), Modifier.size(20.dp), tint = Color.White) }
             }
         }
 
@@ -226,35 +234,35 @@ fun TerminalScreen(core: Core, key: Int) {
     }
 
     when (panel) {
-        "switch" -> HeroSheet(onDismiss = { panel = null }, title = "开着的终端") {
-            terms.forEach { t ->
-                val l = sessionsMap[t.endpointId]?.list.orEmpty()
-                val a = l.firstOrNull { it.id == t.sessionId }?.agent?.takeIf { t.state == RemoteTerminal.State.OPEN }
+        "switch" -> HeroSheet(onDismiss = { panel = null }, title = t("开着的终端")) {
+            terms.forEach { other ->
+                val l = sessionsMap[other.endpointId]?.list.orEmpty()
+                val a = l.firstOrNull { it.id == other.sessionId }?.agent?.takeIf { other.state == RemoteTerminal.State.OPEN }
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(16.dp))
-                        .background(if (t.key == key) Hero.AccentSoft.copy(alpha = 0.12f) else Color.Transparent)
-                        .clickable { panel = null; core.openTerminal(t.endpointId, t.sessionId) }
+                        .background(if (other.key == key) Hero.AccentSoft.copy(alpha = 0.12f) else Color.Transparent)
+                        .clickable { panel = null; core.openTerminal(other.endpointId, other.sessionId) }
                         .padding(start = 10.dp, top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Tile(dimmed = t.state == RemoteTerminal.State.CLOSED) {
+                    Tile(dimmed = other.state == RemoteTerminal.State.CLOSED) {
                         if (a != null) AgentIcon(a.kind) else Icon(Lucide.SquareTerminal, null, Modifier.size(20.dp), tint = Hero.Foreground)
                     }
                     Column(Modifier.weight(1f)) {
-                        RowTitle(t.sessionId?.let { sessionTitles(l)[it] } ?: "新终端")
-                        SubText(deviceName(t.endpointId) + if (t.state == RemoteTerminal.State.CLOSED) " · 已断开" else "")
+                        RowTitle(other.sessionId?.let { sessionTitles(l)[it] } ?: t("新终端"))
+                        SubText(deviceName(other.endpointId) + if (other.state == RemoteTerminal.State.CLOSED) " · " + t("已断开") else "")
                     }
                     a?.let { AgentStateLabel(it) }
-                    HeroIconButton(Lucide.X, "关闭", { if (terms.size == 1) panel = null; core.closeTerminal(t.key) }, tint = Hero.Muted)
+                    HeroIconButton(Lucide.X, t("关闭"), { if (terms.size == 1) panel = null; core.closeTerminal(other.key) }, tint = Hero.Muted)
                 }
             }
             Spacer(Modifier.height(8.dp))
-            SheetAction(Lucide.Plus, "在 ${deviceName(term.endpointId)} 上新建终端", { panel = null; core.openTerminal(term.endpointId, null) })
+            SheetAction(Lucide.Plus, t("在 {{name}} 上新建终端", "name" to deviceName(term.endpointId)), { panel = null; core.openTerminal(term.endpointId, null) })
         }
         "more" -> HeroSheet(onDismiss = { panel = null }, title = title) {
-            SheetAction(Lucide.Plus, "新建终端", { panel = null; core.openTerminal(term.endpointId, null) })
-            SheetAction(Lucide.X, "关闭这个终端", { panel = null; core.closeTerminal(term.key) }, description = "会话在对方电脑上接着运行，之后还能打开")
+            SheetAction(Lucide.Plus, t("新建终端"), { panel = null; core.openTerminal(term.endpointId, null) })
+            SheetAction(Lucide.X, t("关闭这个终端"), { panel = null; core.closeTerminal(term.key) }, description = t("会话在对方电脑上接着运行，之后还能打开"))
         }
     }
 }
@@ -277,19 +285,24 @@ private fun KeyBar(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Key("", active = composing, icon = { Icon(Lucide.Keyboard, "输入栏", Modifier.size(20.dp), tint = if (composing) Hero.Accent else Hero.Foreground) }, onClick = onCompose)
+        Key("", active = composing, icon = { Icon(Lucide.Keyboard, t("输入栏"), Modifier.size(20.dp), tint = if (composing) Hero.Accent else Hero.Foreground) }, onClick = onCompose)
         Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Key("Esc") { onBytes("\u001b") }
             Key("Tab") { onBytes("\t") }
             Key("Ctrl", active = ctrl, onClick = onCtrl)
             Key("Alt", active = alt, onClick = onAlt)
             Key("^C") { onBytes("\u0003") }
-            Key("↑") { onKey(KeyEvent.KEYCODE_DPAD_UP) }
-            Key("↓") { onKey(KeyEvent.KEYCODE_DPAD_DOWN) }
-            Key("←") { onKey(KeyEvent.KEYCODE_DPAD_LEFT) }
-            Key("→") { onKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
-            Key("⇧Tab") { onBytes("\u001b[Z") }
-            Key("粘贴", onClick = onPaste)
+            IconKey(Lucide.ArrowUp, "↑") { onKey(KeyEvent.KEYCODE_DPAD_UP) }
+            IconKey(Lucide.ArrowDown, "↓") { onKey(KeyEvent.KEYCODE_DPAD_DOWN) }
+            IconKey(Lucide.ArrowLeft, "←") { onKey(KeyEvent.KEYCODE_DPAD_LEFT) }
+            IconKey(Lucide.ArrowRight, "→") { onKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
+            Key("Tab", icon = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Icon(Lucide.ArrowBigUp, "Shift", Modifier.size(15.dp), tint = Hero.Foreground)
+                    Text("Tab", color = Hero.Foreground, fontFamily = Hero.Mono, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+            }) { onBytes("\u001b[Z") }
+            IconKey(Lucide.ClipboardPaste, t("粘贴"), onClick = onPaste)
             Key("^D") { onBytes("\u0004") }
             Key("^Z") { onBytes("\u001a") }
             Key("^L") { onBytes("\u000c") }
@@ -300,6 +313,12 @@ private fun KeyBar(
             Key("-") { onBytes("-") }
         }
     }
+}
+
+/** 方向键这类：画图标，读屏念 description */
+@Composable
+private fun IconKey(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
+    Key(description, icon = { Icon(icon, description, Modifier.size(18.dp), tint = Hero.Foreground) }, onClick = onClick)
 }
 
 @Composable

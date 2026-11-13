@@ -1,5 +1,7 @@
 package io.github.ilovebinglu.p2pcli.ui
 
+import io.github.ilovebinglu.p2pcli.t
+import io.github.ilovebinglu.p2pcli.tr
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -41,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ilovebinglu.p2pcli.Core
+import io.github.ilovebinglu.p2pcli.I18n
 import uniffi.p2pcli_mobile.MobileSettings
 import uniffi.p2pcli_mobile.SettingsView
 
@@ -56,7 +59,7 @@ fun SettingsScreen(core: Core) {
     val saving by core.savingSettings.collectAsStateWithLifecycle()
     val v = view
     Column(Modifier.fillMaxSize().background(Hero.Background).statusBarsPadding().imePadding()) {
-        NavBar(title = { NavTitle("设置") }, onBack = { core.back() })
+        NavBar(title = { NavTitle(t("设置")) }, onBack = { core.back() })
         if (v == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Spinner() }
             return@Column
@@ -92,14 +95,35 @@ private fun ColumnScope.SettingsForm(core: Core, v: SettingsView, saving: Boolea
     val dirty = next != s
 
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp)) {
-        item { SectionHeader("本机") }
+        item { SectionHeader(t("界面语言")) }
         item {
-            FieldCard("设备名称", "对方电脑上看到的名字，留空用手机型号。") {
+            // 改了马上生效，不用点保存（和桌面一样）
+            Group {
+                val options = listOf(
+                    I18n.Language.SYSTEM to t("跟随系统"),
+                    I18n.Language.CHINESE to "简体中文",
+                    I18n.Language.ENGLISH to "English",
+                )
+                options.forEachIndexed { i, (lang, label) ->
+                    if (i > 0) GroupDivider()
+                    ChoiceRow(
+                        selected = I18n.language == lang,
+                        title = label,
+                        lines = if (lang == I18n.Language.SYSTEM) listOf(t("跟随系统时，中文环境用简体中文，其他环境用英文。")) else emptyList(),
+                        onClick = { I18n.setLanguage(context, lang) },
+                    )
+                }
+            }
+        }
+
+        item { SectionHeader(t("本机")) }
+        item {
+            FieldCard(t("设备名称"), t("对方电脑上看到的名字，留空用手机型号。")) {
                 HeroTextField(name, { name = it; error = null }, v.defaultDeviceName, enabled = !saving)
             }
         }
 
-        item { SectionHeader("牵线服务器") }
+        item { SectionHeader(t("牵线服务器")) }
         item {
             Group {
                 v.serverPresets.forEachIndexed { i, p ->
@@ -107,7 +131,7 @@ private fun ColumnScope.SettingsForm(core: Core, v: SettingsView, saving: Boolea
                     ChoiceRow(
                         selected = !custom && server == p.address,
                         title = p.label,
-                        badge = if (p.address == v.defaultServer) "默认" else null,
+                        badge = if (p.address == v.defaultServer) t("默认") else null,
                         lines = listOf(p.note, p.address),
                         onClick = { custom = false; server = p.address; error = null },
                     )
@@ -115,27 +139,27 @@ private fun ColumnScope.SettingsForm(core: Core, v: SettingsView, saving: Boolea
                 GroupDivider()
                 ChoiceRow(
                     selected = custom,
-                    title = "自定义",
-                    lines = listOf("填自己部署的牵线服务器：公钥@IP或域名:端口 走 UDP，wss://域名 走 WebSocket。"),
+                    title = t("自定义"),
+                    lines = listOf(t("填自己部署的牵线服务器：公钥@IP或域名:端口 走 UDP，wss://域名 走 WebSocket。")),
                     onClick = { custom = true; error = null },
                 )
                 if (custom) {
                     Box(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
-                        HeroTextField(customServer, { customServer = it; error = null }, "公钥@IP:端口 或 wss://域名",
+                        HeroTextField(customServer, { customServer = it; error = null }, t("公钥@IP:端口 或 wss://域名"),
                             keyboardType = KeyboardType.Uri, enabled = !saving)
                     }
                 }
             }
         }
 
-        item { SectionHeader("中继服务器") }
+        item { SectionHeader(t("中继服务器")) }
         item {
-            FieldCard(null, "直连失败时转发加密数据，多个地址用逗号分隔。留空用公共中继。") {
+            FieldCard(null, t("直连失败时转发加密数据，多个地址用逗号分隔。留空用公共中继。")) {
                 HeroTextField(relay, { relay = it; error = null }, "https://relay.example.com", keyboardType = KeyboardType.Uri, enabled = !saving)
             }
         }
 
-        item { SectionHeader("代理") }
+        item { SectionHeader(t("代理")) }
         item {
             Group {
                 Row(
@@ -144,48 +168,45 @@ private fun ColumnScope.SettingsForm(core: Core, v: SettingsView, saving: Boolea
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        RowTitle("使用 HTTP 代理")
-                        SubText("用于 WebSocket 牵线和 HTTP(S) 中继连接，点对点直连不经过代理。", maxLines = 3)
+                        RowTitle(t("使用 HTTP 代理"))
+                        SubText(t("用于 WebSocket 牵线和 HTTP(S) 中继连接，点对点直连不经过代理。"), maxLines = 3)
                     }
                     HeroSwitch(proxyOn)
                 }
                 if (proxyOn) {
                     Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         HeroTextField(proxy, { proxy = it; error = null }, "http://127.0.0.1:7890", keyboardType = KeyboardType.Uri, enabled = !saving)
-                        SubText("填 http:// 开头的地址；暂不支持 SOCKS5 和账号密码认证。", size = 12.5.sp, maxLines = 3)
+                        SubText(t("填 http:// 开头的地址；暂不支持 SOCKS5 和账号密码认证。"), size = 12.5.sp, maxLines = 3)
                     }
                 }
             }
         }
 
-        item { SectionHeader("文件") }
+        item { SectionHeader(t("文件")) }
         item {
-            FieldCard("收到的文件放在", null) {
+            FieldCard(t("收到的文件放在"), null) {
                 Text(v.inboxDir, color = Hero.Foreground, fontFamily = Hero.Mono, fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Hero.Default).padding(10.dp))
             }
         }
 
-        item { SectionHeader("关于") }
+        item { SectionHeader(t("关于")) }
         item {
             Group {
-                InfoRow("版本", v.appVersion ?: "未知")
+                InfoRow(t("版本"), v.appVersion ?: t("未知"))
                 GroupDivider()
-                InfoRow("本机公钥", v.endpointId.take(10) + "…" + v.endpointId.takeLast(6), icon = Lucide.Copy) {
+                InfoRow(t("本机公钥"), v.endpointId.take(10) + "…" + v.endpointId.takeLast(6), icon = Lucide.Copy) {
                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     cm.setPrimaryClip(ClipData.newPlainText("P2PCLI", v.endpointId))
-                    core.notices.tryEmit("公钥已复制")
+                    core.notices.tryEmit(t("公钥已复制"))
                 }
                 GroupDivider()
-                InfoRow("GitHub 项目", "", icon = Lucide.SquareArrowOutUpRight) { open(context, REPO_URL) }
+                InfoRow(t("GitHub 项目"), "", icon = Lucide.SquareArrowOutUpRight) { open(context, REPO_URL) }
                 GroupDivider()
-                InfoRow("反馈问题", "", icon = Lucide.SquareArrowOutUpRight) { open(context, "$REPO_URL/issues") }
+                InfoRow(t("反馈问题"), "", icon = Lucide.SquareArrowOutUpRight) { open(context, "$REPO_URL/issues") }
                 GroupDivider()
-                InfoRow("版本发布", "", icon = Lucide.SquareArrowOutUpRight) { open(context, "$REPO_URL/releases") }
+                InfoRow(t("版本发布"), "", icon = Lucide.SquareArrowOutUpRight) { open(context, "$REPO_URL/releases") }
             }
-        }
-        item {
-            Text("界面语言目前只有简体中文。", color = Hero.Muted, fontSize = 12.5.sp, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
         }
     }
 
@@ -194,9 +215,9 @@ private fun ColumnScope.SettingsForm(core: Core, v: SettingsView, saving: Boolea
             Text(it, color = Hero.Danger, fontSize = 13.5.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
                 .clip(RoundedCornerShape(12.dp)).background(Hero.DangerSoft).padding(horizontal = 14.dp, vertical = 10.dp))
         }
-        Text("保存后马上生效。改了代理或中继会重新连网络，开着的终端会断开，对方电脑上的会话还在。",
+        Text(t("保存后马上生效。改了代理或中继会重新连网络，开着的终端会断开，对方电脑上的会话还在。"),
             color = Hero.Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 10.dp))
-        HeroButton(if (saving) "正在保存…" else "保存", { core.saveSettings(next) { error = it } }, Modifier.fillMaxWidth(),
+        HeroButton(if (saving) t("正在保存…") else t("保存"), { core.saveSettings(next) { error = it } }, Modifier.fillMaxWidth(),
             enabled = dirty && !saving, loading = saving)
     }
 }

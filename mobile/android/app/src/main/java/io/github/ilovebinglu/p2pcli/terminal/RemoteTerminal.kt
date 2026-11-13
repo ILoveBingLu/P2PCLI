@@ -1,5 +1,7 @@
 package io.github.ilovebinglu.p2pcli.terminal
 
+import io.github.ilovebinglu.p2pcli.t
+import io.github.ilovebinglu.p2pcli.tr
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -121,7 +123,7 @@ class RemoteTerminal(
             handle = null
             exited = reason == null
             state = State.CLOSED
-            note = reason ?: exitCode?.let { "终端已结束（退出码 $it）" } ?: "终端已结束"
+            note = reason?.let { tr(it) } ?: exitCode?.let { t("终端视图已结束（退出码 {{code}}）", "code" to it) } ?: t("终端视图已结束")
         }
     }
 
@@ -179,8 +181,8 @@ private object NoopClient : TerminalSessionClient {
 
 /** Rust 那边的错误转成给人看的一句话 */
 fun errorText(e: Throwable): String = when (e) {
-    is uniffi.p2pcli_mobile.P2pException.Rejected -> e.detail
-    is uniffi.p2pcli_mobile.P2pException.Failed -> e.detail
-    is uniffi.p2pcli_mobile.P2pException.Disconnected -> "连接已断开"
+    is uniffi.p2pcli_mobile.P2pException.Rejected -> tr(e.detail)
+    is uniffi.p2pcli_mobile.P2pException.Failed -> tr(e.detail)
+    is uniffi.p2pcli_mobile.P2pException.Disconnected -> t("连接已断开")
     else -> e.message ?: e.toString()
 }

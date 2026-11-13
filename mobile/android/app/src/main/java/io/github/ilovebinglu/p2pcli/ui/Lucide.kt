@@ -55,4 +55,11 @@ object Lucide {
     val Copy: ImageVector by lazy { icon("copy", "M10.0,8.0h10.0a2.0,2.0 0 0 1 2.0,2.0v10.0a2.0,2.0 0 0 1 -2.0,2.0h-10.0a2.0,2.0 0 0 1 -2.0,-2.0v-10.0a2.0,2.0 0 0 1 2.0,-2.0Z", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2") }
     val Check: ImageVector by lazy { icon("check", "M20 6 9 17l-5-5") }
     val Info: ImageVector by lazy { icon("info", "M2.0,12.0a10.0,10.0 0 1,0 20.0,0a10.0,10.0 0 1,0 -20.0,0", "M12 16v-4", "M12 8h.01") }
+    val ArrowLeft: ImageVector by lazy { icon("arrow-left", "m12 19-7-7 7-7", "M19 12H5") }
+    val ArrowRight: ImageVector by lazy { icon("arrow-right", "M5 12h14", "m12 5 7 7-7 7") }
+    val ArrowBigUp: ImageVector by lazy { icon("arrow-big-up", ) }
+    val ClipboardPaste: ImageVector by lazy { icon("clipboard-paste", "M11 14h10", "M16 4h2a2 2 0 0 1 2 2v1.344", "m17 18 4-4-4-4", "M9.0,2.0h6.0a1.0,1.0 0 0 1 1.0,1.0v2.0a1.0,1.0 0 0 1 -1.0,1.0h-6.0a1.0,1.0 0 0 1 -1.0,-1.0v-2.0a1.0,1.0 0 0 1 1.0,-1.0Z") }
+    val PanelLeftClose: ImageVector by lazy { icon("panel-left-close", "M5.0,3.0h14.0a2.0,2.0 0 0 1 2.0,2.0v14.0a2.0,2.0 0 0 1 -2.0,2.0h-14.0a2.0,2.0 0 0 1 -2.0,-2.0v-14.0a2.0,2.0 0 0 1 2.0,-2.0Z", "M9 3v18", "m16 15-3-3 3-3") }
+    val PanelLeftOpen: ImageVector by lazy { icon("panel-left-open", "M5.0,3.0h14.0a2.0,2.0 0 0 1 2.0,2.0v14.0a2.0,2.0 0 0 1 -2.0,2.0h-14.0a2.0,2.0 0 0 1 -2.0,-2.0v-14.0a2.0,2.0 0 0 1 2.0,-2.0Z", "M9 3v18", "m14 9 3 3-3 3") }
+    val MousePointerClick: ImageVector by lazy { icon("mouse-pointer-click", "M14 4.1 12 6", "m5.1 8-2.9-.8", "m6 12-1.9 2", "M7.2 2.2 8 5.1") }
 }

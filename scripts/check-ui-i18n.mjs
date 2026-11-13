@@ -1,4 +1,5 @@
-// Checks that every desktop UI string has matching English and Simplified Chinese copy.
+// Checks that every desktop and Android UI string has matching English and Simplified Chinese copy.
+// 手机原生版（mobile/android）也用这两份翻译：Kotlin 里的 t("…")、tr("…") 一起检查。
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,7 @@ import i18next from "i18next";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const src = path.join(root, "app/src");
+const android = path.join(root, "mobile/android/app/src/main/java");
 const skip = new Set(["preview.tsx", "selftest.ts"]);
 
 function walk(dir, out = []) {
@@ -14,7 +16,7 @@ function walk(dir, out = []) {
     if (ent.isDirectory()) {
       if (ent.name === "i18n") continue;
       walk(p, out);
-    } else if (/\.(ts|tsx)$/.test(ent.name) && !skip.has(ent.name)) out.push(p);
+    } else if (/\.(ts|tsx|kt)$/.test(ent.name) && !skip.has(ent.name)) out.push(p);
   }
   return out;
 }
@@ -63,7 +65,7 @@ const backend = [
 ];
 
 const used = new Set(backend);
-for (const file of walk(src)) {
+for (const file of [...walk(src), ...walk(android)]) {
   for (const key of keysIn(readFileSync(file, "utf8"))) used.add(key);
 }
 

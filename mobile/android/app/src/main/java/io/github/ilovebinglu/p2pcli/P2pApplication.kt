@@ -8,6 +8,7 @@ class P2pApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        I18n.init(this)
         core = Core(this)
         core.start()
     }
