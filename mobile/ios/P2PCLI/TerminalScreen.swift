@@ -1,13 +1,18 @@
 import SwiftUI
 
 /// 一个远程终端：上面是终端，下面是 AI 的确认选项、输入栏、按键条。
-/// iPhone Duo 半折（像笔记本那样立着）时，终端放在折痕上面，按键放在折痕下面
+/// iPhone Duo 半折（像笔记本那样立着）时，终端只占折痕上面；折痕下面是按键条，再往下是键盘或 AI 面板（FoldDeck）
 struct TerminalScreen: View {
     @Environment(Core.self) private var core
     let key: Int
     @State private var composing = false
     @State private var draft = ""
     @State private var panel: Panel?
+    /// 横着的折痕在页面里的位置；不是半折立着时为 nil。量的时候忽略键盘，键盘弹起来也不变
+    @State private var fold: CGRect?
+    /// 半折时下半屏自己选的模式；nil 跟着 AI 走
+    @State private var deck: FoldDeck.Mode?
+    @FocusState private var draftFocused: Bool
 
     enum Panel: String, Identifiable {
         case keys, switcher, dir
@@ -31,19 +36,38 @@ struct TerminalScreen: View {
         var subtitle = core.deviceName(term.endpointId)
         if !live { subtitle += " · " + t("已断开") } else if let path { subtitle += " · " + Format.path(path) }
 
-        return GeometryReader { geo in
-            if let fold = Fold.horizontal(geo) {
-                // 半折立着：终端在折痕上面，按键在折痕下面，折痕那一条不放东西
+        return Group {
+            if let fold {
+                // 半折立着：终端在折痕上面，折痕那一条不放东西，下面是按键条和键盘或 AI 面板。
+                // 键盘弹起来时整页的高度只到键盘顶上：先保终端占满折痕以上，剩下的给按键条，下半屏的面板被键盘盖住
                 VStack(spacing: 0) {
-                    terminalArea(term).frame(height: max(80, fold.minY))
+                    terminalArea(term).frame(minHeight: 80, maxHeight: max(80, fold.minY)).layoutPriority(1)
                     Color.clear.frame(height: fold.height)
-                    VStack(spacing: 0) { controls(term, agent: agent, live: live) }
-                    Spacer(minLength: 0)
+                    VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: true) }
+                    if live {
+                        FoldDeck(term: term, agent: agent, choice: $deck) { compose() }
+                    } else {
+                        Spacer(minLength: 0)
+                    }
                 }
             } else {
                 terminalArea(term)
-                    .heroBottomBar { VStack(spacing: 0) { controls(term, agent: agent, live: live) } }
+                    .heroBottomBar { VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: false) } }
             }
+        }
+        .background {
+            Color.clear
+                .ignoresSafeArea(.keyboard)
+                .onGeometryChange(for: CGRect?.self) { Fold.horizontal($0) } action: { fold = $0 }
+        }
+        // 立起来时终端空闲就直接弹键盘；AI 跑起来自动换成 AI 面板，收起键盘
+        .onChange(of: fold != nil) { _, folded in
+            deck = nil
+            if folded && live && agent == nil { term.focus() }
+        }
+        .onChange(of: agent != nil) { _, running in
+            deck = nil
+            if running && fold != nil && !draftFocused { term.unfocus() }
         }
         // 液态玻璃：栏不要自己的背景，颜色由下面的内容决定。终端的底色铺满整页（包括标题栏、按键条下面），
         // 玻璃按钮直接浮在终端上，不另垫一层
@@ -117,9 +141,9 @@ struct TerminalScreen: View {
     }
 
     @ViewBuilder
-    private func controls(_ term: RemoteTerminal, agent: AgentView?, live: Bool) -> some View {
-        // AI 等你确认：选项直接点，不用到终端里按方向键
-        if let agent, agent.state == .waiting, let approval = agent.approval {
+    private func controls(_ term: RemoteTerminal, agent: AgentView?, live: Bool, folded: Bool) -> some View {
+        // AI 等你确认：选项直接点，不用到终端里按方向键。半折时放在下半屏的 AI 面板里
+        if !folded, let agent, agent.state == .waiting, let approval = agent.approval {
             ApprovalPanel(term: term, agent: agent, approval: approval)
         }
         if composing && live {
@@ -127,6 +151,7 @@ struct TerminalScreen: View {
                 TextField(agent.map { t("发给 {{name}}", ["name": $0.name]) } ?? t("输入命令，发送后自动回车"),
                           text: $draft, axis: .vertical)
                     .lineLimit(1...5)
+                    .focused($draftFocused)
                     .submitLabel(.send)
                     .onSubmit { send(term) }
                     .padding(.horizontal, 14).padding(.vertical, 10)
@@ -150,6 +175,15 @@ struct TerminalScreen: View {
 
     private func sessions(_ term: RemoteTerminal) -> [SessionView] {
         core.sessions[term.endpointId]?.list ?? []
+    }
+
+    /// 打开输入栏并把光标放进去（半折时 AI 面板上的“写指令”）
+    private func compose() {
+        composing = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(50))
+            draftFocused = true
+        }
     }
 
     private func send(_ term: RemoteTerminal) {
@@ -256,11 +290,13 @@ struct KeyButton: View {
 }
 
 /// AI 弹出的确认框：选项直接点
-private struct ApprovalPanel: View {
+struct ApprovalPanel: View {
     @Environment(Core.self) private var core
     let term: RemoteTerminal
     let agent: AgentView
     let approval: ApprovalView
+    /// 放在按键条上面时四周留边；放进半折的 AI 面板时面板自己有边
+    var inset = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -285,7 +321,7 @@ private struct ApprovalPanel: View {
             }
         .padding(10)
         .heroGlass(cornerRadius: 18)
-        .padding(.horizontal, 8).padding(.top, 8)
+        .padding(.horizontal, inset ? 8 : 0).padding(.top, inset ? 8 : 0)
     }
 }
 
