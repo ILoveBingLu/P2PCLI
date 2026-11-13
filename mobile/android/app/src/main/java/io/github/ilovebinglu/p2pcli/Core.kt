@@ -1,5 +1,6 @@
 package io.github.ilovebinglu.p2pcli
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import android.net.Uri
@@ -112,6 +113,7 @@ class Core(private val app: Application) : AppListener {
                     relay = null,
                     proxy = null,
                     appVersion = appVersion(),
+                    platform = if (isHarmonyOs()) "harmonyos" else null,
                 )
                 // 启动要等网络起来，不能在主线程
                 p2p = withContext(Dispatchers.IO) { P2p.start(config, this@Core) }
@@ -443,6 +445,27 @@ class Core(private val app: Application) : AppListener {
     private fun deviceName(): String {
         val name = Settings.Global.getString(app.contentResolver, Settings.Global.DEVICE_NAME)
         return name?.takeIf { it.isNotBlank() } ?: "${Build.MANUFACTURER} ${Build.MODEL}"
+    }
+
+    /**
+     * 鸿蒙手机跑的是安卓包，Rust 那边只知道是 android。华为在鸿蒙上加了 BuildEx.getOsBrand()，
+     * 返回 harmony；另外鸿蒙有 hw_sc.build.platform.version 这个系统属性。两个都查，查到一个就算
+     */
+    @SuppressLint("PrivateApi")
+    private fun isHarmonyOs(): Boolean {
+        val brand = try {
+            Class.forName("com.huawei.system.BuildEx").getMethod("getOsBrand").invoke(null) as? String
+        } catch (_: Throwable) {
+            null
+        }
+        if (brand.equals("harmony", ignoreCase = true)) return true
+        val version = try {
+            Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+                .invoke(null, "hw_sc.build.platform.version") as? String
+        } catch (_: Throwable) {
+            null
+        }
+        return !version.isNullOrBlank()
     }
 
     private fun appVersion(): String? = try {

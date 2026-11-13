@@ -389,6 +389,9 @@ fn platform(p: &str) -> &str {
         "macos" => "macOS",
         "windows" => "Windows",
         "linux" => "Linux",
+        "android" => "Android",
+        "ios" => "iOS",
+        "harmonyos" => "HarmonyOS",
         other => other,
     }
 }

@@ -188,6 +188,7 @@ async fn main() -> Result<()> {
             session_program: None,
             inbox_dir: cli.inbox.clone(),
             app_version: None,
+            platform: None,
             agent_commands: Default::default(),
             file_lanes: None,
             custom_transport: None,

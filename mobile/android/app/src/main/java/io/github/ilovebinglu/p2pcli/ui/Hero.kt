@@ -319,7 +319,7 @@ fun Tile(size: Dp = 42.dp, connected: Boolean = false, dimmed: Boolean = false, 
     }
 }
 
-/** 系统图标（苹果、Windows、Linux），和桌面同一套 */
+/** 系统图标（苹果、Windows、Linux、安卓、鸿蒙），和桌面同一套 */
 @Composable
 fun PlatformTile(platform: String, connected: Boolean = false, size: Dp = 42.dp) {
     Tile(size, connected) {
@@ -327,6 +327,8 @@ fun PlatformTile(platform: String, connected: Boolean = false, size: Dp = 42.dp)
             "macos", "ios" -> R.drawable.ic_platform_apple
             "windows" -> R.drawable.ic_platform_windows
             "linux" -> R.drawable.ic_platform_linux
+            "android" -> R.drawable.ic_platform_android
+            "harmonyos" -> R.drawable.ic_platform_harmonyos
             else -> null
         }
         val iconSize = if (size > 60.dp) 36.dp else 20.dp
