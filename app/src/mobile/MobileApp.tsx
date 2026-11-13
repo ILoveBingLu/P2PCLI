@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowDown, ArrowUp, ChevronLeft } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronLeft, LoaderCircle } from "lucide-react";
 import { api, type FileRequest, type HostEvent, type NearbyDevice, type Overview, type PathInfo, type RecentDevice, type TermStatus, type TerminalSessionSnapshot, type Transfer } from "../api";
 import type { TerminalHandle } from "../TerminalView";
 import { toast, Toaster } from "@/components/ui/toast";
@@ -13,6 +13,8 @@ import { useUpdater } from "../components/useUpdater";
 import { sessionTitles } from "../components/sessionText";
 import { pollConnections } from "../lib/pollConnections";
 import { ConnectSheet } from "./ConnectSheet";
+import { ScanScreen } from "./ScanScreen";
+import type { PairInfo } from "@/lib/pairLink";
 import { DeviceScreen } from "./DeviceScreen";
 import { HomeScreen, type TermRow } from "./HomeScreen";
 import { TerminalScreen, type TermMeta } from "./TerminalScreen";
@@ -40,6 +42,10 @@ export default function MobileApp() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  /** 扫码页开着 */
+  const [scanOpen, setScanOpen] = useState(false);
+  /** 扫码连的设备名：列表里可能还没有它，连接中时在首页顶上显示一张卡片 */
+  const [pendingName, setPendingName] = useState<string | null>(null);
   const [sessionsRev, setSessionsRev] = useState(0);
   const termSeq = useRef(1);
   const handles = useRef(new Map<number, TerminalHandle>());
@@ -208,9 +214,31 @@ export default function MobileApp() {
     setConnecting(device.endpoint_id);
     void connection.connectLan(device);
   };
-  const scanCode = () => {
+  /** 打开扫码页；从连接面板里点的就接着用面板那条返回记录 */
+  const openScan = () => {
+    if (connection.busy) return;
+    setConnectOpen(false);
+    setScanOpen(true);
+    nav.openOverlay(() => setScanOpen(false));
+  };
+  const closeScan = () => {
+    setScanOpen(false);
+    nav.closeOverlay();
+  };
+  const scanned = (pair: PairInfo) => {
+    closeScan();
     intent.current = null;
-    void connection.scanAndConnect();
+    setConnecting(pair.id);
+    setPendingName(pair.name || t("电脑"));
+    void connection.connectPair(pair);
+  };
+  /** 扫码页里点“输入设备码”：换成连接面板 */
+  const scanToManual = () => {
+    setScanOpen(false);
+    connection.setError(null);
+    connection.setLanTarget(null);
+    setConnectOpen(true);
+    nav.openOverlay(() => setConnectOpen(false));
   };
   const scanNearby = async () => {
     if (scanning) return;
@@ -300,7 +328,10 @@ export default function MobileApp() {
 
   const top = nav.top;
   const activeTerm = top.name === "terminal" ? top.key : null;
-  const transfersNode = <Transfers transfers={transfers} />;
+  // 扫码连的设备已经在列表里时，那一行自己会转圈，不用再在顶上放一张卡片
+  const listed = (id: string | null) => !!id && (!!ov?.recent.some((d) => d.endpoint_id === id) || !!ov?.nearby.some((d) => d.endpoint_id === id));
+  const transfersNode = <Transfers transfers={transfers}
+    connectingName={connection.busy && !connectOpen && top.name === "home" && !listed(connecting) ? pendingName : null} />;
 
   return (
     <RemarksProvider snapshot={ov?.remarks}>
@@ -319,7 +350,7 @@ export default function MobileApp() {
             onNearby={openNearby}
             onTerminal={goTerminal}
             onConnectNew={() => showConnect(true)}
-            onScan={scanCode}
+            onScan={openScan}
             onScanNearby={() => void scanNearby()}
             onSettings={() => nav.push({ name: "settings" })}
           />
@@ -388,7 +419,8 @@ export default function MobileApp() {
           />
         )}
       </div>
-      <ConnectSheet open={connectOpen} connection={connection} onClose={() => {
+      {scanOpen && <ScanScreen onResult={scanned} onClose={closeScan} onManual={scanToManual} />}
+      <ConnectSheet open={connectOpen} connection={connection} onScan={openScan} onClose={() => {
         hideConnect();
         // 没连上就关了面板：之前点的设备不再自动接着打开
         if (!connection.busy) intent.current = null;
@@ -410,11 +442,20 @@ export default function MobileApp() {
 }
 
 /** 首页和设备页顶上：正在收发的文件和进度 */
-function Transfers({ transfers }: { transfers: Transfer[] }) {
+function Transfers({ transfers, connectingName }: { transfers: Transfer[]; connectingName: string | null }) {
   const active = transfers.filter((x) => x.finished_at == null);
-  if (!active.length) return null;
+  if (!active.length && !connectingName) return null;
   return (
     <div className="m-transfers" role="status">
+      {connectingName && (
+        <div className="m-transfer">
+          <span className="m-transfer-icon" aria-hidden="true"><LoaderCircle className="animate-spin" /></span>
+          <span className="m-row-text">
+            <span className="m-row-title">{t("正在连接 {{name}}", { name: connectingName })}</span>
+            <span className="m-row-sub">{t("等对方在电脑上点同意")}</span>
+          </span>
+        </div>
+      )}
       {active.map((x) => {
         const percent = x.total ? Math.min(100, Math.round((x.done / x.total) * 100)) : 0;
         return (

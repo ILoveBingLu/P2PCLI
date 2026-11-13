@@ -925,11 +925,252 @@ button.m-row:active,
   color: var(--accent);
 }
 
+/* 扫码页：相机画面在网页后面，网页这时整个透明，只画扫描框和按钮 */
+html[data-scanning],
+html[data-scanning] body,
+html[data-scanning] #root {
+  /* 深色模式下网页默认会铺一层底色，挡住相机 */
+  color-scheme: normal;
+  background: transparent !important;
+}
+html[data-scanning] .m-app,
+html[data-scanning] .m-sheet-root {
+  visibility: hidden;
+}
+.m-scan {
+  --m-scan-size: min(68vw, 280px);
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  color: #fff;
+  font-size: 15px;
+  -webkit-tap-highlight-color: transparent;
+}
+/* 不吃 styles.css 里给手机弹窗加的宽度上限，扫码页要铺满整个屏幕 */
+html .m-scan[role="dialog"] {
+  max-width: none;
+}
+.m-scan button {
+  font: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.m-scan-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+.m-scan-title {
+  font-size: 17px;
+  font-weight: 650;
+  text-shadow: 0 1px 6px #0009;
+}
+.m-scan-round,
+.m-scan-round-spacer {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+}
+.m-scan-round {
+  background: #0007;
+  color: #fff;
+  backdrop-filter: blur(12px);
+}
+.m-scan-round:active {
+  background: #000a;
+}
+.m-scan-round svg {
+  width: 22px;
+  height: 22px;
+}
+.m-scan-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  /* 让扫描框在视觉上稍微偏上 */
+  padding-bottom: 8vh;
+}
+/* 扫描框：四周用一圈很大的阴影压暗，框里透亮 */
+.m-scan-frame {
+  position: relative;
+  width: var(--m-scan-size);
+  height: var(--m-scan-size);
+  border-radius: 22px;
+  box-shadow: 0 0 0 200vmax #0009;
+  overflow: hidden;
+  transition: box-shadow 300ms ease;
+}
+.m-scan-corner {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border: 4px solid var(--accent);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 70%, transparent));
+  transition: border-color 250ms ease, transform 300ms cubic-bezier(0.32, 1.25, 0.5, 1);
+}
+.m-scan-corner[data-at="tl"] { top: 0; left: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 22px; }
+.m-scan-corner[data-at="tr"] { top: 0; right: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 22px; }
+.m-scan-corner[data-at="bl"] { bottom: 0; left: 0; border-right: 0; border-top: 0; border-bottom-left-radius: 22px; }
+.m-scan-corner[data-at="br"] { bottom: 0; right: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 22px; }
+/* 扫描线：从上往下扫，带一道往上拖的光 */
+.m-scan-line {
+  position: absolute;
+  top: 0;
+  left: 8%;
+  right: 8%;
+  height: 72px;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--accent) 28%, transparent));
+  border-bottom: 2px solid var(--accent);
+  border-radius: 0 0 50% 50% / 0 0 6px 6px;
+  filter: drop-shadow(0 2px 6px var(--accent));
+  animation: m-scan-sweep 2.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes m-scan-sweep {
+  0% { transform: translateY(-72px); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translateY(var(--m-scan-size)); opacity: 0; }
+}
+.m-scan-check {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 200ms ease, transform 350ms cubic-bezier(0.32, 1.25, 0.5, 1);
+}
+.m-scan-check svg {
+  width: 64px;
+  height: 64px;
+  padding: 14px;
+  border-radius: 50%;
+  background: var(--success);
+  color: #fff;
+  stroke-width: 3;
+  box-shadow: 0 6px 24px #0007;
+}
+/* 认出来了：框变绿、往里收一下，扫描线停，中间弹出对勾 */
+.m-scan[data-phase="found"] .m-scan-corner {
+  border-color: var(--success);
+  filter: drop-shadow(0 0 8px var(--success));
+}
+.m-scan[data-phase="found"] .m-scan-corner[data-at="tl"] { transform: translate(10px, 10px); }
+.m-scan[data-phase="found"] .m-scan-corner[data-at="tr"] { transform: translate(-10px, 10px); }
+.m-scan[data-phase="found"] .m-scan-corner[data-at="bl"] { transform: translate(10px, -10px); }
+.m-scan[data-phase="found"] .m-scan-corner[data-at="br"] { transform: translate(-10px, -10px); }
+.m-scan[data-phase="found"] .m-scan-line {
+  display: none;
+}
+.m-scan[data-phase="found"] .m-scan-check {
+  opacity: 1;
+  transform: none;
+}
+/* 扫到的不是 P2PCLI 的码：框变红、抖一下 */
+.m-scan[data-phase="wrong"] .m-scan-corner {
+  border-color: var(--danger);
+  filter: drop-shadow(0 0 8px var(--danger));
+}
+.m-scan[data-phase="wrong"] .m-scan-frame {
+  animation: m-scan-shake 420ms ease;
+}
+@keyframes m-scan-shake {
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+.m-scan-hint {
+  position: relative;
+  max-width: 280px;
+  margin: 0;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: #0007;
+  backdrop-filter: blur(12px);
+  font-size: 14px;
+  text-align: center;
+}
+.m-scan[data-phase="wrong"] .m-scan-hint {
+  color: #fca5a5;
+}
+.m-scan[data-phase="found"] .m-scan-hint {
+  color: #86efac;
+}
+/* 没有相机权限、相机打不开：整页压暗，中间一段说明 */
+.m-scan-message {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 32px 8vh;
+  background: #000d;
+  text-align: center;
+}
+.m-scan:has(.m-scan-message) {
+  background: #000d;
+}
+.m-scan-message h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+.m-scan-message p {
+  margin: 0 0 8px;
+  color: #fffb;
+  line-height: 1.5;
+}
+.m-scan-bottom {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  padding: 16px 16px 28px;
+}
+.m-scan-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  background: #0007;
+  color: #fff;
+  font-size: 15px;
+  backdrop-filter: blur(12px);
+}
+.m-scan-pill:active {
+  background: #000a;
+}
+.m-scan-pill svg {
+  width: 18px;
+  height: 18px;
+}
+.m-scan-pill-primary {
+  background: var(--accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .m-app[data-dir] > .m-screen,
   .m-app[data-dir] > .m-term-screen,
   .m-sheet,
-  .m-sheet-backdrop {
+  .m-sheet-backdrop,
+  .m-scan-line,
+  .m-scan-frame {
     animation: none !important;
   }
 }

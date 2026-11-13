@@ -1044,8 +1044,6 @@
   "手机上暂不支持这个功能": "Not available on phones yet",
   "扫码连接": "Scan to connect",
   "输入设备码": "Enter device code",
-  "没有相机权限：去系统设置里允许 P2PCLI 使用相机，或者输入设备码连接": "No camera access: allow P2PCLI to use the camera in system settings, or connect with the device code",
-  "扫码失败：{{error}}": "Scan failed: {{error}}",
   "这不是 P2PCLI 的连接二维码": "This is not a P2PCLI connection QR code",
   "用手机连接": "Connect from phone",
   "用手机扫码连接这台电脑": "Scan with your phone to connect to this computer",
@@ -1130,5 +1128,14 @@
   "放在对方的下载文件夹里": "Saved to their Downloads folder",
   "关闭这个终端": "Close this terminal",
   "会话在对方电脑上接着运行，之后还能打开": "The session keeps running on that computer and can be reopened later",
-  "对方需要更新 P2PCLI": "Needs a newer P2PCLI"
+  "对方需要更新 P2PCLI": "Needs a newer P2PCLI",
+  "电脑": "computer",
+  "等对方在电脑上点同意": "Waiting for them to accept on the computer",
+  "关闭扫码": "Close scanner",
+  "没有相机权限": "No camera access",
+  "打不开相机": "Can't open the camera",
+  "在系统设置里允许 P2PCLI 使用相机，或者输入设备码连接。": "Allow P2PCLI to use the camera in system settings, or connect with a device code.",
+  "去设置": "Open settings",
+  "已识别，正在连接…": "Got it, connecting…",
+  "对准电脑上 P2PCLI 显示的二维码": "Point at the QR code shown by P2PCLI on your computer"
 }
