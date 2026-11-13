@@ -58,7 +58,7 @@ export struct DevicePage {
       List() {
         ListItem() {
           Column({ space: 10 }) {
-            PlatformTile({ platform: this.device()?.platform ?? this.conn()?.platform ?? '', connected: this.conn() !== undefined, size: 76 })
+            PlatformTile({ platform: this.device()?.platform ?? this.conn()?.platform ?? '', connected: this.conn() !== undefined, tileSize: 76 })
             if (this.conn() !== undefined) {
               Text(t('已连接') + ' · ' + pathText(this.conn()?.path ?? null)).fontSize(13)
                 .fontColor(this.conn()?.path.kind === 'relay' ? Hero.warning : Hero.success)
@@ -89,7 +89,7 @@ export struct DevicePage {
           ListItemGroup({ header: sectionHeader(t('会话')), style: ListItemGroupStyle.CARD }) {
             if (this.state()?.error) {
               ListItem() {
-                Text(t('读不到会话列表：{{error}}', { error: tr(this.state()?.error ?? '') } as Record<string, string | number>))
+                Text(t('读不到会话列表：{{error}}', ['error', tr(this.state()?.error ?? '')]))
                   .fontSize(13).fontColor(Hero.danger).padding(14)
               }
             }
@@ -193,13 +193,13 @@ struct SessionRow {
         }
         Row({ space: 8 }) {
           if (this.session.agent !== null) {
-            AgentStateLabel({ agent: this.session.agent, size: 13 })
+            AgentStateLabel({ agent: this.session.agent, textSize: 13 })
           } else if (this.session.command !== null) {
             Text(this.session.command).fontSize(12).fontFamily('monospace').fontColor(Hero.muted)
           }
           Text(shortPath(this.session.current_path)).fontSize(12).fontFamily('monospace').fontColor(Hero.muted).maxLines(1)
         }
-        Text(t('{{time}}创建', { time: relativeTime(this.session.created_at) } as Record<string, string | number>))
+        Text(t('{{time}}创建', ['time', relativeTime(this.session.created_at)]))
           .fontSize(12).fontColor(Hero.muted).opacity(0.8)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       Image($r('app.media.lucide_chevron_right_muted')).width(16).height(16)

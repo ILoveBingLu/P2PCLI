@@ -122,7 +122,7 @@ export class TermModel {
     if (v.reason !== null && v.reason !== undefined) {
       this.note = tr(v.reason);
     } else if (v.exit_code !== null && v.exit_code !== undefined) {
-      this.note = t('终端视图已结束（退出码 {{code}}）', { code: v.exit_code } as Record<string, string | number>);
+      this.note = t('终端视图已结束（退出码 {{code}}）', ['code', v.exit_code]);
     } else {
       this.note = t('终端视图已结束');
     }
@@ -306,9 +306,9 @@ export class Core {
         return;
       }
       if (x.state === 'done') {
-        this.notify(t('已发给 {{name}}：{{label}}', { name: x.peer_name, label: x.label } as Record<string, string | number>));
+        this.notify(t('已发给 {{name}}：{{label}}', ['name', x.peer_name], ['label', x.label]));
       } else if (x.state === 'failed') {
-        this.notify(t('没发出去：{{error}}', { error: x.error !== null ? tr(x.error) : x.label } as Record<string, string | number>));
+        this.notify(t('没发出去：{{error}}', ['error', x.error !== null ? tr(x.error) : x.label]));
       }
     });
   }
@@ -334,7 +334,7 @@ export class Core {
       return;
     }
     p.scanNearby().then(() => this.refreshOverview()).catch((e: Error) => {
-      this.notify(t('扫描失败：{{error}}', { error: tr(parseError(e).detail) } as Record<string, string | number>));
+      this.notify(t('扫描失败：{{error}}', ['error', tr(parseError(e).detail)]));
     });
   }
 
@@ -465,7 +465,7 @@ export class Core {
       this.loadSessions(endpointId);
       this.notify(t('会话已结束'));
     }).catch((e: Error) => {
-      this.notify(t('结束会话失败：{{error}}', { error: tr(parseError(e).detail) } as Record<string, string | number>));
+      this.notify(t('结束会话失败：{{error}}', ['error', tr(parseError(e).detail)]));
     });
   }
 
@@ -592,10 +592,10 @@ export class Core {
         paths.push(`${dir}/${name}`);
       });
       p.sendFiles(endpointId, paths);
-      this.notify(t('开始发送 {{count}} 个文件', { count: paths.length } as Record<string, string | number>));
+      this.notify(t('开始发送 {{count}} 个文件', ['count', paths.length]));
     } catch (e) {
       const err = e as Error;
-      this.notify(t('发不了：{{error}}', { error: tr(parseError(err).detail) } as Record<string, string | number>));
+      this.notify(t('发不了：{{error}}', ['error', tr(parseError(err).detail)]));
     }
   }
 

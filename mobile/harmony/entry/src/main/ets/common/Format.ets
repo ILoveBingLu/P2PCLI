@@ -74,7 +74,7 @@ export function sessionTitles(sessions: SessionView[]): Map<string, string> {
   const sorted = sessions.slice().sort((a: SessionView, b: SessionView) =>
     a.created_at !== b.created_at ? a.created_at - b.created_at : (a.id < b.id ? -1 : 1));
   const numbers = new Map<string, string>();
-  sorted.forEach((s: SessionView, i: number) => numbers.set(s.id, t('会话 {{value}}', { value: i + 1 } as Record<string, string | number>)));
+  sorted.forEach((s: SessionView, i: number) => numbers.set(s.id, t('会话 {{value}}', ['value', i + 1])));
   const counts = new Map<string, number>();
   sessions.forEach((s: SessionView) => {
     if (s.agent !== null) {
@@ -102,12 +102,12 @@ export function relativeTime(secs: number): string {
     return t('刚刚');
   }
   if (diff < 3600) {
-    return t('{{value}} 分钟前', { value: Math.floor(diff / 60) } as Record<string, string | number>);
+    return t('{{value}} 分钟前', ['value', Math.floor(diff / 60)]);
   }
   if (diff < 86400) {
-    return t('{{value}} 小时前', { value: Math.floor(diff / 3600) } as Record<string, string | number>);
+    return t('{{value}} 小时前', ['value', Math.floor(diff / 3600)]);
   }
-  return t('{{value}} 天前', { value: Math.floor(diff / 86400) } as Record<string, string | number>);
+  return t('{{value}} 天前', ['value', Math.floor(diff / 86400)]);
 }
 
 /** /Users/me/Projects/x → ~/Projects/x，太长只留最后两段 */

@@ -249,7 +249,7 @@ export struct TerminalPage {
   approvalPanel() {
     if (this.agent() !== null && this.agent()?.state === 'waiting' && this.agent()?.approval) {
       Column({ space: 6 }) {
-        Text(t('{{name}} · 等待确认', { name: this.agent()?.name ?? '' } as Record<string, string | number>)).fontSize(12).fontColor(Hero.muted)
+        Text(t('{{name}} · 等待确认', ['name', this.agent()?.name ?? ''])).fontSize(12).fontColor(Hero.muted)
         Text(this.agent()?.approval?.context ?? '').fontSize(13).fontColor(Hero.foreground)
         ForEach(this.agent()?.approval?.options ?? [], (opt: ApprovalChoice) => {
           Row({ space: 9 }) {
@@ -276,7 +276,7 @@ export struct TerminalPage {
   @Builder
   composeBar() {
     Row({ space: 8 }) {
-      TextArea({ placeholder: this.agent() !== null ? t('发给 {{name}}', { name: this.agent()?.name ?? '' } as Record<string, string | number>)
+      TextArea({ placeholder: this.agent() !== null ? t('发给 {{name}}', ['name', this.agent()?.name ?? ''])
         : t('输入命令，发送后自动回车'), text: this.draft })
         .layoutWeight(1).constraintSize({ maxHeight: 120 }).backgroundColor(Hero.surface).borderRadius(21)
         .fontColor(Hero.foreground)
@@ -302,18 +302,21 @@ export struct TerminalPage {
         this.keyButton(k.label, k.icon, k.label === 'Ctrl' && (this.term()?.ctrl ?? false), k.action)
       }, (k: KeyItem) => k.label)
       // 粘贴用系统的粘贴控件：读剪贴板不用申请权限
-      PasteButton({ icon: PasteIconStyle.LINES, buttonType: ButtonType.Normal })
-        .iconColor(Hero.foreground).iconSize(18).backgroundColor(Hero.tile).borderRadius(10)
-        .layoutWeight(1).height(40).padding(0)
-        .onClick((event: ClickEvent, result: PasteButtonOnClickResult) => {
-          if (result === PasteButtonOnClickResult.SUCCESS) {
-            const data = pasteboard.getSystemPasteboard().getDataSync();
-            const text = data.getPrimaryText();
-            if (text) {
-              this.term()?.command({ cmd: 'paste', text: text } as TermCommand);
+      Stack() {
+        PasteButton({ icon: PasteIconStyle.LINES, buttonType: ButtonType.Normal })
+          .iconColor(Hero.foreground).iconSize(18).backgroundColor(Hero.tile).borderRadius(10)
+          .width('100%').height(40).padding(0)
+          .onClick((event: ClickEvent, result: PasteButtonOnClickResult) => {
+            if (result === PasteButtonOnClickResult.SUCCESS) {
+              const data = pasteboard.getSystemPasteboard().getDataSync();
+              const text = data.getPrimaryText();
+              if (text) {
+                this.term()?.command({ cmd: 'paste', text: text } as TermCommand);
+              }
             }
-          }
-        })
+          })
+      }
+      .layoutWeight(1).height(40)
       this.keyButton(t('更多按键'), $r('app.media.lucide_ellipsis'), false, () => {
         this.showKeys = true;
       })
