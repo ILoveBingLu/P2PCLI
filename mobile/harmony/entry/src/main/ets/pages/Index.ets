@@ -199,7 +199,7 @@ struct Index {
           ListItem() {
             sectionHeader(t('正在使用'))
           }
-          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 } }) {
+          ListItemGroup() {
             ForEach(this.core.terms, (term: TermModel) => {
               ListItem() {
                 TermRow({ term: term })
@@ -208,13 +208,14 @@ struct Index {
             }, (term: TermModel) => `${term.key}`)
           }
           // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .divider({ strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 })
           .backgroundColor(Hero.surface).borderRadius(16).clip(true)
         }
         if (this.core.overview !== null && this.core.overview.devices.length > 0) {
           ListItem() {
             sectionHeader(t('我的设备'))
           }
-          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 } }) {
+          ListItemGroup() {
             ForEach(this.core.overview.devices, (d: DeviceView) => {
               ListItem() {
                 DeviceRow({ device: d, live: this.core.sessions.get(d.endpoint_id) ?? null })
@@ -223,12 +224,13 @@ struct Index {
             }, (d: DeviceView) => d.endpoint_id)
           }
           // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .divider({ strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 })
           .backgroundColor(Hero.surface).borderRadius(16).clip(true)
         }
         ListItem() {
           this.nearbyHeader()
         }
-        ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 } }) {
+        ListItemGroup() {
           if (this.core.overview === null || this.core.overview.nearby.length === 0) {
             ListItem() {
               Text(t('同一个局域网里没找到别的设备')).fontSize(14).fontColor(Hero.muted).padding(14).width('100%')
@@ -243,7 +245,8 @@ struct Index {
           }
         }
         // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
-        .backgroundColor(Hero.surface).borderRadius(16).clip(true)
+        .divider({ strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 })
+          .backgroundColor(Hero.surface).borderRadius(16).clip(true)
       }
     }
     .width('100%')

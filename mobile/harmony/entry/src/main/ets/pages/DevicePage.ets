@@ -89,7 +89,7 @@ export struct DevicePage {
           ListItem() {
             sectionHeader(t('会话'))
           }
-          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 } }) {
+          ListItemGroup() {
             if (this.state()?.error) {
               ListItem() {
                 Text(t('读不到会话列表：{{error}}', ['error', tr(this.state()?.error ?? '')]))
@@ -118,6 +118,7 @@ export struct DevicePage {
             }, (s: SessionView) => s.id + (s.agent?.state ?? '') + (s.current_path ?? ''))
           }
           // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .divider({ strokeWidth: 0.5, color: '#28282C', startMargin: 66, endMargin: 12 })
           .backgroundColor(Hero.surface).borderRadius(16).clip(true)
 
           ListItem() {
