@@ -9,7 +9,10 @@ import { util } from '@kit.ArkTS';
  */
 @ObservedV2
 export class I18n {
-  static readonly shared: I18n = new I18n();
+  /** 实例在类定义之后才创建（见 Core.shared 的说明） */
+  static get shared(): I18n {
+    return sharedI18n;
+  }
   /** system | chinese | english；改了界面马上跟着变 */
   @Trace language: string = 'system';
   private english: Record<string, string> = {};
@@ -62,6 +65,8 @@ export class I18n {
     return this.english[key];
   }
 }
+
+const sharedI18n: I18n = new I18n();
 
 /**
  * 界面文字。键是中文原文，{{name}} 这样的占位用后面的键值对填：t('连接 {{name}}', ['name', 设备名])。
