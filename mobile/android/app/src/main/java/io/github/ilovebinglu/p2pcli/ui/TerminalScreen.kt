@@ -92,7 +92,8 @@ fun TerminalScreen(core: Core, key: Int) {
     val live = term.state == RemoteTerminal.State.OPEN
     val path = conns[term.endpointId]?.path
 
-    Column(Modifier.fillMaxSize().background(Hero.Terminal).imePadding()) {
+    // 整页用页面底色（安全区透出的也是它），只有终端那一块是终端的颜色
+    Column(Modifier.fillMaxSize().background(Hero.Background).imePadding()) {
         Column(Modifier.background(Hero.Background).statusBarsPadding()) {
             NavBar(
                 title = {
@@ -127,7 +128,7 @@ fun TerminalScreen(core: Core, key: Int) {
             )
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().background(Hero.Terminal)) {
             AndroidView(
                 factory = { view },
                 update = { it.terminal = term },
@@ -281,7 +282,8 @@ private fun KeyBar(
     onPaste: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().background(Hero.Background).navigationBarsPadding().padding(8.dp),
+        // 先让开手势条，按键条的底色不画进安全区
+        Modifier.fillMaxWidth().navigationBarsPadding().background(Hero.Background).padding(8.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
