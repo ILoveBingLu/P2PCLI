@@ -5,6 +5,7 @@
 # 要 Xcode，要 Rust 的两个编译目标：rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 # 用法：sh build-rust.sh            真机和模拟器都编
 #       sh build-rust.sh sim        只编模拟器（在模拟器上试的时候快一些）
+#       sh build-rust.sh device     只编真机（打安装包）
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -20,8 +21,11 @@ export AR_aarch64_apple_ios="$(xcrun --sdk iphoneos -f ar)"
 export AR_aarch64_apple_ios_sim="$(xcrun --sdk iphonesimulator -f ar)"
 
 cd "$repo"
-targets="aarch64-apple-ios-sim"
-[ "$only" = sim ] || targets="aarch64-apple-ios $targets"
+case "$only" in
+    sim) targets="aarch64-apple-ios-sim" ;;
+    device) targets="aarch64-apple-ios" ;;
+    *) targets="aarch64-apple-ios aarch64-apple-ios-sim" ;;
+esac
 for t in $targets; do
     cargo build --locked --release -p p2pcli-mobile-ffi --target "$t"
 done
