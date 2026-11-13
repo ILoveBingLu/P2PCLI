@@ -5,7 +5,8 @@
 # 在线更新的安装包要签名：仓库 Settings → Secrets 里要有 TAURI_SIGNING_PRIVATE_KEY（没有密码）。
 # 安卓 APK 要用正式密钥签名，Secrets 里要有 ANDROID_KEYSTORE_BASE64（密钥文件转 base64）、ANDROID_KEYSTORE_PASSWORD、
 # ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD。以后每个版本都要用同一份密钥，换了用户就没法覆盖升级。
-# 没配密钥时这次发布不带安卓包（不会发调试密钥签的包）；手机包打失败也不拦桌面包发布。
+# 正式发布时所有平台的包（桌面 7 种、安卓、iOS）必须都打出来才发布：没配安卓密钥、哪个包打失败，这次就不发，
+# 补好以后在这次运行里点 Re-run failed jobs。不会发调试密钥签的安卓包。
 # iOS 发不签名的 IPA，用户自己签名后安装（苹果不允许自签分发）。
 name: 安装包发布
 
@@ -68,14 +69,13 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE" ]; then
-            # 正式发布不发调试密钥签的包：这次跳过安卓包。ci/ 分支试编时用调试密钥，只能自己试用
+          if [ -z "$KEYSTORE" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            # 正式发布不发调试密钥签的包，也不能不带安卓包：直接报错，整次发布停下。ci/ 分支试编时用调试密钥，只能自己试用
             if [ "$GITHUB_REF_TYPE" = tag ]; then
-              echo "::warning::仓库 Secrets 里没有 ANDROID_KEYSTORE_BASE64，这次发布不带安卓包"
-              echo "SKIP_ANDROID=1" >> "$GITHUB_ENV"
-            else
-              echo "::warning::没有正式签名密钥，这次用调试密钥签名，只能自己试用"
+              echo "::error::仓库 Secrets 里缺安卓签名密钥（ANDROID_KEYSTORE_BASE64、ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD），这次不发布"
+              exit 1
             fi
+            echo "::warning::没有正式签名密钥，这次用调试密钥签名，只能自己试用"
             exit 0
           fi
           echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
@@ -87,13 +87,11 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: 打包
-        if: env.SKIP_ANDROID != '1'
         working-directory: mobile/android
         # 打包机上装了 NDK，路径在 ANDROID_NDK_LATEST_HOME
         run: NDK_HOME="$ANDROID_NDK_LATEST_HOME" ./gradlew --no-daemon assembleRelease
 
       - name: 整理文件名
-        if: env.SKIP_ANDROID != '1'
         run: |
           ver=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
           mkdir -p out
@@ -101,7 +99,6 @@ jobs:
           rm -f "$RUNNER_TEMP/release.jks"
 
       - uses: actions/upload-artifact@v4
-        if: env.SKIP_ANDROID != '1'
         with:
           name: android
           path: out/*
@@ -148,8 +145,8 @@ jobs:
 
   release:
     name: 发布
-    # 桌面包必须都打成功；手机包有哪个发哪个
-    if: ${{ !cancelled() && github.event_name == 'push' && github.ref_type == 'tag' && needs.build.result == 'success' }}
+    # 桌面、安卓、iOS 的包必须都打成功才发布
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref_type == 'tag' && needs.build.result == 'success' && needs.android.result == 'success' && needs.ios.result == 'success' }}
     needs: [build, android, ios]
     runs-on: ubuntu-latest
     steps:
@@ -173,11 +170,9 @@ jobs:
           git fetch --depth=1 origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           notes="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed '/-----BEGIN/,$d')"
           [ -n "$notes" ] || notes="P2PCLI ${ver}"
-          # 手机包：这次打出来了才写进下载说明
-          mobile=""
-          [ -f "dist/P2PCLI_${ver}_android-arm64.apk" ] && mobile="${mobile}
-          - 安卓手机（含鸿蒙 4 及更早能装安卓应用的机型）：\`P2PCLI_${ver}_android-arm64.apk\`"
-          [ -f "dist/P2PCLI_${ver}_ios-unsigned.ipa" ] && mobile="${mobile}
+          # 手机包：和桌面包一样必须都在，缺了 app-release.mjs 会报错不发布
+          mobile="
+          - 安卓手机（含鸿蒙 4 及更早能装安卓应用的机型）：\`P2PCLI_${ver}_android-arm64.apk\`
           - iPhone、iPad：\`P2PCLI_${ver}_ios-unsigned.ipa\`（不签名，需要用 AltStore、SideStore 或自己的开发者证书签名后安装）"
           RELEASE_NOTES="$notes" node scripts/app-release.mjs
           cat dist/latest.json

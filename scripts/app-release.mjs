@@ -20,7 +20,7 @@ export function updateArtifacts(version) {
   return entries;
 }
 
-/** 手机安装包：不走在线更新，只进发布页和 SHA256SUMS。可选：没配签名密钥、打包失败时这次就不带 */
+/** 手机安装包：不走在线更新，只进发布页和 SHA256SUMS。和桌面包一样必须都在，缺了不发布 */
 export function mobileArtifacts(version) {
   return [`P2PCLI_${version}_android-arm64.apk`, `P2PCLI_${version}_ios-unsigned.ipa`];
 }
@@ -31,11 +31,7 @@ export async function prepareRelease({ dir, version, tag, repository, notes = ""
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("Invalid GitHub repository");
   const artifacts = updateArtifacts(version);
   const files = [`P2PCLI_${version}_aarch64.dmg`, `P2PCLI_${version}_x64.dmg`,
-    ...Object.values(artifacts).flatMap((file) => [file, `${file}.sig`])];
-  for (const file of mobileArtifacts(version)) {
-    const info = await stat(path.join(dir, file)).catch(() => null);
-    if (info?.isFile() && info.size) files.push(file);
-  }
+    ...Object.values(artifacts).flatMap((file) => [file, `${file}.sig`]), ...mobileArtifacts(version)];
   for (const file of files) {
     const info = await stat(path.join(dir, file));
     if (!info.isFile() || !info.size) throw new Error(`Missing or empty release artifact: ${file}`);
