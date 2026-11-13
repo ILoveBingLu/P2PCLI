@@ -12,11 +12,6 @@ struct HomeScreen: View {
         let selection = Binding<Selection?>(get: { core.selection }, set: { core.select($0) })
 
         List(selection: selection) {
-            Section {
-                BrandHeader()
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 0, trailing: 4))
-            }
             TransfersSection()
 
             // 扫码连的设备列表里还没有：顶上放一张“正在连接”的卡片
@@ -93,10 +88,11 @@ struct HomeScreen: View {
             core.scanNearby()
             await core.refreshOverview()
         }
-        // 顶上自己放了 logo 和名字（BrandHeader），系统的标题留空，不重复显示
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+        // 用系统原生的标题栏：内容滚上去时系统自己画渐变模糊（滚动边缘效果）
+        .navigationTitle("P2PCLI")
+        .navigationBarTitleDisplayMode(.large)
+        .heroBrandTitle()
+        .heroToolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { core.openScan() } label: { lucideLabel(t("扫码连接"), "scan-line") }
                 Button { core.openSettings() } label: { lucideLabel(t("设置"), "settings") }
@@ -113,16 +109,26 @@ struct HomeScreen: View {
     }
 }
 
-/// 首页顶上：软件的 logo（和 Mac 版同一个液态玻璃图标）和名字
-private struct BrandHeader: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            Image("logo").resizable().frame(width: 44, height: 44).accessibilityHidden(true)
-            Text("P2PCLI").font(.largeTitle.bold()).foregroundStyle(Hero.foreground)
-            Spacer(minLength: 0)
+extension View {
+    /// 大标题前面放软件的 logo（和 Mac 版同一个液态玻璃图标）。用系统给大标题留的位置（iOS 26 起），
+    /// 还是系统的标题栏；系统不显示大标题的时候（比如 iPhone Duo 合上）就只显示文字标题
+    @ViewBuilder
+    func heroBrandTitle() -> some View {
+        if #available(iOS 26.0, *) {
+            self.toolbar {
+                ToolbarItem(placement: .largeTitle) {
+                    HStack(spacing: 10) {
+                        Image("logo").resizable().frame(width: 36, height: 36).accessibilityHidden(true)
+                        Text("P2PCLI").font(.largeTitle.bold())
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isHeader)
+                }
+            }
+        } else {
+            self
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
     }
 }
 

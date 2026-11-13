@@ -101,7 +101,7 @@ struct DeviceScreen: View {
         .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await core.loadSessions(endpointId) }
-        .toolbar {
+        .heroToolbar {
             if conn != nil {
                 // 竖排工具栏（iPhone Duo）上方是返回，接着是最常用的“新建终端”
                 ToolbarItem(placement: .primaryAction) {

@@ -43,6 +43,10 @@ final class P2PCLIUITests: XCTestCase {
         app.buttons["open-settings"].firstMatch.tap()
         sleep(1)
         shot("02-settings")
+        // 往上滚：内容滚到标题栏下面，看系统的滚动边缘效果
+        app.swipeUp()
+        sleep(1)
+        shot("02b-settings-scrolled")
         app.buttons["close-settings"].firstMatch.tap()
         sleep(1)
 
@@ -75,6 +79,9 @@ final class P2PCLIUITests: XCTestCase {
         sleep(3)
         shot("05-terminal")
         // 命令的输出（ios-ok-42）看截图：终端控件的读屏接口读不到屏幕上的字
+        app.typeText("seq 1 60\n")
+        sleep(2)
+        shot("05b-terminal-scroll")
 
         // 按键条：上方向键调出上一条命令
         app.buttons["↑"].firstMatch.tap()
