@@ -73,10 +73,12 @@ def main():
         if f.startswith(("lucide_", "platform_", "agent_")) or f == "logo.png":
             os.remove(os.path.join(MEDIA, f))
     for name in LUCIDE:
-        body = "".join(f'<path d="{p}"/>' for p in lucide_paths(name))
         for suffix, color in COLORS.items():
-            svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
-                   f'stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{body}</svg>\n')
+            # 每条路径都写明不填充、描边颜色：ArkUI 画 SVG 时封闭的图形不继承外层的 fill="none"，会被填成实心
+            body = "".join(f'<path d="{p}" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" '
+                           f'stroke-linejoin="round"/>' for p in lucide_paths(name))
+            svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">'
+                   f'{body}</svg>\n')
             with open(os.path.join(MEDIA, f"lucide_{name.replace('-', '_')}{suffix}.svg"), "w") as f:
                 f.write(svg)
     for name in PLATFORMS:

@@ -77,5 +77,6 @@ export struct Chip {
 @Builder
 export function sectionHeader(title: string) {
   Text(title).fontSize(13).fontColor(Hero.muted).fontWeight(FontWeight.Medium)
+    .width('100%').textAlign(TextAlign.Start)
     .padding({ left: 4, top: 18, bottom: 8 })
 }
