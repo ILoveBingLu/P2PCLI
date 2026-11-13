@@ -780,6 +780,14 @@ const sample = [
   "\x1b[2m  ⎿  a1b2c3d feat: 初始版本\x1b[0m\r\n",
 ].join("");
 
+let previewScanCancel: (() => void) | null = null;
+let previewScanCount = 0;
+// 扫码时网页是透明的，后面垫一张假的“相机画面”，看得出哪里透明
+if (s.startsWith("scan")) {
+  const camera = document.createElement("div");
+  camera.style.cssText = "position:fixed;inset:0;z-index:-1;background:radial-gradient(circle at 50% 42%,#f5f5f4 0 18%,#a8a29e 19% 21%,#57534e 40%,#1c1917 75%)";
+  document.body.append(camera);
+}
 mockWindows("main");
 mockIPC(
   async (cmd, args: any) => {
@@ -1187,6 +1195,25 @@ mockIPC(
         fakeLauncherInput(args.termId, args.data);
         return null;
       case "selftest_config":
+        return null;
+      // 手机扫码：s=scan 一直扫不到（看扫描动画），s=scan-ok 两秒后扫到电脑的二维码，
+      // s=scan-wrong 先扫到一个别的二维码，s=scan-denied 没给相机权限
+      case "plugin:barcode-scanner|check_permissions":
+      case "plugin:barcode-scanner|request_permissions":
+        return { camera: s === "scan-denied" ? "denied" : "granted" };
+      case "plugin:barcode-scanner|scan":
+        return new Promise((resolve, reject) => {
+          previewScanCancel = () => reject("cancelled");
+          previewScanCount += 1;
+          if (s === "scan-ok" || (s === "scan-wrong" && previewScanCount > 1))
+            setTimeout(() => resolve({ content: "p2pcli://pair?code=123456789&pw=ankab7&id=x&name=工作室 Mac mini", format: "QR_CODE" }), 2000);
+          else if (s === "scan-wrong") setTimeout(() => resolve({ content: "https://example.com/", format: "QR_CODE" }), 1200);
+        });
+      case "plugin:barcode-scanner|cancel":
+        previewScanCancel?.();
+        previewScanCancel = null;
+        return null;
+      case "plugin:barcode-scanner|vibrate":
         return null;
       case "diagnose":
         if (s === "error") return Promise.reject("网络检测暂时不可用，请稍后重试。");

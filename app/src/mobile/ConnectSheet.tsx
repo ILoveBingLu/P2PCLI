@@ -11,9 +11,11 @@ import { Sheet } from "./Sheet";
 import { t } from "@/i18n";
 
 /** 连接新设备：扫电脑上的二维码最省事，也可以手输设备码和配对密码 */
-export function ConnectSheet({ open, onClose, connection }: {
+export function ConnectSheet({ open, onClose, onScan, connection }: {
   open: boolean;
   onClose: () => void;
+  /** 换成扫码页 */
+  onScan: () => void;
   connection: ReturnType<typeof useConnection>;
 }) {
   const { target, setTarget, password, setPassword, busy, error, setError, pwRef, doConnect, lanTarget, setLanTarget } = connection;
@@ -31,7 +33,7 @@ export function ConnectSheet({ open, onClose, connection }: {
         <FieldGroup className="gap-4">
           {!lanTarget && (
             <>
-              <Button type="button" size="lg" className="w-full" disabled={busy} onPress={() => void connection.scanAndConnect()}>
+              <Button type="button" size="lg" className="w-full" disabled={busy} onPress={onScan}>
                 <ScanLine data-icon="inline-start" />
                 {t("扫码连接")}
               </Button>
