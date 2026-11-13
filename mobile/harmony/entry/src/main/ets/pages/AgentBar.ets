@@ -3,6 +3,7 @@ import { agentIcon, Hero } from '../common/Hero';
 import { t, tr } from '../common/I18n';
 import { DirListingView, InstalledAgentView, parseError, SessionView } from '../common/Model';
 import { shortPath } from '../common/Format';
+import { GlassButton, sheetBackground } from '../common/Glass';
 
 /**
  * 终端下面一行：最左边是当前工作目录（点开选目录），后面是对方电脑上装了的命令行 AI，点一下在这个会话里启动。
@@ -61,15 +62,18 @@ export struct AgentBar {
                 () => this.core.scanAgents(this.term.connId, true))
             } else {
               ForEach(this.state()?.list ?? [], (a: InstalledAgentView) => {
-                Row({ space: 6 }) {
-                  if (this.launching === a.kind) {
-                    LoadingProgress().width(16).height(16).color(Hero.accent)
-                  } else {
-                    Image(agentIcon(a.kind)).width(16).height(16)
+                Button({ type: ButtonType.Capsule, stateEffect: true }) {
+                  Row({ space: 6 }) {
+                    if (this.launching === a.kind) {
+                      LoadingProgress().width(16).height(16).color(Hero.accent)
+                    } else {
+                      Image(agentIcon(a.kind)).width(16).height(16)
+                    }
+                    Text(a.name).fontSize(12.5).fontColor(Hero.foreground).maxLines(1)
                   }
-                  Text(a.name).fontSize(12.5).fontColor(Hero.foreground).maxLines(1)
                 }
-                .height(34).padding({ left: 12, right: 12 }).borderRadius(17).backgroundColor(Hero.tile)
+                .height(34).padding({ left: 12, right: 12 })
+                .attributeModifier(new GlassButton())
                 .opacity(this.launching !== null && this.launching !== a.kind ? 0.5 : 1)
                 .accessibilityText(t('启动 {{name}}', ['name', a.name]))
                 .onClick(() => this.launch(a, false))
@@ -102,7 +106,7 @@ export struct AgentBar {
       .padding({ top: 8 })
       .bindSheet(this.showMenu!!, this.menuSheet(), {
         height: SheetSize.FIT_CONTENT,
-        backgroundColor: Hero.surface,
+        backgroundColor: sheetBackground(),
         title: { title: this.menuFor?.name ?? '' },
         onDisappear: () => {
           this.menuFor = null;
@@ -118,14 +122,17 @@ export struct AgentBar {
 
   @Builder
   pill(label: string, icon: Resource, text: string, mono: boolean, action: () => void) {
-    Row({ space: 6 }) {
-      Image(icon).width(15).height(15)
-      Text(text).fontSize(12.5).fontColor(Hero.foreground).fontFamily(mono ? 'monospace' : undefined).maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: 180 })
+    Button({ type: ButtonType.Capsule, stateEffect: true }) {
+      Row({ space: 6 }) {
+        Image(icon).width(15).height(15)
+        Text(text).fontSize(12.5).fontColor(Hero.foreground).fontFamily(mono ? 'monospace' : undefined).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: 180 })
+      }
     }
-    .height(34).padding({ left: 12, right: 12 }).borderRadius(17).backgroundColor(Hero.tile)
+    .height(34).padding({ left: 12, right: 12 })
     .accessibilityText(label)
     .onClick(action)
+    .attributeModifier(new GlassButton())
   }
 
   @Builder

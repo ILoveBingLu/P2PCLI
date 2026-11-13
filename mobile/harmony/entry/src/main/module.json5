@@ -8,6 +8,10 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    // 系统的沉浸光感材质（HarmonyOS 7 / API 26 起）：面板、弹窗、Toast 自动用上；自己的按钮在代码里挂（common/Glass.ets）
+    "metadata": [
+      { "name": "ohos.arkui.UIMaterial.state", "value": "enable" }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",

@@ -5,6 +5,7 @@ import { t, tr } from '../common/I18n';
 import { Connected, DeviceView, SessionView } from '../common/Model';
 import { pathText, relativeTime, sessionTitles, shortPath } from '../common/Format';
 import { AgentStateLabel, Chip, PlatformTile, sectionHeader, SessionTile } from '../common/Widgets';
+import { barGlass, sheetBackground } from '../common/Glass';
 
 /** 一台设备：它上面的后台会话，新建终端、发文件、断开 */
 @ComponentV2
@@ -136,7 +137,7 @@ export struct DevicePage {
       }
       .width('100%').height('100%').padding({ left: 16, right: 16 }).scrollBar(BarState.Off)
     }
-    .title(this.device()?.remark ?? this.device()?.name ?? this.conn()?.name ?? t('设备'))
+    .title(this.device()?.remark ?? this.device()?.name ?? this.conn()?.name ?? t('设备'), { systemMaterial: barGlass() })
     // 页面背景延伸到顶部状态栏、底部手势条下面（系统的安全区），不留窗口的黑底
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .menus(this.conn() !== undefined ? [
@@ -147,7 +148,7 @@ export struct DevicePage {
     .backgroundColor(Hero.background)
     .bindSheet(this.ending !== null, this.endSheet(), {
       height: SheetSize.FIT_CONTENT,
-      backgroundColor: Hero.surface,
+      backgroundColor: sheetBackground(),
       title: { title: this.ending !== null ? (sessionTitles(this.state()?.list ?? []).get(this.ending.id) ?? t('会话')) : '' },
       onDisappear: () => {
         this.ending = null;

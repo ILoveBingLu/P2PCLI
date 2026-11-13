@@ -11,6 +11,7 @@ import { AgentStateLabel, Chip, PlatformTile, sectionHeader, SessionTile } from 
 import { DevicePage } from './DevicePage';
 import { TerminalPage } from './TerminalPage';
 import { SettingsPage } from './SettingsPage';
+import { barGlass, sheetBackground } from '../common/Glass';
 
 /**
  * 首页：开着的终端、连过的设备、局域网里的设备。用系统的 Navigation：
@@ -97,7 +98,7 @@ struct Index {
       Navigation(this.core.stack) {
         this.home()
       }
-      .title(this.brandTitle())
+      .title(this.brandTitle(), { systemMaterial: barGlass() })
       .titleMode(NavigationTitleMode.Mini)
       // 首页是最上层：不要返回箭头
       .hideBackButton(true)
@@ -121,7 +122,7 @@ struct Index {
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .bindSheet(this.showConnect!!, this.connectSheet(), {
         height: SheetSize.LARGE,
-        backgroundColor: Hero.surface,
+        backgroundColor: sheetBackground(),
         title: { title: this.core.prompt?.endpointId ? t('连接 {{name}}', ['name', this.core.prompt?.name ?? t('设备')]) : t('连接新设备') },
         onDisappear: () => {
           this.core.prompt = null;
@@ -132,7 +133,7 @@ struct Index {
       .height('100%')
       .bindSheet(this.showFileRequest!!, this.fileRequestSheet(), {
         height: SheetSize.FIT_CONTENT,
-        backgroundColor: Hero.surface,
+        backgroundColor: sheetBackground(),
         title: { title: t('{{name}} 想发文件给你', ['name', this.core.fileRequest?.name ?? '']) },
         onDisappear: () => {
           if (this.core.fileRequest !== null) {
