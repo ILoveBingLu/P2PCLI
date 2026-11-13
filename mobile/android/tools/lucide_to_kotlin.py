@@ -50,10 +50,14 @@ for kname, name in NAMES.items():
     src = open(f"node_modules/lucide-react/dist/esm/icons/{name}.mjs").read()
     node = src[src.index("node: ["):src.index("};", src.index("node: ["))]
     paths = []
-    for m in re.finditer(r'\["(\w+)", \{([^}]*)\}\]', node):
+    # 元素有的写一行，有的（路径长的）拆成好几行：空白都要认
+    for m in re.finditer(r'\[\s*"(\w+)",\s*\{([^}]*)\}\s*\]', node):
         attrs = dict(re.findall(r'(\w+): "([^"]*)"', m.group(2)))
         attrs.pop("key", None)
         paths.append(to_path(m.group(1), attrs))
+    expected = len(re.findall(r'\[\s*"(?:path|circle|ellipse|line|polyline|polygon|rect)"', node))
+    if len(paths) != expected:
+        raise SystemExit(f"{name}：源文件里有 {expected} 个图形，只认出 {len(paths)} 个")
     args = ", ".join(f'"{p}"' for p in paths)
     lines.append(f'    val {kname}: ImageVector by lazy {{ icon("{name}", {args}) }}')
 
