@@ -212,3 +212,26 @@ struct GlassGroup<Content: View>: View {
         }
     }
 }
+
+extension View {
+    /// 页面的工具栏。iPhone Duo 上只要系统给了右侧竖栏（合上，或者展开横着拿），按钮都优先放进竖栏，
+    /// 右手好按，也不占标题栏的宽度；展开竖着拿时系统只有横栏，照常放在顶上
+    @ViewBuilder
+    func heroToolbar<C: ToolbarContent>(@ToolbarContentBuilder _ content: () -> C) -> some View {
+        if #available(iOS 27.1, *) {
+            self.toolbar { content().axisBehavior(.verticalPreferred) }
+        } else {
+            self.toolbar(content: content)
+        }
+    }
+
+    /// 自己做的底栏（终端的按键条）：iOS 26 以上用系统的 safeAreaBar，和系统的栏一样参与安全区和滚动边缘效果
+    @ViewBuilder
+    func heroBottomBar<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        if #available(iOS 26.0, *) {
+            self.safeAreaBar(edge: .bottom, spacing: 0, content: content)
+        } else {
+            self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
+        }
+    }
+}

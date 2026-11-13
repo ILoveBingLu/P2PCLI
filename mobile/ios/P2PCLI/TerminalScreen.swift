@@ -32,17 +32,17 @@ struct TerminalScreen: View {
         if !live { subtitle += " · " + t("已断开") } else if let path { subtitle += " · " + Format.path(path) }
 
         return GeometryReader { geo in
-            let fold = Fold.horizontal(geo)
-            VStack(spacing: 0) {
-                terminalArea(term)
-                    .frame(height: fold.map { max(80, $0.minY) })
-                    .frame(maxHeight: fold == nil ? .infinity : nil)
-                if let fold {
-                    // 折痕那一条不放东西
+            if let fold = Fold.horizontal(geo) {
+                // 半折立着：终端在折痕上面，按键在折痕下面，折痕那一条不放东西
+                VStack(spacing: 0) {
+                    terminalArea(term).frame(height: max(80, fold.minY))
                     Color.clear.frame(height: fold.height)
+                    VStack(spacing: 0) { controls(term, agent: agent, live: live) }
+                    Spacer(minLength: 0)
                 }
-                controls(term, agent: agent, live: live)
-                if fold != nil { Spacer(minLength: 0) }
+            } else {
+                terminalArea(term)
+                    .heroBottomBar { VStack(spacing: 0) { controls(term, agent: agent, live: live) } }
             }
         }
         // 液态玻璃：栏不要自己的背景，颜色由下面的内容决定。终端的底色铺满整页（包括标题栏、按键条下面），
@@ -51,7 +51,7 @@ struct TerminalScreen: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .heroSubtitle(subtitle)
-        .toolbar {
+        .heroToolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { panel = .switcher } label: { lucideLabel(t("开着的终端"), "square-terminal") }
             }
