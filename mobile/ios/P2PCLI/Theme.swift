@@ -179,13 +179,14 @@ extension View {
         return g
     }
 
-    /// 主要按钮：iOS 26 以上是带颜色的玻璃
+    /// 主要按钮：iOS 26 以上是带颜色的玻璃。
+    /// 文字和图标都用白色：图标（lucide 模板图）不指定的话会被画成主题蓝，和按钮底色一样，看着就像没有图标
     @ViewBuilder
     func heroProminent() -> some View {
         if #available(iOS 26.0, *) {
-            self.buttonStyle(.glassProminent)
+            self.buttonStyle(.glassProminent).foregroundStyle(.white)
         } else {
-            self.buttonStyle(.borderedProminent)
+            self.buttonStyle(.borderedProminent).foregroundStyle(.white)
         }
     }
 
