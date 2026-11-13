@@ -1,0 +1,935 @@
+/* 手机端界面（mobile/）：只在手机上加载。按手指点的大小排（至少 44px），
+   刘海和底部手势条用安全区留白；颜色都用 HeroUI 的变量，和桌面一致。 */
+
+.m-app {
+  --m-line: color-mix(in srgb, var(--foreground) 9%, transparent);
+  --m-press: color-mix(in srgb, var(--foreground) 7%, transparent);
+  --m-tile: color-mix(in srgb, var(--foreground) 8%, transparent);
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 15px;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+.m-app button {
+  font: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 页面：进新页从右边滑进来，退回时从左边 */
+.m-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.m-app[data-dir="forward"] > .m-screen,
+.m-app[data-dir="forward"] > .m-term-screen:not([hidden]) {
+  animation: m-in-forward 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.m-app[data-dir="back"] > .m-screen,
+.m-app[data-dir="back"] > .m-term-screen:not([hidden]) {
+  animation: m-in-back 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes m-in-forward {
+  from { transform: translateX(28%); opacity: 0; }
+}
+@keyframes m-in-back {
+  from { transform: translateX(-18%); opacity: 0; }
+}
+
+/* 首页的大标题 */
+.m-home-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 8px 6px 20px;
+}
+.m-home-logo {
+  width: 30px;
+  height: 30px;
+}
+.m-home-header h1 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+/* 二级页面的顶栏：返回、标题和一行状态、右边的按钮 */
+.m-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 56px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--m-line);
+}
+.m-nav-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 2px;
+}
+.m-nav-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.m-nav-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.m-nav-sub .agent-state {
+  font-size: 12px;
+}
+.m-app .m-icon-button[data-slot="button"] {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border-radius: 14px;
+}
+.m-app .m-icon-button[data-slot="button"] svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* 可以上下滑的内容区 */
+.m-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 16px 28px;
+}
+
+/* 分组：标题加一张圆角卡片，卡片里一行一行 */
+.m-section {
+  margin-top: 22px;
+}
+.m-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.m-section-title {
+  margin: 0;
+  padding: 0 4px 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 600;
+}
+.m-section-head .m-section-title {
+  padding-bottom: 0;
+}
+.m-section-head {
+  padding-bottom: 6px;
+}
+.m-app .m-section-action[data-slot="button"] {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  margin-right: -6px;
+  color: var(--muted-foreground);
+}
+.m-section-empty {
+  margin: 0;
+  padding: 18px 16px;
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--muted-foreground);
+  font-size: 13.5px;
+  text-align: center;
+}
+.m-group {
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--surface);
+}
+.m-group > * + * {
+  border-top: 1px solid var(--m-line);
+}
+
+/* 一行：左边图标，中间两三行字，右边箭头 */
+.m-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 11px 12px 11px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.m-row:active,
+.m-row-main:active {
+  background: var(--m-press);
+}
+.m-row:disabled {
+  opacity: 0.45;
+}
+.m-row-split {
+  padding: 0 4px 0 0;
+}
+.m-row-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  align-self: stretch;
+  padding: 11px 4px 11px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.m-row-icon,
+.m-device-tile {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: var(--m-tile);
+  color: var(--foreground);
+}
+.m-row-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.m-row-icon[data-tone="off"] {
+  opacity: 0.55;
+}
+.m-device-tile .platform-icon {
+  width: 20px;
+  height: 20px;
+  background: var(--foreground);
+}
+/* 连着的设备：右下角一个绿点 */
+.m-device-tile[data-connected]::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  border: 2.5px solid var(--surface);
+  border-radius: 50%;
+  background: var(--success);
+}
+.m-device-tile-lg {
+  width: 76px;
+  height: 76px;
+  border-radius: 24px;
+}
+.m-device-tile-lg .platform-icon {
+  width: 36px;
+  height: 36px;
+}
+.m-device-tile-lg[data-connected]::after {
+  width: 18px;
+  height: 18px;
+  border: 3.5px solid var(--background);
+}
+.m-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.m-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.m-row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.m-row-meta {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  opacity: 0.8;
+}
+.m-row-alert {
+  color: var(--warning);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.m-row-chevron {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+.m-row-trailing-label {
+  flex: none;
+  font-size: 12px;
+}
+.m-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.m-truncate {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.m-muted {
+  color: var(--muted-foreground);
+}
+
+/* 状态的颜色：直连绿，中继黄，正在连蓝 */
+.m-presence {
+  color: var(--muted-foreground);
+}
+.m-presence[data-tone="ok"] {
+  color: var(--success);
+}
+.m-presence[data-tone="relay"] {
+  color: var(--warning);
+}
+.m-presence[data-tone="busy"] {
+  color: var(--accent);
+}
+.m-nav-title .m-presence {
+  font-size: 12.5px;
+}
+.m-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+}
+.m-dot[data-tone="ok"] {
+  background: var(--success);
+}
+.m-dot[data-tone="relay"] {
+  background: var(--warning);
+}
+.m-dot[data-tone="off"] {
+  background: var(--danger);
+}
+.m-chip {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--m-tile);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+.m-chip-accent {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+/* 底部固定的主按钮 */
+.m-bottom-bar {
+  flex: none;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--m-line);
+  background: var(--background);
+}
+.m-app .m-bottom-bar [data-slot="button"],
+.m-empty-actions [data-slot="button"],
+.m-sheet [data-slot="button"] {
+  min-height: 48px;
+  border-radius: 14px;
+  font-size: 15.5px;
+}
+
+/* 牵线服务器的提醒 */
+.m-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13.5px;
+  text-align: left;
+}
+.m-banner span {
+  flex: 1;
+}
+.m-banner svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+/* 空的时候：大图标、一句话、几个按钮 */
+.m-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 8px 24px;
+  text-align: center;
+}
+.m-empty img {
+  width: 68px;
+  height: 68px;
+  margin-bottom: 20px;
+}
+.m-empty h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 700;
+}
+.m-empty p {
+  max-width: 300px;
+  margin: 0 0 28px;
+  color: var(--muted-foreground);
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+.m-empty-compact {
+  padding-top: 20px;
+}
+.m-empty-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.m-device-hero {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0 2px;
+}
+.m-text-danger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 28px auto 0;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+}
+.m-text-danger svg {
+  width: 18px;
+  height: 18px;
+}
+.m-text-danger:active {
+  background: var(--m-press);
+}
+
+/* 正在收发的文件 */
+.m-transfers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.m-transfer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--surface);
+}
+.m-transfer-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.m-transfer-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.m-progress {
+  display: block;
+  height: 4px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--m-tile);
+}
+.m-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 300ms ease;
+}
+
+/* 底部弹出的面板 */
+.m-sheet-root {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+}
+.m-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: #000a;
+  animation: m-fade 200ms ease-out;
+}
+.m-sheet {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-height: calc(100dvh - env(safe-area-inset-top) - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding: 8px 16px calc(18px + env(safe-area-inset-bottom));
+  border-radius: 24px 24px 0 0;
+  background: var(--overlay);
+  color: var(--foreground);
+  box-shadow: 0 -12px 40px #0006;
+  animation: m-sheet-up 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+/* 不吃 styles.css 里给手机弹窗加的宽度上限，面板要铺满屏幕宽 */
+.m-sheet-root > .m-sheet[role="dialog"] {
+  max-width: none;
+}
+@keyframes m-fade {
+  from { opacity: 0; }
+}
+@keyframes m-sheet-up {
+  from { transform: translateY(100%); }
+}
+.m-sheet-grip {
+  width: 38px;
+  height: 5px;
+  margin: 0 auto 12px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+.m-sheet-title {
+  margin: 0 0 14px;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.m-sheet-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.m-sheet-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 54px;
+  padding: 10px 10px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  font-size: 15.5px;
+  text-align: left;
+}
+.m-sheet-action:active {
+  background: var(--m-press, color-mix(in srgb, var(--foreground) 7%, transparent));
+}
+.m-sheet-action:disabled {
+  opacity: 0.45;
+}
+.m-sheet-action[data-danger] {
+  color: var(--danger);
+}
+.m-sheet-action-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+}
+.m-sheet-action-icon svg {
+  width: 21px;
+  height: 21px;
+}
+.m-sheet-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.m-sheet-action-text small {
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+.m-sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.m-switch-row {
+  display: flex;
+  align-items: center;
+  border-radius: 16px;
+}
+.m-switch-row[data-active] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.m-switch-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 6px 10px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.m-switch-main .m-row-icon,
+.m-sheet .m-row-icon {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.m-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-confirm p {
+  margin: 0 0 6px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* 连接面板 */
+.m-connect-hint {
+  margin: -6px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  text-align: center;
+}
+.m-connect-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+.m-connect-or::before,
+.m-connect-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.m-connect-lan {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  font-weight: 600;
+}
+.m-connect-lan .m-device-tile {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.m-connect .m-input {
+  min-height: 46px;
+  font-size: 16px;
+}
+.m-connect-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+.m-connect-note svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 设置页：沿用桌面的设置内容 */
+.m-settings {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.m-settings > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 终端页 */
+.m-term-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--terminal);
+}
+.m-term-screen[hidden] {
+  display: none;
+}
+.m-term-nav {
+  background: var(--background);
+}
+.m-app .m-term-count[data-slot="button"] span {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1.8px solid currentColor;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.m-term-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.m-term-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 2px 0 6px;
+}
+.m-term-panel[hidden] {
+  display: none;
+}
+.m-term-overlay {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+.m-term-overlay svg {
+  width: 18px;
+  height: 18px;
+}
+.m-term-overlay-card {
+  padding: 20px;
+  background: color-mix(in srgb, var(--terminal) 82%, transparent);
+  backdrop-filter: blur(4px);
+}
+.m-term-ended {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 340px;
+  padding: 20px;
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--foreground);
+  text-align: center;
+}
+.m-term-ended h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+.m-term-ended p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.m-term-ended [data-slot="button"] {
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+/* AI 等你确认：选项卡片放在按键条上面，不浮在终端上 */
+.m-approval {
+  flex: none;
+  padding: 8px 8px 0;
+  background: var(--background);
+  border-top: 1px solid var(--m-line);
+}
+.m-approval .agent-approval {
+  position: static;
+  width: auto;
+  max-height: 42dvh;
+  box-shadow: none;
+  border-radius: 16px;
+}
+.m-approval .agent-approval-context {
+  font-size: 13px;
+}
+.m-approval .agent-approval-option[data-slot="button"] {
+  min-height: 46px;
+  font-size: 14px;
+}
+
+/* 输入栏：系统输入法打字，整段发给终端 */
+.m-compose {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 8px 0;
+  background: var(--background);
+  border-top: 1px solid var(--m-line);
+}
+.m-compose-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
+  max-height: 120px;
+  padding: 10px 14px;
+  border: 1px solid var(--m-line);
+  border-radius: 21px;
+  background: var(--surface);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 16px;
+  line-height: 20px;
+  resize: none;
+  field-sizing: content;
+  outline: none;
+}
+.m-compose-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.m-app .m-compose-send[data-slot="button"] {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  border-radius: 50%;
+}
+
+/* 终端下面那排键 */
+.m-keybar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px;
+  background: var(--background);
+}
+.m-compose + .m-keybar {
+  padding-top: 8px;
+}
+.m-keybar-keys {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+.m-keybar-keys::-webkit-scrollbar {
+  display: none;
+}
+.m-key {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 44px;
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--m-tile);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  touch-action: manipulation;
+}
+.m-key:active {
+  background: color-mix(in srgb, var(--foreground) 20%, transparent);
+}
+.m-key-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+.m-key-toggle[data-active] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-app[data-dir] > .m-screen,
+  .m-app[data-dir] > .m-term-screen,
+  .m-sheet,
+  .m-sheet-backdrop {
+    animation: none !important;
+  }
+}

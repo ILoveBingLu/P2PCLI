@@ -15,7 +15,6 @@ import { useContextMenu, type MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 import { CollaborationAnchor, CollaborationSidebarStatus } from "./CollaborationPorts";
 import { t } from "@/i18n";
-import { isMobile } from "@/lib/platform";
 
 const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
 /** 本机那一行第一次出现时默认展开，之后听用户的 */
@@ -148,8 +147,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   };
   const sendActions = (endpointId: string, disabled: boolean): MenuAction[] => [
     { id: "send-files", label: t("发送文件…"), icon: <FileUp className="size-4" />, disabled, separated: true, onAction: () => void sendTo(endpointId, false) },
-    // 手机的选择框不能选文件夹
-    ...(isMobile ? [] : [{ id: "send-folder", label: t("发送文件夹…"), icon: <FolderUp className="size-4" />, disabled, onAction: () => void sendTo(endpointId, true) }]),
+    { id: "send-folder", label: t("发送文件夹…"), icon: <FolderUp className="size-4" />, disabled, onAction: () => void sendTo(endpointId, true) },
   ];
 
   // 设备和附近设备的右键菜单；会话行的菜单在 DeviceSessions 里，先接到就不会冒泡到这里
