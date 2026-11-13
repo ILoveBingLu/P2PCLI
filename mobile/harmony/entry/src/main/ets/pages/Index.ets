@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import p2pcli from 'libp2pcli.so';
 import { ConnectPrompt, Core, SessionsState, TermModel } from '../common/Core';
@@ -22,9 +23,17 @@ struct Index {
   @Local i18n: I18n = I18n.shared;
 
   aboutToAppear(): void {
-    const ctx = AppStorage.get<common.UIAbilityContext>('context') as common.UIAbilityContext;
-    I18n.shared.init(ctx);
-    this.core.startCore(ctx);
+    hilog.info(0x0001, 'p2pcli', 'index: appear');
+    try {
+      const ctx = AppStorage.get<common.UIAbilityContext>('context') as common.UIAbilityContext;
+      I18n.shared.init(ctx);
+      this.core.startCore(ctx);
+    } catch (e) {
+      const err = e as Error;
+      hilog.error(0x0001, 'p2pcli', 'index: start threw %{public}s %{public}s', err.message, err.stack ?? '');
+      this.core.startState = 'failed';
+      this.core.startError = err.message;
+    }
   }
 
   @Builder

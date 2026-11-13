@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -216,6 +217,7 @@ export class Core {
   startCore(ctx: common.UIAbilityContext): void {
     this.ctx = ctx;
     this.startState = 'starting';
+    hilog.info(0x0001, 'p2pcli', 'start: data dir %{public}s', ctx.filesDir);
     try {
       fs.mkdirSync(ctx.filesDir + '/p2pcli', true);
       fs.mkdirSync(ctx.filesDir + '/inbox', true);
@@ -232,11 +234,14 @@ export class Core {
       // Rust 编译目标的系统名是 linux，这里明确告诉对方是鸿蒙
       platform: 'harmonyos'
     };
+    hilog.info(0x0001, 'p2pcli', 'start: calling rust');
     p2pcli.start(JSON.stringify(config), (event: string) => this.onEvent(event)).then((p: P2p) => {
+      hilog.info(0x0001, 'p2pcli', 'start: ready');
       this.p2p = p;
       this.startState = 'ready';
       this.refreshOverview();
     }).catch((e: Error) => {
+      hilog.error(0x0001, 'p2pcli', 'start failed: %{public}s', e.message);
       this.startState = 'failed';
       this.startError = tr(parseError(e).detail);
     });
