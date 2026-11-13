@@ -2,38 +2,24 @@ package io.github.ilovebinglu.p2pcli.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,37 +28,35 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ilovebinglu.p2pcli.Core
 import io.github.ilovebinglu.p2pcli.terminal.RemoteTerminal
 import kotlinx.coroutines.delay
+import uniffi.p2pcli_mobile.PathKind
 import uniffi.p2pcli_mobile.SessionView
-import uniffi.p2pcli_mobile.TransferState
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DeviceScreen(core: Core, endpointId: String, @Suppress("UNUSED_PARAMETER") snackbar: SnackbarHostState) {
+fun DeviceScreen(core: Core, endpointId: String) {
     val conns by core.conns.collectAsStateWithLifecycle()
     val overview by core.overview.collectAsStateWithLifecycle()
     val sessionsMap by core.sessions.collectAsStateWithLifecycle()
     val terms by core.terms.collectAsStateWithLifecycle()
     val transfers by core.transfers.collectAsStateWithLifecycle()
+    val connecting by core.connecting.collectAsStateWithLifecycle()
     val conn = conns[endpointId]
     val device = overview?.devices?.firstOrNull { it.endpointId == endpointId } ?: overview?.nearby?.firstOrNull { it.endpointId == endpointId }
     val name = device?.remark ?: device?.name ?: conn?.name ?: "设备"
+    val platform = device?.platform ?: conn?.platform ?: ""
     val state = sessionsMap[endpointId]
     val list = state?.list.orEmpty().sortedByDescending { it.createdAt }
     val titles = sessionTitles(state?.list.orEmpty())
     val openIds = terms.filter { it.endpointId == endpointId && it.state != RemoteTerminal.State.CLOSED }.mapNotNull { it.sessionId }.toSet()
-    var menu by remember { mutableStateOf(false) }
-    var ending by remember { mutableStateOf<SessionView?>(null) }
-    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        core.sendFiles(endpointId, uris)
-    }
+    var menuFor by remember { mutableStateOf<SessionView?>(null) }
+    var confirmEnd by remember { mutableStateOf(false) }
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> core.sendFiles(endpointId, uris) }
 
     // 会话列表和 AI 状态隔几秒刷新一次
     LaunchedEffect(endpointId, conn?.connId) {
@@ -82,97 +66,110 @@ fun DeviceScreen(core: Core, endpointId: String, @Suppress("UNUSED_PARAMETER") s
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            if (conn != null) "已连接 · " + pathText(conn.path) else "没有连着",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (conn != null) Ok else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+    Column(Modifier.fillMaxSize().background(Hero.Background).statusBarsPadding()) {
+        NavBar(
+            title = { NavTitle(name) },
+            subtitle = {
+                if (conn != null) SubText("已连接 · " + pathText(conn.path), if (conn.path.kind == PathKind.RELAY) Hero.Warning else Hero.Success, size = 12.5.sp)
+                else SubText("没有连着", size = 12.5.sp)
+            },
+            onBack = { core.back() },
+            actions = { if (conn != null) HeroIconButton(Lucide.FileUp, "发送文件", { pickFiles.launch("*/*") }) },
+        )
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 28.dp)) {
+            transfersSection(transfers)
+            item {
+                Box(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
+                    PlatformTile(platform, conn != null, 76.dp)
+                }
+            }
+            if (conn == null) {
+                item {
+                    EmptyMessage("没有连着这台设备", "连接断开了，后台会话还在对方电脑上运行，重新连上就能接着用。") {
+                        val busy = connecting == endpointId
+                        HeroButton(if (busy) "等待对方同意…" else "重新连接", { device?.let { core.openDevice(it) } }, Modifier.fillMaxWidth(),
+                            icon = Lucide.Plug, loading = busy, enabled = device != null && connecting == null)
                     }
-                },
-                navigationIcon = { IconButton(onClick = { core.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") } },
-                actions = {
-                    if (conn != null) {
-                        IconButton(onClick = { pickFiles.launch("*/*") }) { Icon(Icons.Default.Share, contentDescription = "发送文件") }
-                        IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "更多") }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(text = { Text("断开连接") }, onClick = { menu = false; core.disconnect(endpointId) })
+                }
+                return@LazyColumn
+            }
+            item {
+                SectionHeader("会话") {
+                    HeroIconButton(Lucide.RefreshCw, "刷新会话", { core.refreshSessions(endpointId) }, tint = Hero.Muted, size = 18.dp)
+                }
+            }
+            state?.error?.let { err ->
+                item { Text("读不到会话列表：$err", color = Hero.Danger, fontSize = 13.5.sp, modifier = Modifier.padding(bottom = 10.dp)) }
+            }
+            item {
+                when {
+                    state?.list == null && state?.error == null -> Placeholder("正在读取会话…")
+                    list.isEmpty() -> Placeholder("这台设备上还没有会话，新建一个终端开始用。")
+                    else -> Group {
+                        list.forEachIndexed { i, s ->
+                            if (i > 0) GroupDivider()
+                            HeroRow(
+                                onClick = { core.openTerminal(endpointId, s.id) },
+                                leading = {
+                                    Tile { s.agent?.let { AgentIcon(it.kind) } ?: Icon(Lucide.SquareTerminal, null, Modifier.size(20.dp), tint = Hero.Foreground) }
+                                },
+                                title = {
+                                    RowTitle(titles[s.id] ?: "会话", modifier = Modifier.weight(1f, fill = false))
+                                    if (s.id in openIds) Chip("已打开", accent = true)
+                                },
+                                subtitle = {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        s.agent?.let { AgentStateLabel(it, 13.sp) } ?: s.command?.let { SubText(it, mono = true, size = 12.sp) }
+                                        SubText(shortPath(s.currentPath), mono = true, size = 12.sp)
+                                    }
+                                    SubText(relativeTime(s.createdAt) + "创建", Hero.Muted.copy(alpha = 0.8f), size = 12.sp)
+                                },
+                                trailing = { HeroIconButton(Lucide.EllipsisVertical, "会话操作", { menuFor = s; confirmEnd = false }, tint = Hero.Muted) },
+                            )
                         }
                     }
-                },
-            )
-        },
-        floatingActionButton = {
-            if (conn != null) {
-                ExtendedFloatingActionButton(
-                    text = { Text("新建终端") },
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    onClick = { core.openTerminal(endpointId, null) },
-                )
+                }
             }
-        },
-    ) { padding ->
-        if (conn == null) {
-            Column(Modifier.fillMaxSize().padding(padding).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Text("连接断开了", style = MaterialTheme.typography.titleLarge)
-                Text("后台会话还在对方电脑上运行，重新连上就能接着用。", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 12.dp))
-                device?.let { d -> Button(onClick = { core.openDevice(d) }) { Text("重新连接") } }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 28.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(12.dp)).clickable { core.disconnect(endpointId) }.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(Lucide.Unplug, null, Modifier.size(18.dp), tint = Hero.Danger)
+                        Text("断开连接", color = Hero.Danger, fontSize = 15.sp)
+                    }
+                }
             }
-            return@Scaffold
         }
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 96.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            val active = transfers.filter { it.state != TransferState.DONE && it.state != TransferState.FAILED }
-            items(active, key = { "t-" + it.id }) { TransferCard(it) }
-            item { Section("会话") }
-            state?.error?.let { err -> item { Text("读不到会话列表：$err", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp)) } }
-            if (state?.list == null && state?.error == null) {
-                item { Text("正在读取会话…", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
-            } else if (list.isEmpty()) {
-                item { Text("这台设备上还没有会话，点“新建终端”开始用。", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
-            }
-            items(list, key = { it.id }) { s ->
-                ListItem(
-                    headlineContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(titles[s.id] ?: "会话", fontWeight = FontWeight.Medium)
-                            if (s.id in openIds) SuggestionChip(onClick = {}, label = { Text("已打开") })
-                        }
-                    },
-                    supportingContent = {
-                        Column {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                s.agent?.let { a -> Text(agentText(a), color = agentColor(a) ?: MaterialTheme.colorScheme.onSurfaceVariant) }
-                                    ?: s.command?.let { Text(it, fontFamily = FontFamily.Monospace) }
-                                Text(shortPath(s.currentPath), fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            Text(relativeTime(s.createdAt) + "创建", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    },
-                    trailingContent = {
-                        IconButton(onClick = { ending = s }) { Icon(Icons.Default.Delete, contentDescription = "结束会话") }
-                    },
-                    modifier = Modifier.fillMaxWidth().clickable { core.openTerminal(endpointId, s.id) },
-                )
-            }
+        if (conn != null) {
+            BottomBar { HeroButton("新建终端", { core.openTerminal(endpointId, null) }, Modifier.fillMaxWidth(), icon = Lucide.Plus) }
         }
     }
 
-    ending?.let { s ->
-        AlertDialog(
-            onDismissRequest = { ending = null },
-            title = { Text("结束“${titles[s.id] ?: "会话"}”？") },
-            text = { Text("里面运行的程序会被关掉，没保存的内容会丢失。") },
-            confirmButton = { TextButton(onClick = { ending = null; core.endSession(endpointId, s.id) }) { Text("结束会话", color = MaterialTheme.colorScheme.error) } },
-            dismissButton = { TextButton(onClick = { ending = null }) { Text("取消") } },
-        )
+    menuFor?.let { s ->
+        val title = titles[s.id] ?: "会话"
+        HeroSheet(onDismiss = { menuFor = null }, title = title) {
+            if (!confirmEnd) {
+                SheetAction(Lucide.SquareArrowOutUpRight, "打开", { menuFor = null; core.openTerminal(endpointId, s.id) })
+                SheetAction(Lucide.Trash2, "结束会话", { confirmEnd = true }, description = "关掉对方电脑上的这个会话和里面运行的程序", danger = true)
+            } else {
+                Text("结束后里面运行的程序会被关掉，没保存的内容会丢失。", color = Hero.Muted, fontSize = 14.sp,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                HeroButton("结束会话", { menuFor = null; core.endSession(endpointId, s.id) }, Modifier.fillMaxWidth(), kind = ButtonKind.Danger, icon = Lucide.Trash2)
+                Spacer(Modifier.height(10.dp))
+                HeroButton("取消", { confirmEnd = false }, Modifier.fillMaxWidth(), kind = ButtonKind.Ghost)
+            }
+        }
     }
+}
+
+@Composable
+private fun Placeholder(text: String) {
+    Text(text, color = Hero.Muted, fontSize = 13.5.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Hero.Surface).padding(18.dp))
 }

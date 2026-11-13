@@ -257,6 +257,11 @@ class Core(private val app: Application) : AppListener {
         }
     }
 
+    /** 按钮点的刷新：不用等下一轮 */
+    fun refreshSessions(endpointId: String) {
+        scope.launch { loadSessions(endpointId) }
+    }
+
     fun endSession(endpointId: String, sessionId: String) {
         val p = p2p ?: return
         val c = conns.value[endpointId] ?: return
