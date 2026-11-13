@@ -178,7 +178,12 @@ export struct DirPicker {
   }
 
   canChange(): boolean {
-    return this.session !== null && this.session.shell_ready && this.session.agent === null;
+    return this.session !== null && this.session.shell_ready && this.session.agent === null && !this.atDrives();
+  }
+
+  /** Windows 电脑上在盘的根目录点上一级，是“所有磁盘”这一层（路径是 \），只能选盘进去，不能切过去 */
+  atDrives(): boolean {
+    return this.listing?.path === '\\';
   }
 
   browse(path: string): void {
@@ -209,7 +214,7 @@ export struct DirPicker {
 
   build() {
     Column({ space: 10 }) {
-      Text(this.listing?.path ?? this.session?.current_path ?? '').fontSize(12.5).fontFamily('monospace').fontColor(Hero.muted)
+      Text(this.atDrives() ? t('所有磁盘') : this.listing?.path ?? this.session?.current_path ?? '').fontSize(12.5).fontFamily('monospace').fontColor(Hero.muted)
         .width('100%')
       Row({ space: 8 }) {
         Button() {
@@ -265,7 +270,9 @@ export struct DirPicker {
         Text(t('子目录太多，只列出了前 {{shown}} 个，可以输入名字筛选', ['shown', this.listing?.dirs.length ?? 0]))
           .fontSize(12).fontColor(Hero.muted).width('100%')
       }
-      if (!this.canChange()) {
+      if (this.atDrives()) {
+        Text(t('先选一个盘')).fontSize(12.5).fontColor(Hero.muted).width('100%')
+      } else if (!this.canChange()) {
         Text(this.session?.agent ? t('{{name}} 正在运行，退出后才能切换目录', ['name', this.session?.agent?.name ?? ''])
           : t('终端不在空闲提示符，完成当前输入或退出程序后才能切换')).fontSize(12.5).fontColor(Hero.warning).width('100%')
       }

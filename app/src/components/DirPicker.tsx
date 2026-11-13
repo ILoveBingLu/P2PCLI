@@ -114,7 +114,7 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
       setActive((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (e.metaKey || e.ctrlKey) void change(listing.path);
+      if (e.metaKey || e.ctrlKey) { if (listing.path !== "\\") void change(listing.path); }
       else if (shown[active]) void browse(join(shown[active]));
     } else if (e.key === "Backspace" && !filter && listing.parent) {
       e.preventDefault();
@@ -132,7 +132,9 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   )), [shown, active, connId]);
 
-  const here = listing?.path ?? currentPath ?? "";
+  // Windows 电脑上在盘的根目录点上一级，是“所有磁盘”这一层（路径是 \），只能选盘进去，不能切过去
+  const atDrives = listing?.path === "\\";
+  const here = atDrives ? t("所有磁盘") : listing?.path ?? currentPath ?? "";
   const atCurrent = listing != null && listing.path === currentPath;
 
   return (
@@ -166,12 +168,12 @@ export const DirPicker = memo(function DirPicker({ connId, sessionId, currentPat
           </div>
           {error && <div className="dir-picker-error" role="alert">{error}</div>}
           <div className="dir-picker-foot">
-            {onOpenEditor && <Button size="xs" variant="ghost" isDisabled={!listing} title={t("在代码编辑器里打开这个目录")}
+            {onOpenEditor && <Button size="xs" variant="ghost" isDisabled={!listing || atDrives} title={t("在代码编辑器里打开这个目录")}
               onPress={() => { if (listing) { onOpenEditor(listing.path); setOpen(false); } }}>
               <FileCode2 />{t("在编辑器中打开")}
             </Button>}
-            <span className="dir-picker-hint">{canChange ? (atCurrent ? t("终端已在这个目录") : t("⌘/Ctrl + 回车 也可切换")) : blockedReason}</span>
-            <Button size="xs" isDisabled={!canChange || !listing || atCurrent || changing || loading}
+            <span className="dir-picker-hint">{atDrives ? t("先选一个盘") : canChange ? (atCurrent ? t("终端已在这个目录") : t("⌘/Ctrl + 回车 也可切换")) : blockedReason}</span>
+            <Button size="xs" isDisabled={!canChange || !listing || atDrives || atCurrent || changing || loading}
               onPress={() => listing && void change(listing.path)}>
               {changing ? <LoaderCircle className="dir-picker-spin animate-spin" /> : <CornerDownLeft />}{t("切换到这里")}
             </Button>

@@ -11,6 +11,10 @@ const MAX_ENTRIES: usize = 1000;
 /// 路径长度上限：比各系统的 PATH_MAX 宽松，挡住明显异常的输入
 const MAX_PATH: usize = 4096;
 
+/// Windows 上“所有磁盘”这一层：在某个盘的根目录（`C:\`）点上一级到这里，列出电脑上所有的盘（`C:`、`D:`…）。
+/// 路径用 `\`，是为了老版本的手机、桌面不用改也能用：它们照常把盘名拼在后面得到 `\D:`，这边认成 `D:\`
+pub const DRIVES: &str = "\\";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DirListing {
     /// 实际列出的目录（绝对路径）
@@ -23,12 +27,35 @@ pub struct DirListing {
     pub truncated: bool,
 }
 
+/// “所有磁盘”那层拼出来的盘路径（`\D:`、`\D:\work`），或者只写了盘名（`D:`），整理成正常的 `D:\…`；别的返回 None
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drive_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(['\\', '/']).unwrap_or(path);
+    let b = rest.as_bytes();
+    if b.len() < 2 || !b[0].is_ascii_alphabetic() || b[1] != b':' { return None; }
+    if b.len() == 2 { return Some(format!("{rest}\\")); }
+    // 原本就是 `D:\…` 的不用动
+    if !matches!(b[2], b'\\' | b'/') || rest.len() == path.len() { return None; }
+    Some(rest.to_string())
+}
+
+fn is_drives(path: &str) -> bool {
+    matches!(path.trim(), "\\" | "/")
+}
+
 /// 校验并整理连接方给的路径：空着或 `~` 开头按用户目录算，其余必须是绝对路径
 pub fn resolve(path: &str) -> Result<PathBuf> {
     if path.len() > MAX_PATH || path.chars().any(char::is_control) {
         bail!("路径过长或包含控制字符");
     }
     let path = path.trim();
+    #[cfg(windows)]
+    let fixed = drive_path(path);
+    #[cfg(windows)]
+    let path = fixed.as_deref().unwrap_or(path);
+    if cfg!(windows) && is_drives(path) {
+        bail!("先选一个盘");
+    }
     let home = || std::env::home_dir().context("找不到用户目录");
     let resolved = if path.is_empty() || path == "~" {
         home()?
@@ -45,8 +72,21 @@ pub fn resolve(path: &str) -> Result<PathBuf> {
 }
 
 pub async fn list(path: &str) -> Result<DirListing> {
+    if cfg!(windows) && is_drives(path) {
+        return tokio::task::spawn_blocking(|| DirListing { path: DRIVES.into(), parent: None, dirs: drives(), truncated: false })
+            .await
+            .map_err(Into::into);
+    }
     let path = resolve(path)?;
     tokio::task::spawn_blocking(move || list_blocking(&path)).await?
+}
+
+/// 电脑上能打开的盘：`C:`、`D:`…（没插卡的读卡器、断开的网络盘打不开，不列）
+fn drives() -> Vec<String> {
+    (b'A'..=b'Z')
+        .map(|c| format!("{}:", c as char))
+        .filter(|d| cfg!(windows) && std::fs::metadata(format!("{d}\\")).is_ok_and(|m| m.is_dir()))
+        .collect()
 }
 
 fn list_blocking(path: &Path) -> Result<DirListing> {
@@ -68,7 +108,8 @@ fn list_blocking(path: &Path) -> Result<DirListing> {
     dirs.sort_by_cached_key(|name| (name.starts_with('.'), name.to_lowercase()));
     Ok(DirListing {
         path: path.to_string_lossy().into_owned(),
-        parent: path.parent().map(|p| p.to_string_lossy().into_owned()),
+        // Windows 的盘根目录（C:\\）再往上是“所有磁盘”
+        parent: path.parent().map(|p| p.to_string_lossy().into_owned()).or_else(|| cfg!(windows).then(|| DRIVES.to_string())),
         dirs,
         truncated,
     })
@@ -101,6 +142,29 @@ mod tests {
         assert_eq!(cd_command("pwsh.exe", r"C:\it's").unwrap(), r"Set-Location -LiteralPath 'C:\it''s'");
         assert_eq!(cd_command("cmd.exe", r"C:\work").unwrap(), r#"cd /d "C:\work""#);
         assert!(cd_command("cmd.exe", r"C:\100%").is_err());
+    }
+
+    #[test]
+    fn drive_paths_from_the_drives_level() {
+        assert_eq!(drive_path("\\D:").as_deref(), Some("D:\\"));
+        assert_eq!(drive_path("D:").as_deref(), Some("D:\\"));
+        assert_eq!(drive_path("\\D:\\work").as_deref(), Some("D:\\work"));
+        assert_eq!(drive_path("/e:/x").as_deref(), Some("e:/x"));
+        assert_eq!(drive_path("C:\\Users"), None);
+        assert_eq!(drive_path("/usr/bin"), None);
+        assert_eq!(drive_path("\\"), None);
+        assert!(is_drives("\\") && is_drives("/") && !is_drives(""));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_drive_roots_lead_to_the_drives_level() {
+        let root = list("C:\\").await.unwrap();
+        assert_eq!(root.parent.as_deref(), Some(DRIVES));
+        let all = list(DRIVES).await.unwrap();
+        assert!(all.dirs.contains(&"C:".to_string()) && all.parent.is_none());
+        assert_eq!(list("\\C:").await.unwrap().path, "C:\\");
+        assert!(resolve(DRIVES).is_err());
     }
 
     #[test]

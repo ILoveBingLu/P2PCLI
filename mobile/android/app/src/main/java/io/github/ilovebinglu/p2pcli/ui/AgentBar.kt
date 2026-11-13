@@ -164,7 +164,9 @@ fun DirPickerSheet(core: Core, term: RemoteTerminal, session: SessionView?, onDi
     var error by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf("") }
     var changing by remember { mutableStateOf(false) }
-    val canChange = session?.shellReady == true && session.agent == null
+    // Windows 电脑上在盘的根目录点上一级，是“所有磁盘”这一层（路径是 \），只能选盘进去，不能切过去
+    val atDrives = listing?.path == "\\"
+    val canChange = session?.shellReady == true && session.agent == null && !atDrives
     val browse = { path: String ->
         scope.launch {
             loading = true
@@ -185,7 +187,7 @@ fun DirPickerSheet(core: Core, term: RemoteTerminal, session: SessionView?, onDi
     val dirs = current?.dirs.orEmpty().filter { filter.isBlank() || it.contains(filter.trim(), ignoreCase = true) }
 
     HeroSheet(onDismiss = onDismiss, title = t("选择工作目录")) {
-        Text(current?.path ?: session?.currentPath ?: "", color = Hero.Muted, fontSize = 12.5.sp, fontFamily = Hero.Mono,
+        Text(if (atDrives) t("所有磁盘") else current?.path ?: session?.currentPath ?: "", color = Hero.Muted, fontSize = 12.5.sp, fontFamily = Hero.Mono,
             modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp))
         Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HeroButton(t("上一级"), { current?.parent?.let { browse(it) } }, Modifier.weight(1f), kind = ButtonKind.Secondary,
@@ -218,7 +220,9 @@ fun DirPickerSheet(core: Core, term: RemoteTerminal, session: SessionView?, onDi
         if (current?.truncated == true) {
             Text(t("子目录太多，只列出了前 {{shown}} 个，可以输入名字筛选", "shown" to current.dirs.size), color = Hero.Muted, fontSize = 12.sp)
         }
-        if (!canChange) {
+        if (atDrives) {
+            Text(t("先选一个盘"), color = Hero.Muted, fontSize = 12.5.sp, modifier = Modifier.padding(top = 8.dp))
+        } else if (!canChange) {
             val agent = session?.agent
             Text(
                 if (agent != null) t("{{name}} 正在运行，退出后才能切换目录", "name" to agent.name)
