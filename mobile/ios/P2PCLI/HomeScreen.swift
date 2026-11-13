@@ -90,7 +90,8 @@ struct HomeScreen: View {
         }
         // 用系统原生的标题栏：内容滚上去时系统自己画渐变模糊（滚动边缘效果）
         .navigationTitle("P2PCLI")
-        .navigationBarTitleDisplayMode(.large)
+        // logo 和名字就是标题：靠左和按钮放在同一行（系统的 inlineLarge），不另占一行
+        .toolbarTitleDisplayMode(.inlineLarge)
         .heroBrandTitle()
         .heroToolbar {
             ToolbarItemGroup(placement: .primaryAction) {
