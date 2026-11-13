@@ -1,5 +1,7 @@
 package io.github.ilovebinglu.p2pcli.ui
 
+import io.github.ilovebinglu.p2pcli.t
+import io.github.ilovebinglu.p2pcli.tr
 import android.annotation.SuppressLint
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -194,7 +196,7 @@ fun NavBar(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).bottomLine().padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeroIconButton(Lucide.ChevronLeft, "返回", onBack)
+        HeroIconButton(Lucide.ChevronLeft, t("返回"), onBack)
         Column(Modifier.weight(1f).padding(start = 2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = title)
             subtitle?.let { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = it) }
@@ -256,10 +258,12 @@ fun HeroRow(
     title: @Composable RowScope.() -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** 宽屏时右边正显示的那一项 */
+    selected: Boolean = false,
     subtitle: (@Composable ColumnScope.() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = { Icon(Lucide.ChevronRight, null, Modifier.size(18.dp), tint = Hero.Muted.copy(alpha = 0.7f)) },
 ) {
-    val base = modifier.fillMaxWidth().heightIn(min = 64.dp)
+    val base = modifier.fillMaxWidth().heightIn(min = 64.dp).then(if (selected) Modifier.background(Hero.AccentSoft.copy(alpha = 0.14f)) else Modifier)
     Row(
         (if (onClick != null) base.pressable(enabled, onClick, Hero.Press) else base)
             .alpha(if (enabled) 1f else 0.45f)

@@ -123,7 +123,18 @@ class Core(private val app: Application) : AppListener {
 
     val top: Screen get() = stack.value.last()
 
-    fun push(screen: Screen) = stack.update { it + screen }
+    /**
+     * 宽屏（折叠屏展开、平板、横屏）：左边一直是设备列表，右边是设备、终端或设置。
+     * 这时从列表里点设备、设置，右边直接换成它，不一层层往里叠
+     */
+    @Volatile
+    var wide = false
+    /** 宽屏时把左边的列表收起来，终端用整个屏幕 */
+    val sidebarHidden = MutableStateFlow(false)
+
+    fun push(screen: Screen) = stack.update {
+        if (wide && (screen is Screen.Device || screen is Screen.Settings)) listOf(Screen.Home, screen) else it + screen
+    }
     fun back() = stack.update { if (it.size > 1) it.dropLast(1) else it }
     private fun replaceTop(screen: Screen) = stack.update { it.dropLast(1) + screen }
     private fun home() = stack.update { listOf(Screen.Home) }
@@ -143,12 +154,12 @@ class Core(private val app: Application) : AppListener {
     override fun onTransfersChanged(transfers: List<TransferView>) {
         val before = this.transfers.value.associateBy { it.id }
         this.transfers.value = transfers
-        for (t in transfers) {
-            val old = before[t.id] ?: continue
-            if (old.state == t.state || !t.outgoing) continue
-            when (t.state) {
-                uniffi.p2pcli_mobile.TransferState.DONE -> notices.tryEmit("已发给 ${t.peerName}：${t.label}")
-                uniffi.p2pcli_mobile.TransferState.FAILED -> notices.tryEmit("没发出去：${t.error ?: t.label}")
+        for (x in transfers) {
+            val old = before[x.id] ?: continue
+            if (old.state == x.state || !x.outgoing) continue
+            when (x.state) {
+                uniffi.p2pcli_mobile.TransferState.DONE -> notices.tryEmit(t("已发给 {{name}}：{{label}}", "name" to x.peerName, "label" to x.label))
+                uniffi.p2pcli_mobile.TransferState.FAILED -> notices.tryEmit(t("没发出去：{{error}}", "error" to (x.error?.let { tr(it) } ?: x.label)))
                 else -> {}
             }
         }
@@ -180,7 +191,7 @@ class Core(private val app: Application) : AppListener {
                 withContext(Dispatchers.IO) { p.scanNearby() }
                 refreshOverview()
             } catch (e: Exception) {
-                notices.tryEmit("扫描失败：${errorText(e)}")
+                notices.tryEmit(t("扫描失败：{{error}}", "error" to errorText(e)))
             }
         }
     }
@@ -276,9 +287,9 @@ class Core(private val app: Application) : AppListener {
                 p.endSession(c.connId, sessionId)
                 terms.value.filter { it.endpointId == endpointId && it.sessionId == sessionId }.forEach { closeTerminal(it.key) }
                 loadSessions(endpointId)
-                notices.tryEmit("会话已结束")
+                notices.tryEmit(t("会话已结束"))
             } catch (e: Exception) {
-                notices.tryEmit("结束会话失败：${errorText(e)}")
+                notices.tryEmit(t("结束会话失败：{{error}}", "error" to errorText(e)))
             }
         }
     }
@@ -309,8 +320,8 @@ class Core(private val app: Application) : AppListener {
 
     /** 关掉手机上的这个终端，会话在对方电脑上接着跑 */
     fun closeTerminal(key: Int) {
-        val t = terms.value.firstOrNull { it.key == key } ?: return
-        t.close()
+        val term = terms.value.firstOrNull { it.key == key } ?: return
+        term.close()
         terms.update { all -> all.filter { it.key != key } }
         stack.update { all -> all.filter { it != Screen.Term(key) }.ifEmpty { listOf(Screen.Home) } }
     }
@@ -323,7 +334,7 @@ class Core(private val app: Application) : AppListener {
         } else {
             val d = overview.value?.devices?.firstOrNull { it.endpointId == term.endpointId }
             closeTerminal(term.key)
-            if (d != null) openDevice(d) else notices.tryEmit("找不到这台设备，请回到首页重新连接")
+            if (d != null) openDevice(d) else notices.tryEmit(t("找不到这台设备，请回到首页重新连接"))
         }
     }
 
@@ -351,9 +362,9 @@ class Core(private val app: Application) : AppListener {
             try {
                 val paths = withContext(Dispatchers.IO) { uris.mapIndexed { i, uri -> stage(uri, i) } }
                 withContext(Dispatchers.IO) { p.sendFiles(endpointId, paths) }
-                notices.tryEmit("开始发送 ${paths.size} 个文件")
+                notices.tryEmit(t("开始发送 {{count}} 个文件", "count" to paths.size))
             } catch (e: Exception) {
-                notices.tryEmit("发不了：${errorText(e)}")
+                notices.tryEmit(t("发不了：{{error}}", "error" to errorText(e)))
             }
         }
     }
@@ -367,7 +378,7 @@ class Core(private val app: Application) : AppListener {
         val dir = File(app.cacheDir, "outgoing/${System.currentTimeMillis()}-$index").apply { mkdirs() }
         val file = File(dir, name)
         resolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } }
-            ?: error("读不了这个文件")
+            ?: error(t("读不了这个文件"))
         return file.absolutePath
     }
 
@@ -387,7 +398,7 @@ class Core(private val app: Application) : AppListener {
             try {
                 p.saveSettings(value)
                 settings.value = p.settings()
-                notices.tryEmit("设置已保存")
+                notices.tryEmit(t("设置已保存"))
                 back()
                 refreshOverview()
             } catch (e: Exception) {

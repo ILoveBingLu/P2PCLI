@@ -45,6 +45,14 @@ kotlin {
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
+// 界面文字和桌面端用同一份翻译：打包时把桌面的 en.json 拷进 assets/i18n
+val copyI18n = tasks.register<Copy>("copyI18n") {
+    from(rootProject.file("../../app/src/i18n/locales")) { include("en.json") }
+    into(layout.buildDirectory.dir("generated/i18n/i18n"))
+}
+android.sourceSets["main"].assets.srcDir("build/generated/i18n")
+tasks.named("preBuild") { dependsOn(copyI18n) }
+
 // 打包前先编 Rust 库、生成绑定
 val buildRust = tasks.register<Exec>("buildRust") {
     description = "编 crates/mobile-ffi 给 Android，生成 Kotlin 绑定"
