@@ -94,9 +94,10 @@ final class P2PCLIUITests: XCTestCase {
 
         app.typeText("codex\n")
         let compose = app.buttons["fold-compose"].firstMatch
-        XCTAssertTrue(compose.waitForExistence(timeout: 30), "没认出 Codex，或者 AI 面板没出来")
+        let found = compose.waitForExistence(timeout: 30)
         sleep(3)
         shot("f4-agent-panel")
+        XCTAssertTrue(found, "没认出 Codex，或者 AI 面板没出来")
         compose.tap()
         sleep(2)
         shot("f5-compose")
