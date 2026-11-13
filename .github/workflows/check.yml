@@ -43,3 +43,12 @@ jobs:
           # 只查 Rust，不编界面：打包时要嵌进去的界面目录在就行
           mkdir -p app/dist && touch app/dist/index.html
           cargo check --locked -p p2pcli-app --target aarch64-linux-android
+
+      - name: 手机原生接口 mobile-ffi（按 Android ARM64 编译）
+        run: cargo build --locked -p p2pcli-mobile-ffi --target aarch64-linux-android
+
+      - name: 手机原生接口 mobile-ffi（测试：连接、开终端、会话）
+        run: |
+          # 开后台会话要 tmux
+          sudo apt-get install -y tmux
+          cargo test --locked -p p2pcli-mobile-ffi

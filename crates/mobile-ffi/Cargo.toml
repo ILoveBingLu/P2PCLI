@@ -1,0 +1,36 @@
+[package]
+name = "p2pcli-mobile-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "手机端（Android、iOS）原生界面调的 Rust 接口，UniFFI 导出成 Kotlin 和 Swift"
+
+[lib]
+name = "p2pcli_mobile"
+# cdylib：Android 装进 APK 的 .so；staticlib：iOS 链进 App；lib：本仓库里的测试和生成绑定用
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[features]
+# 生成 Kotlin/Swift 绑定的命令行（uniffi-bindgen）才要；打手机包时不开，不带进 clap 这些
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dependencies]
+# 手机只当连接的一方：不开 host
+p2pcli-core.workspace = true
+iroh.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uniffi = "0.32"
+thiserror = "2"
+url = "2"
+
+[dev-dependencies]
+# 测试里要在同一个进程起一台被连的设备，只有测试打开 host
+p2pcli-core = { workspace = true, features = ["host"] }
