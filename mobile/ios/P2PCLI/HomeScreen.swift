@@ -144,7 +144,9 @@ private struct BrandTitle: ViewModifier {
             content
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {
-                    ToolbarItem(placement: .largeTitle) { Brand(logo: 36, font: .largeTitle.bold()) }
+                    ToolbarItem(placement: .largeTitle) {
+                        Brand(logo: 36, font: .largeTitle.bold()).frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
         } else {
             content
@@ -167,8 +169,10 @@ private struct Brand: View {
     var body: some View {
         HStack(spacing: 9) {
             Image("logo").resizable().frame(width: logo, height: logo).accessibilityHidden(true)
-            Text("P2PCLI").font(font).lineLimit(1).minimumScaleFactor(0.7)
+            Text("P2PCLI").font(font).lineLimit(1)
         }
+        // 工具栏按最小宽度给自定义内容分地方：按实际宽度占位，不然字会被压没
+        .fixedSize()
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
