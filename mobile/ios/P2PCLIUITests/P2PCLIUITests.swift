@@ -105,7 +105,7 @@ final class P2PCLIUITests: XCTestCase {
 
         // 收起键盘：按键条最后那个键
         let hide = app.buttons["收起键盘"].firstMatch
-        XCTAssertTrue(hide.exists, "键盘弹着时按键条上没有收起键盘")
+        XCTAssertTrue(hide.isHittable, "键盘弹着时按键条上没有收起键盘，或者被键盘挡住了")
         hide.tap()
         sleep(2)
         shot("f5b-hidden")

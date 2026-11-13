@@ -14,6 +14,12 @@ struct TerminalScreen: View {
     /// 半折时下半屏自己选的模式；nil 跟着 AI 走
     @State private var deck: FoldDeck.Mode?
     @State private var keyboardUp = false
+    /// 键盘顶边在窗口里的位置；键盘收着时为 nil
+    @State private var keyboardTop: CGFloat?
+    /// 整页在窗口里的位置
+    @State private var page: CGRect = .zero
+    /// 半折时折痕下面那一排（AI 栏 + 按键条）的高度
+    @State private var barsHeight: CGFloat = 100
     @FocusState private var draftFocused: Bool
 
     enum Panel: String, Identifiable {
@@ -38,6 +44,11 @@ struct TerminalScreen: View {
         var subtitle = core.deviceName(term.endpointId)
         if !live { subtitle += " · " + t("已断开") } else if let path { subtitle += " · " + Format.path(path) }
 
+        // 半折时键盘高到会挡住按键条（下半屏太矮）：按键条贴着键盘顶上，终端让出这么多
+        let keyboardOverlap = keyboardTop.map { max(0, page.maxY - $0) } ?? 0
+        let lift = fold.map { max(0, $0.maxY + barsHeight - (page.height - keyboardOverlap)) } ?? 0
+        let upper = fold.map { max(80, $0.minY - lift) }
+
         // 终端控件始终是同一个位置上的同一个视图：半折和平常两种排法来回切时不会被拿下来重新放，
         // 否则它会丢掉键盘焦点，键盘收起
         return VStack(spacing: 0) {
@@ -46,17 +57,18 @@ struct TerminalScreen: View {
                 terminalArea(term)
                 if fold != nil && composing && live { composer(term, agent: agent) }
             }
-            .frame(minHeight: 80, maxHeight: fold.map { max(80, $0.minY) } ?? .infinity)
-            .layoutPriority(1)
+            .frame(minHeight: upper ?? 0, maxHeight: upper ?? .infinity)
             if let fold {
-                // 半折立着：折痕那一条不放东西，下面是按键条，再往下是键盘或 AI 面板
+                // 半折立着：折痕那一条不放东西，下面是按键条，再往下是键盘或 AI 面板（键盘弹着时被盖住的那截不放）
                 Color.clear.frame(height: fold.height)
                 VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: true) }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { barsHeight = $0 }
                 if live {
                     FoldDeck(term: term, agent: agent, choice: $deck) { compose() }
                 } else {
                     Spacer(minLength: 0)
                 }
+                Color.clear.frame(height: keyboardOverlap)
             }
         }
         .background {
@@ -65,6 +77,7 @@ struct TerminalScreen: View {
                     // 平常排法时键盘会把页面顶短，这时量不到折痕不算，等键盘收了再量
                     if f != nil || !keyboardUp { fold = f }
                 }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { page = $0 }
         }
         // 半折时整页（连同上面量折痕的那层）不跟着键盘缩：键盘从下半屏升起来盖住 AI 面板那块，
         // 终端和折痕的位置都不动
@@ -73,7 +86,15 @@ struct TerminalScreen: View {
             if fold == nil { VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: false) } }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardUp = false
+            keyboardTop = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let end = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            // 键盘移出屏幕（收起、外接键盘）时顶边在屏幕底下，算出来的遮挡是 0
+            keyboardTop = end.minY
+        }
         // 立起来时终端空闲就直接弹键盘；AI 跑起来自动换成 AI 面板，收起键盘
         .onChange(of: fold != nil && live) { _, ready in
             deck = nil
