@@ -13,6 +13,8 @@ if (isMobile) document.documentElement.dataset.mobile = "";
 // 代码编辑器的单独窗口（index.html?window=editor）只渲染编辑器，主窗口照旧
 const isEditorWindow = new URLSearchParams(location.search).get("window") === "editor";
 const EditorWindow = lazy(() => import("./components/editor/EditorWindow"));
+// 手机端是另一套界面（mobile/），桌面的 App 不在手机上用
+const MobileApp = lazy(() => import("./mobile/MobileApp"));
 
 function LocaleRoot({ children }: { children: React.ReactNode }) {
   const { i18n } = useTranslation();
@@ -30,7 +32,9 @@ void (async () => {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <LocaleRoot>
-        {isEditorWindow ? <Suspense fallback={null}><EditorWindow /></Suspense> : <App />}
+        {isEditorWindow ? <Suspense fallback={null}><EditorWindow /></Suspense>
+          : isMobile ? <Suspense fallback={null}><MobileApp /></Suspense>
+          : <App />}
       </LocaleRoot>
     </React.StrictMode>,
   );

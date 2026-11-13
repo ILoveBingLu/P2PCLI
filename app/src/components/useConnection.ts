@@ -7,7 +7,8 @@ import { parsePairLink } from "@/lib/pairLink";
 
 interface Options {
   onConnected: (connId: number, info: RemoteInfo, code: string | null, path: PathInfo) => void;
-  onOpenChange: (open: boolean) => void;
+  /** 连接面板该开还是关；连不上时 fail 是原因（手机按它决定弹密码面板还是只提示） */
+  onOpenChange: (open: boolean, fail?: ConnectFail) => void;
 }
 
 export function useConnection({ onConnected, onOpenChange }: Options) {
@@ -40,7 +41,7 @@ export function useConnection({ onConnected, onOpenChange }: Options) {
     } catch (e) {
       const f = e as ConnectFail;
       setError(f.message ?? String(e));
-      onOpenChange(true);
+      onOpenChange(true, f);
       if (f.reject === "need_password" || f.reject === "bad_password") {
         if (!lan) setTarget(target.replace(/\D/g, ""));
         window.setTimeout(() => pwRef.current?.focus(), 0);

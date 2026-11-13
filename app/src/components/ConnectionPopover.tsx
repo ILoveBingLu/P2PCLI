@@ -1,6 +1,6 @@
 import { Checkbox, Description, InputOTP, Popover, REGEXP_ONLY_DIGITS } from "@heroui/react";
 import { Fragment } from "react";
-import { ArrowUpRight, Check, Link, LoaderCircle, LockKeyhole, ScanLine } from "lucide-react";
+import { ArrowUpRight, Check, Link, LoaderCircle, LockKeyhole } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input";
 import { PlatformIcon } from "./PlatformIcon";
 import type { useConnection } from "./useConnection";
 import { t } from "@/i18n";
-import { isMobile } from "@/lib/platform";
 
 // Let the popover paint before OTP focus/selection initialization runs.
 function focusDeviceCodeAfterPaint(input: HTMLInputElement | null) {
@@ -63,16 +62,6 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
               }}
             >
               <FieldGroup className="gap-3">
-                {/* 手机：扫桌面端的二维码最省事，设备码和密码照样能手输 */}
-                {isMobile && !lanTarget && (
-                  <>
-                    <Button type="button" className="w-full" disabled={busy} onPress={() => void connection.scanAndConnect()}>
-                      <ScanLine data-icon="inline-start" />
-                      {t("扫码连接")}
-                    </Button>
-                    <div className="connect-or">{t("或者输入设备码和配对密码")}</div>
-                  </>
-                )}
                 {lanTarget ? (
                   <Field data-disabled={busy}>
                     <FieldLabel>{t("局域网设备")}</FieldLabel>
@@ -97,8 +86,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                       id="remote-code"
                       className="gap-2"
                       variant="secondary"
-                      // 手机上打开面板不自动弹键盘，先给扫码的机会
-                      ref={isMobile ? undefined : focusDeviceCodeAfterPaint}
+                      ref={focusDeviceCodeAfterPaint}
                       pushPasswordManagerStrategy="none"
                       aria-label={t("设备码，9 位数字")}
                       maxLength={9}
@@ -143,8 +131,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                     autoComplete="off"
                   />
                 </Field>
-                {/* 互相信任是让对方以后能控制本机；手机不能被控制 */}
-                {!isMobile && <Checkbox isSelected={mutual} onChange={setMutual} isDisabled={busy}>
+                <Checkbox isSelected={mutual} onChange={setMutual} isDisabled={busy}>
                   <Checkbox.Content className="gap-3 text-sm">
                     <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
                     {t("互相信任")}
@@ -152,7 +139,7 @@ export function ConnectionPopover({ open, onOpenChange, connection }: {
                   <Description className="pl-7 text-xs text-muted-foreground">
                     {t("同时允许这台设备以后直接控制我，不再要密码和确认，它上面的 AI 就能直接操作我这台电脑。不勾的话，它再来连我时我这边会弹窗问我。仅建议用于自己的设备。")}
                   </Description>
-                </Checkbox>}
+                </Checkbox>
                 {error && (
                   <Alert variant="destructive">
                     <AlertDescription>{error}</AlertDescription>

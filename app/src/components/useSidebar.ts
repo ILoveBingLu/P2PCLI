@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { isMobile } from "@/lib/platform";
 
 const STORAGE_KEY = "p2pcli.sidebar";
 const isMac = navigator.platform.toLowerCase().includes("mac");
@@ -13,11 +12,9 @@ function isShortcut(e: KeyboardEvent) {
     : e.ctrlKey && e.shiftKey && !e.metaKey;
 }
 
-/** 侧边栏收起状态，记在本机，快捷键在终端获得焦点时也生效。
- * 手机上侧边栏是盖在终端上面的抽屉：每次打开软件都收着，也不记 */
+/** 侧边栏收起状态，记在本机，快捷键在终端获得焦点时也生效 */
 export function useSidebar() {
   const [open, setOpen] = useState(() => {
-    if (isMobile) return false;
     try {
       return localStorage.getItem(STORAGE_KEY) !== "collapsed";
     } catch {
@@ -26,10 +23,8 @@ export function useSidebar() {
   });
   const toggle = useCallback(() => setOpen((v) => !v), []);
   const show = useCallback(() => setOpen(true), []);
-  const hide = useCallback(() => setOpen(false), []);
 
   useEffect(() => {
-    if (isMobile) return;
     try {
       localStorage.setItem(STORAGE_KEY, open ? "open" : "collapsed");
     } catch {
@@ -49,5 +44,5 @@ export function useSidebar() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [toggle]);
 
-  return { open, toggle, show, hide };
+  return { open, toggle, show };
 }

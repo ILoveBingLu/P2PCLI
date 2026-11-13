@@ -83,8 +83,6 @@ import {
 import { cn } from "@/lib/utils";
 import { RemarksProvider } from "./components/Remarks";
 import { t, tr } from "@/i18n";
-import { isMobile } from "@/lib/platform";
-import { MobileKeyBar } from "./components/MobileKeyBar";
 
 interface Tab {
   key: number;
@@ -520,9 +518,6 @@ export default function App() {
 
   const connection = useConnection({ onConnected, onOpenChange: setShowConnect });
   const sidebar = useSidebar();
-  // 手机上切到别的标签（包括连上以后新开的）就把设备抽屉收起来，免得挡着终端
-  const hideDrawer = sidebar.hide;
-  useEffect(() => { if (isMobile) hideDrawer(); }, [activeKey, hideDrawer]);
   const updater = useUpdater();
   const scanNearby = async (reveal = false) => {
     if (reveal) {
@@ -724,7 +719,7 @@ export default function App() {
       onOpenChange={setShowCollaboration} onPrepare={prepareCollaboration}>
     <CollaborationPorts>
     <div className="app-shell">
-      {!isMobile && <DynamicIsland updater={updater} transfers={transfers} />}
+      <DynamicIsland updater={updater} transfers={transfers} />
       <Titlebar
         ov={ov}
         onKick={(session) => void api.kick(session.session).then(refresh).catch((e) => toast.error(String(e)))}
@@ -740,7 +735,7 @@ export default function App() {
         onToggleSidebar={sidebar.toggle}
         connectionAction={
           <>
-            {!isMobile && <Button
+            <Button
               variant={showCollaboration ? "secondary" : "ghost"}
               size="icon-sm"
               aria-label={t("协作")}
@@ -748,7 +743,7 @@ export default function App() {
               onPress={() => { setShowSettings(false); setShowCollaboration((value) => !value); }}
             >
               <Network />
-            </Button>}
+            </Button>
             <ConnectionPopover
               connection={connection}
               open={showConnect}
@@ -765,9 +760,6 @@ export default function App() {
           </>
         }
       />
-      {isMobile && sidebar.open && !showSettings && (
-        <div className="mobile-drawer-backdrop" aria-hidden="true" onClick={sidebar.hide} />
-      )}
       {!showSettings && <ConnectionSidebar
         ov={ov}
         liveSessions={liveSessions}
@@ -791,16 +783,14 @@ export default function App() {
         paths={paths}
         activeKey={activeKey}
         sessionTarget={sessionTarget}
-        onOpenSession={(target, id) => { addTab(target.connId, target.info, target.code, id); if (isMobile) sidebar.hide(); }}
+        onOpenSession={(target, id) => addTab(target.connId, target.info, target.code, id)}
         onShowSessions={(target) => {
-          if (isMobile) sidebar.hide();
           if (sessionTarget && sessionTarget.connId !== target.connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))
             void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
           setSessionTarget(target);
           setShowSettings(false);
         }}
         onSelectTab={(key) => {
-          if (isMobile) sidebar.hide();
           if (sessionTarget && !tabs.some((tab) => tab.connId === sessionTarget.connId))
             void api.disconnect(sessionTarget.connId).catch((e) => toast.error(String(e)));
           setActiveKey(key); setSessionTarget(null); setShowSettings(false);
@@ -826,7 +816,7 @@ export default function App() {
         {showSettings && ov && (
           <SettingsPage ov={ov} onChanged={refresh} updater={updater} />
         )}
-        {!showSettings && !isMobile && <CollaborationDrawer />}
+        {!showSettings && <CollaborationDrawer />}
         {!showSettings && sessionTarget && (
           <RemoteSessions
             key={sessionTarget.connId}
@@ -926,7 +916,6 @@ export default function App() {
                   ov={ov}
                   onLocalDevice={() => setShowLocalDevice(true)}
                   onScanNearby={() => void scanNearby(true)}
-                  onScanCode={() => void connection.scanAndConnect()}
                   scanning={scanningNearby}
                   onSettings={() => setShowSettings(true)}
                   onConnect={() => setShowConnect(true)}
@@ -1025,7 +1014,7 @@ export default function App() {
                 </Tabs.Panel>
               ))}
               {/* 右侧悬浮：代码编辑器（单独的窗口）、端口转发。不占标签栏，也不挡终端的字 */}
-              {!isMobile && activeTab && activeTab.state === "open" && !showSettings && !sessionTarget && (
+              {activeTab && activeTab.state === "open" && !showSettings && !sessionTarget && (
                 <div className="terminal-dock" role="toolbar" aria-label={t("设备工具")}>
                   <Button variant="ghost" size="icon-sm" className="terminal-dock-button" aria-label={t("代码编辑器")}
                     title={t("在单独的窗口里打开代码编辑器，直接编辑这台设备上的文件")} onClick={() => openEditor(activeTab)}>
@@ -1038,9 +1027,6 @@ export default function App() {
                 </div>
               )}
             </div>
-            {isMobile && activeTab && activeTab.state === "open" && (
-              <MobileKeyBar onKeys={(data) => termHandles.current.get(activeTab.key)?.keys(data)} />
-            )}
             {activeTab && activeAgent && (
               <AgentComposer
                 key={`composer-${activeTab.key}`}
@@ -1096,7 +1082,7 @@ export default function App() {
               state={activeTab.state}
               path={paths[activeTab.connId]}
               snapshot={liveSessions[activeTab.connId]}
-              onOpenEditor={isMobile ? undefined : openEditorAt}
+              onOpenEditor={openEditorAt}
             />}
           </Tabs>
 

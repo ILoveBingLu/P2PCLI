@@ -1,4 +1,4 @@
-import type { PointerEvent } from "react";
+import type { PointerEvent, ReactNode } from "react";
 import { t } from "@/i18n";
 
 /** 手机键盘上没有、终端里又常用的键。data 是发给终端的原始字节 */
@@ -23,27 +23,30 @@ const KEYS: { label: string; data: string; title: string }[] = [
 
 /**
  * 手机上终端下面的一排按键。按下时不抢终端的焦点，软键盘不会收起；
- * 横着能滑，放得下全部。
+ * 横着能滑，放得下全部。leading 放在最左边、不跟着滑。
  */
-export function MobileKeyBar({ onKeys }: { onKeys: (data: string) => void }) {
+export function MobileKeyBar({ onKeys, leading }: { onKeys: (data: string) => void; leading?: ReactNode }) {
   // 在按下那一刻就发并拦住默认行为：点按钮会让终端失焦，软键盘跟着收起
   const press = (data: string) => (e: PointerEvent) => {
     e.preventDefault();
     onKeys(data);
   };
   return (
-    <div className="mobile-keybar" role="toolbar" aria-label={t("终端按键")}>
-      {KEYS.map((key) => (
-        <button
-          key={key.title}
-          type="button"
-          className="mobile-key"
-          aria-label={key.title}
-          onPointerDown={press(key.data)}
-        >
-          {key.label}
-        </button>
-      ))}
+    <div className="m-keybar" role="toolbar" aria-label={t("终端按键")}>
+      {leading}
+      <div className="m-keybar-keys">
+        {KEYS.map((key) => (
+          <button
+            key={key.title}
+            type="button"
+            className="m-key"
+            aria-label={key.title}
+            onPointerDown={press(key.data)}
+          >
+            {key.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
