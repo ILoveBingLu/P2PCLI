@@ -225,11 +225,11 @@ fun Modifier.topLine(): Modifier = drawBehind {
     drawLine(Hero.Line, Offset(0f, 0.5f), Offset(size.width, 0.5f), 1f)
 }
 
-/** 页面底下固定的主按钮区 */
+/** 页面底下固定的主按钮区。先让开系统手势条（安全区），背景和分隔线只画在按钮区里，安全区透出页面本来的底色 */
 @Composable
 fun BottomBar(content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth().topLine().background(Hero.Background).navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().navigationBarsPadding().topLine().background(Hero.Background).padding(horizontal = 16.dp, vertical = 10.dp),
         content = content,
     )
 }
