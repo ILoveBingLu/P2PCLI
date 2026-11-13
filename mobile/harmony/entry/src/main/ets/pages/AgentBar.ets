@@ -6,7 +6,8 @@ import { shortPath } from '../common/Format';
 
 /**
  * 终端下面一行：最左边是当前工作目录（点开选目录），后面是对方电脑上装了的命令行 AI，点一下在这个会话里启动。
- * 和桌面一样，终端停在空闲的命令提示符、还没在跑 AI 时才能启动；跑着程序时目录只能看不能切
+ * 和桌面一样，终端停在空闲的命令提示符、还没在跑 AI 时才能启动；跑着程序时目录只能看不能切。
+ * 这个会话里在跑 AI 时整行不显示
  */
 @ComponentV2
 export struct AgentBar {
@@ -41,71 +42,73 @@ export struct AgentBar {
   }
 
   build() {
-    Scroll() {
-      Row({ space: 6 }) {
-        this.pill(t('当前目录：{{path}}，点击选择目录', ['path', this.path()]), $r('app.media.lucide_folder_open_muted'), this.path(), true,
-          () => this.onPickDir())
-        if (this.idle()) {
-          if (this.state() === undefined || (this.state()?.scanning && this.state()?.list === null)) {
-            Row({ space: 6 }) {
-              LoadingProgress().width(16).height(16).color(Hero.muted)
-              Text(t('正在检测 AI')).fontSize(12.5).fontColor(Hero.muted)
-            }.padding({ left: 6, right: 6 })
-          } else if (this.state()?.list === null) {
-            this.pill(t('AI 检测失败，重试'), $r('app.media.lucide_refresh_cw'), t('检测失败 · 重试'), false,
-              () => this.core.scanAgents(this.term.connId, true))
-          } else if ((this.state()?.list ?? []).length === 0) {
-            this.pill(t('未检测到 AI，点击重新检测'), $r('app.media.lucide_refresh_cw_muted'), t('未检测到 AI，点击重新检测'), false,
-              () => this.core.scanAgents(this.term.connId, true))
-          } else {
-            ForEach(this.state()?.list ?? [], (a: InstalledAgentView) => {
+    if (this.session === null || this.session.agent === null) {
+      Scroll() {
+        Row({ space: 6 }) {
+          this.pill(t('当前目录：{{path}}，点击选择目录', ['path', this.path()]), $r('app.media.lucide_folder_open_muted'), this.path(), true,
+            () => this.onPickDir())
+          if (this.idle()) {
+            if (this.state() === undefined || (this.state()?.scanning && this.state()?.list === null)) {
               Row({ space: 6 }) {
-                if (this.launching === a.kind) {
-                  LoadingProgress().width(16).height(16).color(Hero.accent)
-                } else {
-                  Image(agentIcon(a.kind)).width(16).height(16)
-                }
-                Text(a.name).fontSize(12.5).fontColor(Hero.foreground).maxLines(1)
-              }
-              .height(34).padding({ left: 12, right: 12 }).borderRadius(17).backgroundColor(Hero.tile)
-              .opacity(this.launching !== null && this.launching !== a.kind ? 0.5 : 1)
-              .accessibilityText(t('启动 {{name}}', ['name', a.name]))
-              .onClick(() => this.launch(a, false))
-              // Claude Code 长按可以选“允许之后切换全部放行”，和桌面的右键菜单一样
-              .gesture(LongPressGesture().onAction(() => {
-                if (a.kind === 'claude') {
-                  this.menuFor = a;
-                  this.showMenu = true;
-                }
-              }))
-            }, (a: InstalledAgentView) => a.kind)
-            Stack() {
-              if (this.state()?.scanning) {
                 LoadingProgress().width(16).height(16).color(Hero.muted)
-              } else {
-                Image($r('app.media.lucide_refresh_cw_muted')).width(15).height(15)
+                Text(t('正在检测 AI')).fontSize(12.5).fontColor(Hero.muted)
+              }.padding({ left: 6, right: 6 })
+            } else if (this.state()?.list === null) {
+              this.pill(t('AI 检测失败，重试'), $r('app.media.lucide_refresh_cw'), t('检测失败 · 重试'), false,
+                () => this.core.scanAgents(this.term.connId, true))
+            } else if ((this.state()?.list ?? []).length === 0) {
+              this.pill(t('未检测到 AI，点击重新检测'), $r('app.media.lucide_refresh_cw_muted'), t('未检测到 AI，点击重新检测'), false,
+                () => this.core.scanAgents(this.term.connId, true))
+            } else {
+              ForEach(this.state()?.list ?? [], (a: InstalledAgentView) => {
+                Row({ space: 6 }) {
+                  if (this.launching === a.kind) {
+                    LoadingProgress().width(16).height(16).color(Hero.accent)
+                  } else {
+                    Image(agentIcon(a.kind)).width(16).height(16)
+                  }
+                  Text(a.name).fontSize(12.5).fontColor(Hero.foreground).maxLines(1)
+                }
+                .height(34).padding({ left: 12, right: 12 }).borderRadius(17).backgroundColor(Hero.tile)
+                .opacity(this.launching !== null && this.launching !== a.kind ? 0.5 : 1)
+                .accessibilityText(t('启动 {{name}}', ['name', a.name]))
+                .onClick(() => this.launch(a, false))
+                // Claude Code 长按可以选“允许之后切换全部放行”，和桌面的右键菜单一样
+                .gesture(LongPressGesture().onAction(() => {
+                  if (a.kind === 'claude') {
+                    this.menuFor = a;
+                    this.showMenu = true;
+                  }
+                }))
+              }, (a: InstalledAgentView) => a.kind)
+              Stack() {
+                if (this.state()?.scanning) {
+                  LoadingProgress().width(16).height(16).color(Hero.muted)
+                } else {
+                  Image($r('app.media.lucide_refresh_cw_muted')).width(15).height(15)
+                }
               }
+              .width(34).height(34)
+              .accessibilityText(t('刷新已安装的 AI'))
+              .onClick(() => this.core.scanAgents(this.term.connId, true))
             }
-            .width(34).height(34)
-            .accessibilityText(t('刷新已安装的 AI'))
-            .onClick(() => this.core.scanAgents(this.term.connId, true))
           }
         }
+        .padding({ left: 8, right: 8 })
       }
-      .padding({ left: 8, right: 8 })
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+      .padding({ top: 8 })
+      .bindSheet(this.showMenu!!, this.menuSheet(), {
+        height: SheetSize.FIT_CONTENT,
+        backgroundColor: Hero.surface,
+        title: { title: this.menuFor?.name ?? '' },
+        onDisappear: () => {
+          this.menuFor = null;
+        }
+      })
     }
-    .scrollable(ScrollDirection.Horizontal)
-    .scrollBar(BarState.Off)
-    .width('100%')
-    .padding({ top: 8 })
-    .bindSheet(this.showMenu!!, this.menuSheet(), {
-      height: SheetSize.FIT_CONTENT,
-      backgroundColor: Hero.surface,
-      title: { title: this.menuFor?.name ?? '' },
-      onDisappear: () => {
-        this.menuFor = null;
-      }
-    })
   }
 
   path(): string {
