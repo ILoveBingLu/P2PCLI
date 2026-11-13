@@ -12,6 +12,7 @@ struct TerminalScreen: View {
     @State private var fold: CGRect?
     /// 半折时下半屏自己选的模式；nil 跟着 AI 走
     @State private var deck: FoldDeck.Mode?
+    @State private var keyboardUp = false
     @FocusState private var draftFocused: Bool
 
     enum Panel: String, Identifiable {
@@ -36,34 +37,41 @@ struct TerminalScreen: View {
         var subtitle = core.deviceName(term.endpointId)
         if !live { subtitle += " · " + t("已断开") } else if let path { subtitle += " · " + Format.path(path) }
 
-        return Group {
+        // 终端控件始终是同一个位置上的同一个视图：半折和平常两种排法来回切时不会被拿下来重新放，
+        // 否则它会丢掉键盘焦点，键盘收起
+        return VStack(spacing: 0) {
+            terminalArea(term)
+                .frame(minHeight: 80, maxHeight: fold.map { max(80, $0.minY) } ?? .infinity)
+                .layoutPriority(1)
             if let fold {
                 // 半折立着：终端在折痕上面，折痕那一条不放东西，下面是按键条和键盘或 AI 面板。
                 // 键盘弹起来时整页的高度只到键盘顶上：先保终端占满折痕以上，剩下的给按键条，下半屏的面板被键盘盖住
-                VStack(spacing: 0) {
-                    terminalArea(term).frame(minHeight: 80, maxHeight: max(80, fold.minY)).layoutPriority(1)
-                    Color.clear.frame(height: fold.height)
-                    VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: true) }
-                    if live {
-                        FoldDeck(term: term, agent: agent, choice: $deck) { compose() }
-                    } else {
-                        Spacer(minLength: 0)
-                    }
+                Color.clear.frame(height: fold.height)
+                VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: true) }
+                if live {
+                    FoldDeck(term: term, agent: agent, choice: $deck) { compose() }
+                } else {
+                    Spacer(minLength: 0)
                 }
-            } else {
-                terminalArea(term)
-                    .heroBottomBar { VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: false) } }
             }
+        }
+        .heroBottomBar {
+            if fold == nil { VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: false) } }
         }
         .background {
             Color.clear
                 .ignoresSafeArea(.keyboard)
-                .onGeometryChange(for: CGRect?.self) { Fold.horizontal($0) } action: { fold = $0 }
+                .onGeometryChange(for: CGRect?.self) { Fold.horizontal($0) } action: { f in
+                    // 键盘弹着时量到的不算：页面被键盘顶短了，折痕可能量不到，等键盘收了再说
+                    if f != nil || !keyboardUp { fold = f }
+                }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }
         // 立起来时终端空闲就直接弹键盘；AI 跑起来自动换成 AI 面板，收起键盘
-        .onChange(of: fold != nil) { _, folded in
+        .onChange(of: fold != nil && live) { _, ready in
             deck = nil
-            if folded && live && agent == nil { term.focus() }
+            if ready && agent == nil { term.focus() }
         }
         .onChange(of: agent != nil) { _, running in
             deck = nil
