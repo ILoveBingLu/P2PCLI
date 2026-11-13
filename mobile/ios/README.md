@@ -16,6 +16,8 @@ xcodegen                  # 按 project.yml 生成 P2PCLI.xcodeproj
 open P2PCLI.xcodeproj
 ```
 
+打一个不签名的 IPA（自己签名后装到真机上试）：`sh build-ipa.sh`，产物在 `build/P2PCLI-<版本>-unsigned.ipa`。
+
 改了 `crates/mobile-ffi` 的接口要重跑 `build-rust.sh`；加了文件、改了工程设置要重跑 `xcodegen`。
 图标和 App 图标由 `python3 mobile/ios/tools/make_assets.py`（在仓库根目录跑）生成。
 
