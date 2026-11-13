@@ -12,7 +12,7 @@ struct SettingsSheet: View {
             if let v = core.settings {
                 SettingsForm(v: v)
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Hero.background)
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .interactiveDismissDisabled(core.savingSettings)
@@ -182,8 +182,6 @@ private struct SettingsForm: View {
                 Text(t("保存后马上生效。改了代理或中继会重新连网络，开着的终端会断开，对方电脑上的会话还在。"))
             }
         }
-        .scrollContentBackground(.hidden)
-        .background(Hero.background)
         .disabled(saving)
         .navigationTitle(t("设置"))
         .navigationBarTitleDisplayMode(.inline)

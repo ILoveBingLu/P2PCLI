@@ -89,8 +89,6 @@ struct HomeScreen: View {
             }
         }
         .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Hero.background)
         .refreshable {
             core.scanNearby()
             await core.refreshOverview()

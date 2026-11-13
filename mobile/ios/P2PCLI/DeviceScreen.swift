@@ -98,8 +98,6 @@ struct DeviceScreen: View {
             }
         }
         .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Hero.background)
         .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await core.loadSessions(endpointId) }

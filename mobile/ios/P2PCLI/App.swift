@@ -65,7 +65,6 @@ struct RootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Hero.background)
         .sheet(item: $core.prompt) { p in ConnectSheet(prompt: p) }
         .sheet(isPresented: $core.showSettings) { SettingsSheet() }
         .fullScreenCover(isPresented: $core.scanning) { ScanScreen() }
@@ -95,7 +94,6 @@ private struct DetailRoot: View {
             } description: {
                 Text(t("从左边的列表里选一台设备，或者连接一台新设备。"))
             }
-            .background(Hero.background)
         }
     }
 }

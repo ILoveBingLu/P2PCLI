@@ -18,7 +18,7 @@ struct TerminalScreen: View {
         if let term = core.terms.first(where: { $0.key == key }) {
             content(term)
         } else {
-            Color.clear.background(Hero.background)
+            Color.clear
         }
     }
 
@@ -45,7 +45,9 @@ struct TerminalScreen: View {
                 if fold != nil { Spacer(minLength: 0) }
             }
         }
-        .background(Hero.background)
+        // 液态玻璃：栏不要自己的背景，颜色由下面的内容决定。终端的底色铺满整页（包括标题栏、按键条下面），
+        // 玻璃按钮直接浮在终端上，不另垫一层
+        .background(Hero.terminal.ignoresSafeArea())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .heroSubtitle(subtitle)
@@ -383,7 +385,6 @@ private struct SwitchPanel: View {
                     .listRowBackground(Hero.surface)
                 }
             }
-            .scrollContentBackground(.hidden)
             .navigationTitle(t("开着的终端"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
