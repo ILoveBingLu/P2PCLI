@@ -1,11 +1,13 @@
 [workspace]
 resolver = "3"
 members = ["crates/core", "crates/cli", "crates/dev", "crates/server", "crates/mobile-ffi", "app/src-tauri"]
-exclude = ["vendor/tauri-plugin-window-controls", "vendor/iroh-mdns-address-lookup"]
+exclude = ["vendor/tauri-plugin-window-controls", "vendor/iroh-mdns-address-lookup", "vendor/netdev"]
 
 [patch.crates-io]
 tauri-plugin-window-controls = { path = "vendor/tauri-plugin-window-controls" }
 iroh-mdns-address-lookup = { path = "vendor/iroh-mdns-address-lookup" }
+# 0.46.3 编不了 iOS（手机原生接口要编），把 0.47.0 的修复搬过来；iroh 的 netwatch 升到 0.47 以后去掉，见 vendor/netdev/PATCHES.md
+netdev = { path = "vendor/netdev" }
 
 [workspace.package]
 version = "0.1.0"

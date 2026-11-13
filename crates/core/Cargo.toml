@@ -21,7 +21,8 @@ rand.workspace = true
 bytes.workspace = true
 portable-pty = { version = "0.9", optional = true }
 whoami = "2"
-netdev = "0.45.1"
+# 和 iroh 的 netwatch 用同一版（打了 iOS 补丁，见 vendor/netdev/PATCHES.md）
+netdev = "0.46"
 # WebSocket 牵线（可部署到 Cloudflare）；TLS 用 iroh 已经在用的 ring，不另引加密库
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "__rustls-tls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
