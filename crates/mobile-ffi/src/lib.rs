@@ -8,12 +8,13 @@
 //! 不占界面线程。回调（[`AppListener`]、[`TerminalListener`]）也从 Rust 的线程调过来，界面要自己切回主线程。
 
 mod pair;
+mod settings;
 mod types;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use p2pcli_core::client::{ConnectError, RemoteHost, TermEvent};
@@ -25,6 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 
 pub use pair::{PairInfo, parse_pair_link};
+pub use settings::{MobileSettings, ServerPreset, SettingsView};
 pub use types::*;
 
 uniffi::setup_scaffolding!();
@@ -113,7 +115,12 @@ impl HostDelegate for MobileDelegate {
 #[derive(uniffi::Object)]
 pub struct P2p {
     rt: Runtime,
-    node: Arc<Node>,
+    /// 改设置时整个换成新的节点：后台任务每次都从这里取当前的
+    node: Arc<RwLock<Arc<Node>>>,
+    /// App 给的启动参数；用户在设置里改过的项盖在它上面
+    base: NodeConfig,
+    /// 同一时间只换一次设置
+    config_gate: tokio::sync::Mutex<()>,
     delegate: Arc<MobileDelegate>,
     listener: Arc<dyn AppListener>,
     remotes: Arc<Mutex<HashMap<u64, Arc<RemoteHost>>>>,
@@ -135,7 +142,7 @@ impl P2p {
             .unwrap_or_default();
         Self::start_with(
             NodeConfig {
-                data_dir,
+                data_dir: data_dir.clone(),
                 device_name: config.device_name.filter(|n| !n.trim().is_empty()),
                 server: config
                     .server
@@ -154,7 +161,7 @@ impl P2p {
 
     /// 首页要显示的全部内容：本机、牵线服务器、设备列表（连接历史、在线状态、局域网、备注合在一起）
     pub fn overview(&self) -> Overview {
-        let node = &self.node;
+        let node = self.node();
         let remarks = node.recent.remarks();
         let statuses: HashMap<_, _> = node.devices().into_iter().map(|d| (d.endpoint_id.clone(), d)).collect();
         let lan: HashMap<_, _> = node.nearby().into_iter().map(|d| (d.endpoint_id.clone(), d)).collect();
@@ -218,7 +225,7 @@ impl P2p {
 
     /// 马上扫一遍局域网
     pub async fn scan_nearby(&self) -> Result<Vec<NearbyView>, P2pError> {
-        let node = self.node.clone();
+        let node = self.node();
         self.run(async move {
             let lan = node.lan.as_ref().ok_or_else(|| P2pError::failed("局域网发现没有启用"))?;
             let found = lan.scan(node.id()).await.map_err(P2pError::from_anyhow)?;
@@ -230,7 +237,7 @@ impl P2p {
     /// 连一台设备。target 可以是 9 位设备码、设备公钥（局域网里的设备），或者调试用的 公钥@地址。
     /// 对方要点同意，所以可能等比较久
     pub async fn connect(&self, target: String, password: Option<String>) -> Result<Connected, P2pError> {
-        let node = self.node.clone();
+        let node = self.node();
         let remotes = self.remotes.clone();
         let listener = self.listener.clone();
         let conn_id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -288,7 +295,7 @@ impl P2p {
     /// 对方电脑上的后台会话。顺便记下来，断开以后列表里还能显示
     pub async fn list_sessions(&self, conn_id: u64) -> Result<Vec<SessionView>, P2pError> {
         let remote = self.remote(conn_id)?;
-        let node = self.node.clone();
+        let node = self.node();
         self.run(async move {
             let sessions = remote.list_terminals().await.map_err(P2pError::from_anyhow)?;
             let id = remote.info.endpoint_id.clone();
@@ -405,14 +412,14 @@ impl P2p {
     /// target 是设备公钥、设备码或名字；paths 是本机路径（Android 要先把选好的文件复制到缓存目录）
     pub fn send_files(&self, target: String, paths: Vec<String>) -> Result<String, P2pError> {
         let _guard = self.rt.enter();
-        let device = self.node.find_device(&target).map_err(P2pError::from_anyhow)?;
-        self.node
+        let device = self.node().find_device(&target).map_err(P2pError::from_anyhow)?;
+        self.node()
             .start_send(&device, paths.into_iter().map(PathBuf::from).collect())
             .map_err(P2pError::from_anyhow)
     }
 
     pub fn transfers(&self) -> Vec<TransferView> {
-        self.node.files.transfers().into_iter().map(Into::into).collect()
+        self.node().files.transfers().into_iter().map(Into::into).collect()
     }
 
     /// 回答 on_file_request 问的那批文件收不收
@@ -424,13 +431,14 @@ impl P2p {
 
     /// 给设备起备注，空字符串是去掉备注
     pub fn set_device_remark(&self, endpoint_id: String, remark: String) -> Result<(), P2pError> {
-        self.node.recent.set_device_remark(&endpoint_id, &remark).map(|_| ()).map_err(P2pError::from_anyhow)
+        self.node().recent.set_device_remark(&endpoint_id, &remark).map(|_| ()).map_err(P2pError::from_anyhow)
     }
 
     /// 从连接历史里去掉一台设备
     pub fn forget_device(&self, endpoint_id: String) -> Result<(), P2pError> {
-        for d in self.node.recent.list().into_iter().filter(|d| d.endpoint_id == endpoint_id) {
-            self.node.forget_recent(&d.code).map_err(P2pError::from_anyhow)?;
+        let node = self.node();
+        for d in node.recent.list().into_iter().filter(|d| d.endpoint_id == endpoint_id) {
+            node.forget_recent(&d.code).map_err(P2pError::from_anyhow)?;
         }
         Ok(())
     }
@@ -438,7 +446,45 @@ impl P2p {
     /// 后台重新探测一遍设备在不在线
     pub fn refresh_devices(&self) {
         let _guard = self.rt.enter();
-        self.node.prober.refresh_now();
+        self.node().prober.refresh_now();
+    }
+
+    /// 设置页要显示的：用户改过的项、默认值、可选的牵线服务器
+    pub fn settings(&self) -> SettingsView {
+        let node = self.node();
+        settings::view(&self.base, &settings::load(&self.base.data_dir), &node)
+    }
+
+    /// 保存设置并马上生效。改了代理、中继会换一套网络，已有的连接会断开（对方电脑上的会话还在）
+    pub async fn save_settings(&self, settings: MobileSettings) -> Result<(), P2pError> {
+        let _gate = self.config_gate.lock().await;
+        let saved = settings::validate(settings)?;
+        let cfg = settings::apply(&self.base, &saved);
+        let old = self.node();
+        let delegate: Arc<dyn HostDelegate> = self.delegate.clone();
+        let data_dir = self.base.data_dir.clone();
+        let cell = self.node.clone();
+        self.run(async move {
+            let transport_changed = old.transport_changed(&cfg);
+            let next = old.prepare_update(cfg, delegate).await.map_err(|e| P2pError::failed(format!("应用网络配置失败：{e:#}")))?;
+            if let Err(e) = settings::store(&data_dir, &saved) {
+                if transport_changed {
+                    next.endpoint.close().await;
+                }
+                return Err(P2pError::failed(format!("保存设置失败，当前配置未更改：{e:#}")));
+            }
+            old.stop_rendezvous().await;
+            next.activate();
+            *cell.write().unwrap() = next;
+            if transport_changed {
+                old.endpoint.close().await;
+            }
+            info!("设置已更新");
+            Ok(())
+        })
+        .await?;
+        self.listener.on_overview_changed();
+        Ok(())
     }
 
     /// 退出前调：断开所有连接、停掉网络
@@ -446,16 +492,17 @@ impl P2p {
         for (_, r) in self.remotes.lock().unwrap().drain() {
             r.close();
         }
-        self.rt.block_on(self.node.shutdown());
+        self.rt.block_on(self.node().shutdown());
     }
 }
 
 impl P2p {
     /// 按给定的节点配置启动。App 走 [`P2p::start`]；测试用它起离线节点（不连外网的牵线服务器）
     #[doc(hidden)]
-    pub fn start_with(mut cfg: NodeConfig, listener: Arc<dyn AppListener>) -> Result<Arc<Self>, P2pError> {
+    pub fn start_with(mut base: NodeConfig, listener: Arc<dyn AppListener>) -> Result<Arc<Self>, P2pError> {
         // 手机不能被连，不在局域网里显示自己，别人点了也连不上
-        cfg.lan_visible = false;
+        base.lan_visible = false;
+        let cfg = settings::apply(&base, &settings::load(&base.data_dir));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("p2pcli")
@@ -467,7 +514,9 @@ impl P2p {
         info!(id = %node.id(), "P2PCLI 手机端已启动");
         let me = Arc::new(Self {
             rt,
-            node,
+            node: Arc::new(RwLock::new(node)),
+            base,
+            config_gate: tokio::sync::Mutex::new(()),
             delegate,
             listener,
             remotes: Arc::new(Mutex::new(HashMap::new())),
@@ -475,6 +524,10 @@ impl P2p {
         });
         me.watch_background();
         Ok(me)
+    }
+
+    fn node(&self) -> Arc<Node> {
+        self.node.read().unwrap().clone()
     }
 
     fn remote(&self, conn_id: u64) -> Result<Arc<RemoteHost>, P2pError> {
@@ -489,13 +542,14 @@ impl P2p {
 
     /// 后台：传输进度、设备列表和牵线服务器状态有变化就告诉界面；定时扫局域网
     fn watch_background(&self) {
-        let node = self.node.clone();
+        let cell = self.node.clone();
         let listener = self.listener.clone();
         self.rt.spawn(async move {
             let mut previous = Vec::new();
             let mut tick = tokio::time::interval(Duration::from_millis(500));
             loop {
                 tick.tick().await;
+                let node = cell.read().unwrap().clone();
                 let current: Vec<TransferView> = node.files.transfers().into_iter().map(Into::into).collect();
                 if current != previous {
                     listener.on_transfers_changed(current.clone());
@@ -503,13 +557,14 @@ impl P2p {
                 }
             }
         });
-        let node = self.node.clone();
+        let cell = self.node.clone();
         let listener = self.listener.clone();
         self.rt.spawn(async move {
             let mut previous = String::new();
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             loop {
                 tick.tick().await;
+                let node = cell.read().unwrap().clone();
                 // 只比较会变的部分，变了才叫界面重读
                 let current = format!(
                     "{:?}|{:?}|{:?}|{:?}",
@@ -524,12 +579,13 @@ impl P2p {
                 }
             }
         });
-        let node = self.node.clone();
+        let cell = self.node.clone();
         self.rt.spawn(async move {
             let mut tick = tokio::time::interval(NEARBY_REFRESH);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
+                let node = cell.read().unwrap().clone();
                 if let Some(lan) = &node.lan {
                     if let Err(e) = lan.scan(node.id()).await {
                         tracing::debug!("附近设备自动刷新失败：{e:#}");

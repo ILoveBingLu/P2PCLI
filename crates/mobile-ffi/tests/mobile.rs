@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use p2pcli_core::host::{BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest};
 use p2pcli_core::node::{Node, NodeConfig};
-use p2pcli_mobile::{AppListener, FileRequestView, P2p, P2pError, RejectReason, TerminalListener, TransferView};
+use p2pcli_mobile::{AppListener, FileRequestView, MobileSettings, P2p, P2pError, RejectReason, TerminalListener, TransferView};
 
 /// 被连的电脑：谁来都同意
 struct AllowAll;
@@ -159,6 +159,14 @@ fn connect_open_terminal_and_end_session() {
     let overview = phone.overview();
     assert!(overview.devices.iter().any(|d| d.endpoint_id == conn.endpoint_id) || overview.devices.is_empty(),
         "按地址连的不一定进历史，进了就该是这台：{:?}", overview.devices);
+
+    // 改设备名：网络没换，连接不断；设置读回来是新的
+    wait(phone.save_settings(MobileSettings { device_name: Some("改了名的手机".into()), ..Default::default() })).unwrap();
+    assert_eq!(phone.settings().settings.device_name.as_deref(), Some("改了名的手机"));
+    assert!(wait(phone.list_sessions(conn.conn_id)).is_ok(), "改名不该断开连接");
+    // 格式不对的设置不保存
+    assert!(wait(phone.save_settings(MobileSettings { proxy: Some("socks5://x".into()), ..Default::default() })).is_err());
+    assert_eq!(phone.settings().settings.device_name.as_deref(), Some("改了名的手机"));
 
     // 断开以后编号不能再用
     phone.disconnect(conn.conn_id);

@@ -51,4 +51,8 @@ object Lucide {
     val ArrowDown: ImageVector by lazy { icon("arrow-down", "M12 5v14", "m19 12-7 7-7-7") }
     val Bot: ImageVector by lazy { icon("bot", "M12 8V4H8", "M6.0,8.0h12.0a2.0,2.0 0 0 1 2.0,2.0v8.0a2.0,2.0 0 0 1 -2.0,2.0h-12.0a2.0,2.0 0 0 1 -2.0,-2.0v-8.0a2.0,2.0 0 0 1 2.0,-2.0Z", "M2 14h2", "M20 14h2", "M15 13v2", "M9 13v2") }
     val Plug: ImageVector by lazy { icon("plug", "M12 22v-5", "M15 8V2", "M9 8V2") }
+    val Settings: ImageVector by lazy { icon("settings", "M9.0,12.0a3.0,3.0 0 1,0 6.0,0a3.0,3.0 0 1,0 -6.0,0") }
+    val Copy: ImageVector by lazy { icon("copy", "M10.0,8.0h10.0a2.0,2.0 0 0 1 2.0,2.0v10.0a2.0,2.0 0 0 1 -2.0,2.0h-10.0a2.0,2.0 0 0 1 -2.0,-2.0v-10.0a2.0,2.0 0 0 1 2.0,-2.0Z", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2") }
+    val Check: ImageVector by lazy { icon("check", "M20 6 9 17l-5-5") }
+    val Info: ImageVector by lazy { icon("info", "M2.0,12.0a10.0,10.0 0 1,0 20.0,0a10.0,10.0 0 1,0 -20.0,0", "M12 16v-4", "M12 8h.01") }
 }
