@@ -69,7 +69,10 @@ export struct SettingsPage {
     NavDestination() {
       if (this.core.settings !== null) {
         List() {
-          ListItemGroup({ header: sectionHeader(t('界面语言')), style: ListItemGroupStyle.CARD }) {
+          ListItem() {
+            sectionHeader(t('界面语言'))
+          }
+          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 14, endMargin: 12 } }) {
             ForEach([['system', t('跟随系统')], ['chinese', '简体中文'], ['english', 'English']], (o: string[]) => {
               ListItem() {
                 this.choice(this.i18n.language === o[0], o[1],
@@ -77,8 +80,13 @@ export struct SettingsPage {
               }
             }, (o: string[]) => o[0])
           }
+          // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .backgroundColor(Hero.surface).borderRadius(16).clip(true)
 
-          ListItemGroup({ header: sectionHeader(t('设备名称')), style: ListItemGroupStyle.CARD }) {
+          ListItem() {
+            sectionHeader(t('设备名称'))
+          }
+          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 14, endMargin: 12 } }) {
             ListItem() {
               Column({ space: 8 }) {
                 TextInput({ placeholder: this.core.settings?.default_device_name ?? '', text: this.name })
@@ -91,8 +99,13 @@ export struct SettingsPage {
               }.alignItems(HorizontalAlign.Start).padding(14)
             }
           }
+          // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .backgroundColor(Hero.surface).borderRadius(16).clip(true)
 
-          ListItemGroup({ header: sectionHeader(t('牵线服务器')), style: ListItemGroupStyle.CARD }) {
+          ListItem() {
+            sectionHeader(t('牵线服务器'))
+          }
+          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 14, endMargin: 12 } }) {
             ForEach(this.core.settings?.server_presets ?? [], (p: ServerPreset) => {
               ListItem() {
                 this.choice(!this.custom && this.server === p.address, p.label, [p.note, p.address],
@@ -121,8 +134,13 @@ export struct SettingsPage {
               }
             }
           }
+          // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .backgroundColor(Hero.surface).borderRadius(16).clip(true)
 
-          ListItemGroup({ header: sectionHeader(t('中继服务器')), style: ListItemGroupStyle.CARD }) {
+          ListItem() {
+            sectionHeader(t('中继服务器'))
+          }
+          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 14, endMargin: 12 } }) {
             ListItem() {
               Column({ space: 8 }) {
                 TextInput({ placeholder: 'https://relay.example.com', text: this.relay })
@@ -135,8 +153,13 @@ export struct SettingsPage {
               }.alignItems(HorizontalAlign.Start).padding(14)
             }
           }
+          // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .backgroundColor(Hero.surface).borderRadius(16).clip(true)
 
-          ListItemGroup({ header: sectionHeader(t('代理')), style: ListItemGroupStyle.CARD }) {
+          ListItem() {
+            sectionHeader(t('代理'))
+          }
+          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 14, endMargin: 12 } }) {
             ListItem() {
               Row({ space: 12 }) {
                 Column({ space: 3 }) {
@@ -164,8 +187,13 @@ export struct SettingsPage {
               }
             }
           }
+          // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .backgroundColor(Hero.surface).borderRadius(16).clip(true)
 
-          ListItemGroup({ header: sectionHeader(t('关于')), style: ListItemGroupStyle.CARD }) {
+          ListItem() {
+            sectionHeader(t('关于'))
+          }
+          ListItemGroup({ divider: { strokeWidth: 0.5, color: '#28282C', startMargin: 14, endMargin: 12 } }) {
             ListItem() {
               this.infoRow(t('本机公钥'), (this.core.settings?.endpoint_id ?? '').substring(0, 10) + '…', $r('app.media.lucide_copy_muted'),
                 () => {
@@ -183,6 +211,8 @@ export struct SettingsPage {
               this.infoRow(t('版本发布'), '', $r('app.media.lucide_square_arrow_out_up_right_muted'), () => this.open(REPO_URL + '/releases'))
             }
           }
+          // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
+          .backgroundColor(Hero.surface).borderRadius(16).clip(true)
 
           ListItem() {
             Column({ space: 10 }) {
@@ -219,7 +249,9 @@ export struct SettingsPage {
           Circle().width(8).height(8).fill(Color.White)
         }
       }
-      .width(20).height(20).borderRadius(10).backgroundColor(selected ? Hero.accent : Hero.tile)
+      // 没选中的画一圈描边，不然和卡片底色混在一起看不出来
+      .width(20).height(20).borderRadius(10).backgroundColor(selected ? Hero.accent : Color.Transparent)
+      .border({ width: selected ? 0 : 2, color: '#52525B' })
       Column({ space: 3 }) {
         Row({ space: 6 }) {
           Text(title).fontSize(16).fontColor(Hero.foreground)
