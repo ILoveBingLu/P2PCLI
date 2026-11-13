@@ -11,6 +11,7 @@ NAMES = {
     "SendHorizontal": "send-horizontal", "Keyboard": "keyboard", "TriangleAlert": "triangle-alert",
     "LoaderCircle": "loader-circle", "SquareArrowOutUpRight": "square-arrow-out-up-right", "KeyRound": "key-round",
     "LockKeyhole": "lock-keyhole", "ArrowUp": "arrow-up", "ArrowDown": "arrow-down", "Bot": "bot", "Plug": "plug",
+    "Settings": "settings", "Copy": "copy", "Check": "check", "Info": "info",
 }
 OUT = "mobile/android/app/src/main/java/io/github/ilovebinglu/p2pcli/ui/Lucide.kt"
 

@@ -91,6 +91,7 @@ fun Root(core: Core) {
                         Screen.Home -> HomeScreen(core)
                         is Screen.Device -> DeviceScreen(core, top.endpointId)
                         is Screen.Term -> TerminalScreen(core, top.key)
+                        Screen.Settings -> SettingsScreen(core)
                     }
                 }
             }

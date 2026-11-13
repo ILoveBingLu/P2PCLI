@@ -56,6 +56,7 @@ fun HomeScreen(core: Core) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), null, Modifier.size(30.dp))
             Text("P2PCLI", color = Hero.Foreground, fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).padding(start = 10.dp))
+            HeroIconButton(Lucide.Settings, "设置", { core.openSettings() })
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 28.dp)) {
             transfersSection(transfers)

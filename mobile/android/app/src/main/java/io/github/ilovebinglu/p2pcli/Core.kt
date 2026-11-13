@@ -22,6 +22,8 @@ import uniffi.p2pcli_mobile.Connected
 import uniffi.p2pcli_mobile.DeviceView
 import uniffi.p2pcli_mobile.FileRequestView
 import uniffi.p2pcli_mobile.MobileConfig
+import uniffi.p2pcli_mobile.MobileSettings
+import uniffi.p2pcli_mobile.SettingsView
 import uniffi.p2pcli_mobile.Overview
 import uniffi.p2pcli_mobile.P2p
 import uniffi.p2pcli_mobile.P2pException
@@ -36,6 +38,7 @@ sealed interface Screen {
     data object Home : Screen
     data class Device(val endpointId: String) : Screen
     data class Term(val key: Int) : Screen
+    data object Settings : Screen
 }
 
 sealed interface StartState {
@@ -79,6 +82,9 @@ class Core(private val app: Application) : AppListener {
     val connecting = MutableStateFlow<String?>(null)
     val prompt = MutableStateFlow<ConnectPrompt?>(null)
     val fileRequest = MutableStateFlow<FileRequestView?>(null)
+    /** 设置页显示的；打开设置页时读 */
+    val settings = MutableStateFlow<SettingsView?>(null)
+    val savingSettings = MutableStateFlow(false)
     /** 给人看的一句提示 */
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
@@ -363,6 +369,33 @@ class Core(private val app: Application) : AppListener {
         resolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } }
             ?: error("读不了这个文件")
         return file.absolutePath
+    }
+
+    // ---- 设置 ----
+
+    fun openSettings() {
+        settings.value = p2p?.settings()
+        push(Screen.Settings)
+    }
+
+    /** 保存并马上生效；成功时退回上一页，格式不对时把原因交给 onError */
+    fun saveSettings(value: MobileSettings, onError: (String) -> Unit) {
+        val p = p2p ?: return
+        if (savingSettings.value) return
+        savingSettings.value = true
+        scope.launch {
+            try {
+                p.saveSettings(value)
+                settings.value = p.settings()
+                notices.tryEmit("设置已保存")
+                back()
+                refreshOverview()
+            } catch (e: Exception) {
+                onError(errorText(e))
+            } finally {
+                savingSettings.value = false
+            }
+        }
     }
 
     // ---- 杂项 ----
