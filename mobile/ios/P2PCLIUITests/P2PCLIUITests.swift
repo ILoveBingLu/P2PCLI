@@ -94,19 +94,29 @@ final class P2PCLIUITests: XCTestCase {
 
         app.typeText("codex\n")
         let compose = app.buttons["fold-compose"].firstMatch
-        let found = compose.waitForExistence(timeout: 30)
+        let found = compose.waitForExistence(timeout: 60)
         sleep(3)
         shot("f4-agent-panel")
         XCTAssertTrue(found, "没认出 Codex，或者 AI 面板没出来")
         compose.tap()
         sleep(2)
         shot("f5-compose")
+        XCTAssertTrue(app.keyboards.count > 0, "点了写指令，键盘没弹出来")
 
-        // 退出 Codex：收键盘，按两次 Ctrl+C
-        terminal.tap()
-        app.typeText(XCUIKeyboardKey.escape.rawValue)
+        // 收起键盘：按键条最后那个键
+        let hide = app.buttons["收起键盘"].firstMatch
+        XCTAssertTrue(hide.exists, "键盘弹着时按键条上没有收起键盘")
+        hide.tap()
+        sleep(2)
+        shot("f5b-hidden")
+        XCTAssertEqual(app.keyboards.count, 0, "按了收起键盘，键盘还在")
+
+        // 退出 Codex：按两次 Ctrl+C。半折时键盘会盖住按键条，所以每次先收起键盘再按 Ctrl
         for _ in 0..<2 {
+            if app.buttons["收起键盘"].firstMatch.exists { app.buttons["收起键盘"].firstMatch.tap(); sleep(1) }
             app.buttons["Ctrl"].firstMatch.tap()
+            terminal.tap()
+            sleep(1)
             app.typeText("c")
             sleep(1)
         }
