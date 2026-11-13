@@ -14,6 +14,8 @@ struct TerminalScreen: View {
     @State private var deck: FoldDeck.Mode?
     @State private var keyboardUp = false
     @FocusState private var draftFocused: Bool
+    /// 输入栏出现时把光标放进去
+    @State private var focusDraft = false
 
     enum Panel: String, Identifiable {
         case keys, switcher, dir
@@ -160,6 +162,14 @@ struct TerminalScreen: View {
                           text: $draft, axis: .vertical)
                     .lineLimit(1...5)
                     .focused($draftFocused)
+                    .onAppear {
+                        guard focusDraft else { return }
+                        focusDraft = false
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(150))
+                            draftFocused = true
+                        }
+                    }
                     .submitLabel(.send)
                     .onSubmit { send(term) }
                     .padding(.horizontal, 14).padding(.vertical, 10)
@@ -185,12 +195,14 @@ struct TerminalScreen: View {
         core.sessions[term.endpointId]?.list ?? []
     }
 
-    /// 打开输入栏并把光标放进去（半折时 AI 面板上的“写指令”）
+    /// 打开输入栏并把光标放进去（半折时 AI 面板上的“写指令”）。
+    /// 输入栏刚加进来时还不能给焦点，等它出现了再给（见输入栏的 onAppear）
     private func compose() {
-        composing = true
-        Task {
-            try? await Task.sleep(for: .milliseconds(50))
+        if composing {
             draftFocused = true
+        } else {
+            focusDraft = true
+            composing = true
         }
     }
 
