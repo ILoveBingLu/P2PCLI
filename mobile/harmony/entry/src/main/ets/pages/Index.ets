@@ -91,7 +91,7 @@ struct Index {
       .bindSheet(this.core.prompt !== null, this.connectSheet(), {
         height: SheetSize.LARGE,
         backgroundColor: Hero.surface,
-        title: { title: this.core.prompt?.endpointId ? t('连接 {{name}}', { name: this.core.prompt?.name ?? t('设备') } as Record<string, string | number>) : t('连接新设备') },
+        title: { title: this.core.prompt?.endpointId ? t('连接 {{name}}', ['name', this.core.prompt?.name ?? t('设备')]) : t('连接新设备') },
         onDisappear: () => {
           this.core.prompt = null;
         }
@@ -99,7 +99,7 @@ struct Index {
       .bindSheet(this.core.fileRequest !== null, this.fileRequestSheet(), {
         height: SheetSize.FIT_CONTENT,
         backgroundColor: Hero.surface,
-        title: { title: t('{{name}} 想发文件给你', { name: this.core.fileRequest?.name ?? '' } as Record<string, string | number>) },
+        title: { title: t('{{name}} 想发文件给你', ['name', this.core.fileRequest?.name ?? '']) },
         onDisappear: () => {
           if (this.core.fileRequest !== null) {
             this.core.respondFiles(false);
@@ -140,7 +140,7 @@ struct Index {
           Row({ space: 12 }) {
             LoadingProgress().width(24).height(24).color(Hero.accent)
             Column({ space: 3 }) {
-              Text(t('正在连接 {{name}}', { name: this.core.connectingName ?? t('电脑') } as Record<string, string | number>))
+              Text(t('正在连接 {{name}}', ['name', this.core.connectingName ?? t('电脑')]))
                 .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Hero.foreground)
               Text(t('等对方在电脑上点同意')).fontSize(13).fontColor(Hero.muted)
             }.alignItems(HorizontalAlign.Start)
@@ -266,9 +266,7 @@ struct Index {
   fileRequestSheet() {
     Column({ space: 14 }) {
       if (this.core.fileRequest !== null) {
-        Text(t('{{count}} 个文件：{{items}}', {
-          count: this.core.fileRequest.files, items: this.core.fileRequest.items.join(t('、'))
-        } as Record<string, string | number>)).fontSize(14).fontColor(Hero.muted)
+        Text(t('{{count}} 个文件：{{items}}', ['count', this.core.fileRequest.files], ['items', this.core.fileRequest.items.join(t('、'))])).fontSize(14).fontColor(Hero.muted)
       }
       Button(t('接收')).width('100%').height(46).backgroundColor(Hero.accent).onClick(() => this.core.respondFiles(true))
       Button(t('拒绝')).width('100%').height(46).backgroundColor(Hero.tile).fontColor(Hero.foreground)
@@ -303,13 +301,13 @@ struct TransfersCard {
 
   status(x: TransferView): string {
     if (x.state === 'waiting') {
-      return t('等 {{name}} 同意', { name: x.peer_name } as Record<string, string | number>);
+      return t('等 {{name}} 同意', ['name', x.peer_name]);
     }
     if (x.state === 'connecting') {
-      return t('正在连接 {{name}}', { name: x.peer_name } as Record<string, string | number>);
+      return t('正在连接 {{name}}', ['name', x.peer_name]);
     }
-    const who = x.outgoing ? t('发给 {{name}}', { name: x.peer_name } as Record<string, string | number>)
-      : t('来自 {{name}}', { name: x.peer_name } as Record<string, string | number>);
+    const who = x.outgoing ? t('发给 {{name}}', ['name', x.peer_name])
+      : t('来自 {{name}}', ['name', x.peer_name]);
     const pct = x.total > 0 ? Math.floor(x.done / x.total * 100) : 0;
     return `${who} · ${pct}%`;
   }
@@ -376,12 +374,12 @@ struct DeviceRow {
               Chip({ text: t('局域网') })
             }
             if (this.sessions().length > 0) {
-              Text(t('{{count}} 个会话', { count: this.sessions().length } as Record<string, string | number>)).fontSize(13).fontColor(Hero.muted)
+              Text(t('{{count}} 个会话', ['count', this.sessions().length])).fontSize(13).fontColor(Hero.muted)
             }
           }
         }
         if (this.waiting() > 0) {
-          Text(t('{{count}} 个 AI 在等你确认', { count: this.waiting() } as Record<string, string | number>))
+          Text(t('{{count}} 个 AI 在等你确认', ['count', this.waiting()]))
             .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Hero.warning)
         }
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)

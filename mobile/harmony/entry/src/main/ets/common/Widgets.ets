@@ -7,21 +7,21 @@ import { agentColor, agentText } from './Format';
 export struct PlatformTile {
   @Param platform: string = '';
   @Param connected: boolean = false;
-  @Param size: number = 42;
+  @Param tileSize: number = 42;
 
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Stack() {
         if (platformIcon(this.platform) !== null) {
-          Image(platformIcon(this.platform)).width(this.size > 60 ? 36 : 20).height(this.size > 60 ? 36 : 20)
+          Image(platformIcon(this.platform)).width(this.tileSize > 60 ? 36 : 20).height(this.tileSize > 60 ? 36 : 20)
         } else {
           Text(this.platform.substring(0, 3)).fontSize(12).fontWeight(FontWeight.Medium).fontColor(Hero.foreground)
         }
       }
-      .width(this.size).height(this.size).borderRadius(this.size > 60 ? 24 : 13).backgroundColor(Hero.tile)
+      .width(this.tileSize).height(this.tileSize).borderRadius(this.tileSize > 60 ? 24 : 13).backgroundColor(Hero.tile)
       if (this.connected) {
-        Circle().width(this.size > 60 ? 12 : 8).height(this.size > 60 ? 12 : 8).fill(Hero.success)
-          .border({ width: this.size > 60 ? 3.5 : 2.5, color: Hero.surface })
+        Circle().width(this.tileSize > 60 ? 12 : 8).height(this.tileSize > 60 ? 12 : 8).fill(Hero.success)
+          .border({ width: this.tileSize > 60 ? 3.5 : 2.5, color: Hero.surface })
           .offset({ x: 3, y: 3 })
       }
     }
@@ -46,13 +46,13 @@ export struct SessionTile {
 @ComponentV2
 export struct AgentStateLabel {
   @Param agent: AgentView | null = null;
-  @Param size: number = 12;
+  @Param textSize: number = 12;
 
   build() {
     if (this.agent !== null) {
       Row({ space: 4 }) {
         Circle().width(6).height(6).fill(agentColor(this.agent))
-        Text(agentText(this.agent)).fontSize(this.size).fontColor(agentColor(this.agent))
+        Text(agentText(this.agent)).fontSize(this.textSize).fontColor(agentColor(this.agent))
       }
     }
   }

@@ -64,22 +64,22 @@ export class I18n {
 }
 
 /**
- * 界面文字。键是中文原文，{{name}} 这样的占位用后面的参数填：t('连接 {{name}}', { name: 设备名 } as Record<string, string | number>)。
+ * 界面文字。键是中文原文，{{name}} 这样的占位用后面的键值对填：t('连接 {{name}}', ['name', 设备名])。
  * 参数里有 count 时，英文按单复数取（键加 _one 的是单数），和桌面的 i18next 一样
  */
-export function t(key: string, args?: Record<string, string | number>): string {
+export function t(key: string, ...args: [string, string | number][]): string {
   // 读一下语言：界面跟着它刷新
   const lang = I18n.shared.language;
   let count: number | undefined = undefined;
-  if (args !== undefined && args['count'] !== undefined) {
-    count = Number(args['count']);
-  }
+  args.forEach((a: [string, string | number]) => {
+    if (a[0] === 'count') {
+      count = Number(a[1]);
+    }
+  });
   let text = I18n.shared.lookup(key, count) ?? key;
-  if (args !== undefined) {
-    Object.keys(args).forEach((name: string) => {
-      text = text.split(`{{${name}}}`).join(String(args[name]));
-    });
-  }
+  args.forEach((a: [string, string | number]) => {
+    text = text.split(`{{${a[0]}}}`).join(String(a[1]));
+  });
   return lang.length >= 0 ? text : key;
 }
 

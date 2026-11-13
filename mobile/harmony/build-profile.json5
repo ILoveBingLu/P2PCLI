@@ -9,7 +9,7 @@
       {
         "name": "default",
         "signingConfig": "default",
-        "targetSdkVersion": "26.0.0(26)",
+        "targetSdkVersion": "26.0.0",
         // HarmonyOS 5.0（API 12）起的手机都能装
         "compatibleSdkVersion": "5.0.0(12)",
         "runtimeOS": "HarmonyOS",
