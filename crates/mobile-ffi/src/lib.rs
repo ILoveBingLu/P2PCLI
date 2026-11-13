@@ -52,6 +52,8 @@ pub struct MobileConfig {
     pub proxy: Option<String>,
     /// App 的版本号，连接时告诉对方
     pub app_version: Option<String>,
+    /// 告诉对方的系统名；不填用编译目标的系统（android、ios）。鸿蒙手机上填 harmonyos
+    pub platform: Option<String>,
 }
 
 /// 界面要知道的后台变化。从 Rust 的线程调过来，界面自己切回主线程
@@ -153,6 +155,7 @@ impl P2p {
                 lan: true,
                 inbox_dir: config.inbox_dir.map(PathBuf::from),
                 app_version: config.app_version,
+                platform: config.platform,
                 ..Default::default()
             },
             listener,

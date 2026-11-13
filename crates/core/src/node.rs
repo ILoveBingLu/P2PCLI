@@ -58,6 +58,9 @@ pub struct NodeConfig {
     pub inbox_dir: Option<PathBuf>,
     /// 软件版本，连接时告诉对方，对方的连接信息里显示
     pub app_version: Option<String>,
+    /// 告诉对方的系统名；不写用编译目标的系统（macos、windows、linux、android、ios）。
+    /// 鸿蒙手机跑的是安卓包，编译目标是 android，由 App 识别出来后填 harmonyos
+    pub platform: Option<String>,
     /// 本机作为被控端时，各 AI 的自定义启动命令；不会发给连接方
     pub agent_commands: BTreeMap<String, String>,
     /// 传文件最多开几条并发流；不写是默认的 8 条，写 0 是关掉并发、只用一条流
@@ -195,6 +198,9 @@ impl Node {
         };
         let mut me = DeviceInfo::local(cfg.device_name.clone());
         me.version = cfg.app_version.clone();
+        if let Some(p) = cfg.platform.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            me.platform = p.to_string();
+        }
         let lan = match existing_lan {
             Some(lan) => {
                 lan.set_info(&me);

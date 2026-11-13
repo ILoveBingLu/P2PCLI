@@ -572,7 +572,7 @@ export function formatCode(code: string | null | undefined): string {
 }
 
 export function platformLabel(p: string): string {
-  return ({ macos: "macOS", windows: "Windows", linux: "Linux" } as Record<string, string>)[p] ?? p;
+  return ({ macos: "macOS", windows: "Windows", linux: "Linux", android: "Android", ios: "iOS", harmonyos: "HarmonyOS" } as Record<string, string>)[p] ?? p;
 }
 
 export function pathLabel(p: PathInfo | null | undefined): string {
