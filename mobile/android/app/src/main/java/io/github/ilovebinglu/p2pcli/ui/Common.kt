@@ -1,25 +1,6 @@
 package io.github.ilovebinglu.p2pcli.ui
 
-import android.os.Build
-import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import uniffi.p2pcli_mobile.AgentState
 import uniffi.p2pcli_mobile.AgentView
 import uniffi.p2pcli_mobile.DeviceView
@@ -27,51 +8,6 @@ import uniffi.p2pcli_mobile.PathKind
 import uniffi.p2pcli_mobile.PathView
 import uniffi.p2pcli_mobile.Presence
 import uniffi.p2pcli_mobile.SessionView
-
-/** 安卓 12 以上跟着壁纸取色；深浅跟系统 */
-@Composable
-fun P2pTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    val context = LocalContext.current
-    val colors = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> darkColorScheme()
-        else -> lightColorScheme()
-    }
-    MaterialTheme(colorScheme = colors, content = content)
-}
-
-/** 直连绿、中继黄 */
-val Ok = Color(0xFF22A06B)
-val Warn = Color(0xFFE2A400)
-
-/** 设备图标：系统的缩写放在圆角方块里 */
-@Composable
-fun PlatformBadge(platform: String, connected: Boolean = false) {
-    val label = when (platform) {
-        "macos" -> "mac"
-        "windows" -> "Win"
-        "linux" -> "Linux"
-        "android" -> "And"
-        "ios" -> "iOS"
-        else -> platform.take(3)
-    }
-    Box(contentAlignment = Alignment.Center) {
-        Box(
-            Modifier.size(44.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(14.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSecondaryContainer)
-        }
-        if (connected) {
-            Box(
-                Modifier.align(Alignment.BottomEnd).size(12.dp)
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(6.dp)),
-                contentAlignment = Alignment.Center,
-            ) { Box(Modifier.size(8.dp).background(Ok, RoundedCornerShape(4.dp))) }
-        }
-    }
-}
 
 fun pathText(path: PathView?): String {
     if (path == null) return "连接中"
@@ -87,13 +23,13 @@ fun pathText(path: PathView?): String {
 
 /** 设备一行的状态：文字和颜色 */
 fun presenceOf(device: DeviceView, connected: Boolean): Pair<String, Color?> = when {
-    connected -> "已连接" to Ok
+    connected -> "已连接" to Hero.Success
     device.presence == Presence.ONLINE -> {
         val rtt = device.path?.rttMs?.let { " · $it ms" } ?: ""
-        (if (device.lanOnline) "局域网在线$rtt" else "在线$rtt") to (if (device.path?.kind == PathKind.RELAY) Warn else Ok)
+        (if (device.lanOnline) "局域网在线$rtt" else "在线$rtt") to (if (device.path?.kind == PathKind.RELAY) Hero.Warning else Hero.Success)
     }
     device.presence == Presence.CHECKING -> "检测中…" to null
-    device.presence == Presence.OLD_VERSION -> "对方需要更新 P2PCLI" to Warn
+    device.presence == Presence.OLD_VERSION -> "对方需要更新 P2PCLI" to Hero.Warning
     else -> "离线" to null
 }
 
@@ -105,8 +41,8 @@ fun agentText(agent: AgentView): String = when {
 }
 
 fun agentColor(agent: AgentView): Color? = when {
-    agent.stalled || agent.state == AgentState.WAITING -> Warn
-    agent.state == AgentState.WORKING -> Color(0xFF3B82F6)
+    agent.stalled || agent.state == AgentState.WAITING -> Hero.Warning
+    agent.state == AgentState.WORKING -> Hero.Accent
     else -> null
 }
 
