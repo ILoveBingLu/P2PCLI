@@ -73,6 +73,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     // UniFFI 生成的绑定通过 JNA 调 Rust 库
     implementation("net.java.dev.jna:jna:5.17.0@aar")
+    // 扫码：CameraX 取景，ML Kit 认二维码。用自带识别模型的版本，不依赖谷歌服务（鸿蒙这类手机也能用）
+    implementation("androidx.camera:camera-camera2:1.5.1")
+    implementation("androidx.camera:camera-lifecycle:1.5.1")
+    implementation("androidx.camera:camera-view:1.5.1")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     // 终端模拟（Apache 2.0，见 termux-app 的 LICENSE.md）：解析终端输出、画字；连接、键盘是自己写的
     implementation("com.github.termux.termux-app:terminal-view:v0.118.3")
     implementation("com.github.termux.termux-app:terminal-emulator:v0.118.3")

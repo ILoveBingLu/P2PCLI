@@ -49,6 +49,7 @@ fun HomeScreen(core: Core, selected: Screen? = null) {
     val terms by core.terms.collectAsStateWithLifecycle()
     val sessions by core.sessions.collectAsStateWithLifecycle()
     val connecting by core.connecting.collectAsStateWithLifecycle()
+    val connectingName by core.connectingName.collectAsStateWithLifecycle()
     val transfers by core.transfers.collectAsStateWithLifecycle()
     val devices = overview?.devices.orEmpty()
     val nearby = overview?.nearby.orEmpty()
@@ -66,10 +67,28 @@ fun HomeScreen(core: Core, selected: Screen? = null) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), null, Modifier.size(30.dp))
             Text("P2PCLI", color = Hero.Foreground, fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).padding(start = 10.dp))
+            HeroIconButton(Lucide.ScanLine, t("扫码连接"), { core.openScan() })
             HeroIconButton(Lucide.Settings, t("设置"), { core.openSettings() })
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 28.dp)) {
             transfersSection(transfers)
+            // 扫码连的设备列表里还没有：顶上放一张“正在连接”的卡片
+            val pending = connecting
+            if (pending != null && devices.none { it.endpointId == pending } && nearby.none { it.endpointId == pending }) {
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 10.dp).clip(RoundedCornerShape(16.dp)).background(Hero.Surface).padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Box(Modifier.size(36.dp).clip(RoundedCornerShape(18.dp)).background(Hero.AccentSoft), contentAlignment = Alignment.Center) { Spinner(18.dp, Hero.Accent) }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            RowTitle(t("正在连接 {{name}}", "name" to (connectingName ?: t("电脑"))))
+                            SubText(t("等对方在电脑上点同意"))
+                        }
+                    }
+                }
+            }
             when (val server = overview?.server) {
                 is ServerState.Offline, ServerState.None -> item {
                     Banner(if (server is ServerState.None) t("还没配置牵线服务器，只能连同一个局域网里的设备") else t("牵线服务器没连上，只能连同一个局域网里的设备"))
@@ -79,8 +98,9 @@ fun HomeScreen(core: Core, selected: Screen? = null) {
 
             if (empty) {
                 item {
-                    EmptyMessage(t("连接你的电脑"), t("在电脑上打开 P2PCLI，把它显示的设备码和配对密码填进来。")) {
-                        HeroButton(t("输入设备码"), { core.prompt.value = ConnectPrompt() }, Modifier.fillMaxWidth(), icon = Lucide.KeyRound)
+                    EmptyMessage(t("连接你的电脑"), t("在电脑上打开 P2PCLI，点标题栏的手机图标，用这里扫它显示的二维码。")) {
+                        HeroButton(t("扫码连接"), { core.openScan() }, Modifier.fillMaxWidth(), icon = Lucide.ScanLine)
+                        HeroButton(t("输入设备码"), { core.prompt.value = ConnectPrompt() }, Modifier.fillMaxWidth(), kind = ButtonKind.Secondary, icon = Lucide.KeyRound)
                         HeroButton(t("找找附近的设备"), { core.scanNearby() }, Modifier.fillMaxWidth(), kind = ButtonKind.Ghost, icon = Lucide.RefreshCw)
                     }
                 }

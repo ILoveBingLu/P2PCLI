@@ -1147,7 +1147,6 @@
   "{{value}} 天前": "{{value}} days ago",
   "{{value}} 天前_one": "{{value}} day ago",
   "没有连着": "Not connected",
-  "在电脑上打开 P2PCLI，把它显示的设备码和配对密码填进来。": "Open P2PCLI on your computer and enter the device code and pairing password it shows.",
   "启动失败": "Couldn't start",
   "{{name}} 想发文件给你": "{{name}} wants to send you files",
   "{{count}} 个文件：{{items}}": "{{count}} files: {{items}}",
