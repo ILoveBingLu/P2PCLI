@@ -1,5 +1,10 @@
 package io.github.ilovebinglu.p2pcli.ui
 
+import androidx.compose.ui.draw.rotate
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.LinearEasing
 import io.github.ilovebinglu.p2pcli.t
 import io.github.ilovebinglu.p2pcli.tr
 import android.annotation.SuppressLint
@@ -30,7 +35,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -179,9 +183,12 @@ fun HeroIconButton(icon: ImageVector, description: String, onClick: () -> Unit, 
     ) { Icon(icon, description, Modifier.size(size), tint = if (enabled) tint else tint.copy(alpha = 0.4f)) }
 }
 
+/** 转圈：和桌面一样是 lucide 的 LoaderCircle 一直转 */
 @Composable
 fun Spinner(size: Dp = 18.dp, color: Color = Hero.Muted) {
-    CircularProgressIndicator(Modifier.size(size), color = color, strokeWidth = 2.dp, trackColor = Color.Transparent)
+    val turn = rememberInfiniteTransition(label = "spin")
+    val angle by turn.animateFloat(0f, 360f, infiniteRepeatable(tween(800, easing = LinearEasing)), label = "angle")
+    Icon(Lucide.LoaderCircle, null, Modifier.size(size).rotate(angle), tint = color)
 }
 
 /** 二级页面的顶栏：返回、标题和一行状态、右边的按钮 */
