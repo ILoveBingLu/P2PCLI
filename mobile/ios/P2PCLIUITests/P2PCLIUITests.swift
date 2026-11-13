@@ -83,7 +83,9 @@ final class P2PCLIUITests: XCTestCase {
         sleep(2)
         shot("f1-folded")
 
-        app.buttons["fold-type-here"].firstMatch.tap()
+        // 立起来时终端空闲会自己弹键盘；没弹就点下半屏的“点这里打字”
+        let typeHere = app.buttons["fold-type-here"].firstMatch
+        if typeHere.exists { typeHere.tap() }
         sleep(2)
         shot("f2-keyboard")
         app.typeText("echo fold-ok\n")
