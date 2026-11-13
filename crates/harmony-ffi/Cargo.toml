@@ -1,0 +1,22 @@
+[package]
+name = "p2pcli-harmony-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "鸿蒙（HarmonyOS NEXT）原生界面调的 Rust 接口：把 mobile-ffi 用 N-API 导出给 ArkTS"
+
+[lib]
+# 编出来是 libp2pcli.so，ArkTS 里 import p2pcli from 'libp2pcli.so'
+name = "p2pcli"
+crate-type = ["cdylib"]
+
+[dependencies]
+# 连接、协议、会话、传文件都在 mobile-ffi 里，和安卓、iOS 同一份；这里只做 ArkTS 那一层
+p2pcli-mobile-ffi = { path = "../mobile-ffi", features = ["serde"] }
+napi-ohos = { version = "1.2", default-features = false, features = ["napi8", "async"] }
+napi-derive-ohos = "1.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[build-dependencies]
+napi-build-ohos = "1.2"

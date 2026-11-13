@@ -13,6 +13,8 @@ crate-type = ["cdylib", "staticlib", "lib"]
 [features]
 # 生成 Kotlin/Swift 绑定的命令行（uniffi-bindgen）才要；打手机包时不开，不带进 clap 这些
 bindgen = ["uniffi/cli"]
+# 数据类型能转成 JSON：鸿蒙的 ArkTS 绑定（crates/harmony-ffi）用，字段名和桌面前端一样是下划线命名
+serde = []
 
 [[bin]]
 name = "uniffi-bindgen"

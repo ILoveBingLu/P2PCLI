@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "P2PCLI 鸿蒙版" },
+    { "name": "EntryAbility_desc", "value": "在手机上用电脑的终端" },
+    { "name": "EntryAbility_label", "value": "P2PCLI" }
+  ]
+}

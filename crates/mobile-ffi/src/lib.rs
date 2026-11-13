@@ -37,6 +37,7 @@ const OUTPUT_BATCH: usize = 64 * 1024;
 const NEARBY_REFRESH: Duration = Duration::from_secs(30);
 
 /// 启动参数，由界面按平台填
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MobileConfig {
     /// 放身份密钥、连接历史、日志的目录：Android 的 filesDir，iOS 的 Application Support

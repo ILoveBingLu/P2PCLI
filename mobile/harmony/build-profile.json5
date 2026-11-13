@@ -1,0 +1,37 @@
+// 鸿蒙工程：用 DevEco Studio 打开 mobile/harmony。打包前先跑 build-rust.ps1 编 Rust 库（libp2pcli.so）。
+// 签名：DevEco Studio → File → Project Structure → Signing Configs → 勾选 Automatically generate signature（要登录华为账号），
+// 生成的签名配置写在本机，不进仓库
+{
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "26.0.0(26)",
+        // HarmonyOS 5.0（API 12）起的手机都能装
+        "compatibleSdkVersion": "5.0.0(12)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      { "name": "debug" },
+      { "name": "release" }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        { "name": "default", "applyToProducts": ["default"] }
+      ]
+    }
+  ]
+}

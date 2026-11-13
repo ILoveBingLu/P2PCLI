@@ -1,0 +1,12 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "P2PCLI 鸿蒙版的界面",
+  "main": "",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    // Rust 库（libs/*/libp2pcli.so）的类型声明
+    "libp2pcli.so": "file:./src/main/cpp/types/libp2pcli"
+  }
+}

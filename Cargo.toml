@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/cli", "crates/dev", "crates/server", "crates/mobile-ffi", "app/src-tauri"]
+members = ["crates/core", "crates/cli", "crates/dev", "crates/server", "crates/mobile-ffi", "crates/harmony-ffi", "app/src-tauri"]
 exclude = ["vendor/tauri-plugin-window-controls", "vendor/iroh-mdns-address-lookup", "vendor/netdev"]
 
 [patch.crates-io]

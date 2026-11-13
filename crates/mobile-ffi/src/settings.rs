@@ -30,6 +30,7 @@ pub struct MobileSettings {
 }
 
 /// 设置页里可以直接选的牵线服务器
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ServerPreset {
     pub address: String,
@@ -37,6 +38,7 @@ pub struct ServerPreset {
     pub note: String,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct SettingsView {
     pub settings: MobileSettings,

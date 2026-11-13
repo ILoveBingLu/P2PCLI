@@ -1,0 +1,11 @@
+/.hvigor/
+/.idea/
+/build/
+/oh_modules/
+/local.properties
+/entry/build/
+/entry/oh_modules/
+/entry/.preview/
+# build-rust.ps1 生成：Rust 库、翻译
+/entry/libs/
+/entry/src/main/resources/rawfile/i18n/
