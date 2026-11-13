@@ -59,17 +59,18 @@ struct TerminalScreen: View {
                 }
             }
         }
-        // 半折时整页不跟着键盘缩：键盘从下半屏升起来盖住 AI 面板那块，终端和折痕的位置都不动
-        .ignoresSafeArea(.keyboard, edges: fold != nil ? .bottom : [])
-        .heroBottomBar {
-            if fold == nil { VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: false) } }
-        }
         .background {
             Color.clear
                 .onGeometryChange(for: CGRect?.self) { Fold.horizontal($0) } action: { f in
                     // 平常排法时键盘会把页面顶短，这时量不到折痕不算，等键盘收了再量
                     if f != nil || !keyboardUp { fold = f }
                 }
+        }
+        // 半折时整页（连同上面量折痕的那层）不跟着键盘缩：键盘从下半屏升起来盖住 AI 面板那块，
+        // 终端和折痕的位置都不动
+        .ignoresSafeArea(.keyboard, edges: fold != nil ? .bottom : [])
+        .heroBottomBar {
+            if fold == nil { VStack(spacing: 0) { controls(term, agent: agent, live: live, folded: false) } }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
