@@ -139,7 +139,7 @@ fn connect_open_terminal_and_end_session() {
     // 会话列表里有它；关掉手机上的终端，会话还在
     let sessions = wait(phone.list_sessions(conn.conn_id)).unwrap();
     assert!(sessions.iter().any(|s| s.id == session), "会话列表：{sessions:?}");
-    term.close();
+    term.detach();
     std::thread::sleep(Duration::from_millis(300));
     assert!(wait(phone.list_sessions(conn.conn_id)).unwrap().iter().any(|s| s.id == session), "关掉终端不该结束会话");
 
@@ -149,7 +149,7 @@ fn connect_open_terminal_and_end_session() {
     assert_eq!(term2.session_id(), session);
     term2.write(b"echo back-$((1+1))\r".to_vec());
     again.wait_for("back-2");
-    term2.close();
+    term2.detach();
 
     // 结束会话，列表里没了
     wait(phone.end_session(conn.conn_id, session.clone())).unwrap();

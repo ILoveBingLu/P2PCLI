@@ -99,7 +99,11 @@ class RemoteTerminal(
 
     /** 关掉手机上的这个终端；对方电脑上的会话接着跑 */
     fun close() {
-        handle?.close()
+        handle?.let {
+            it.detach()
+            // 释放 Rust 那边的对象
+            it.close()
+        }
         handle = null
     }
 
@@ -175,8 +179,8 @@ private object NoopClient : TerminalSessionClient {
 
 /** Rust 那边的错误转成给人看的一句话 */
 fun errorText(e: Throwable): String = when (e) {
-    is uniffi.p2pcli_mobile.P2pException.Rejected -> e.message
-    is uniffi.p2pcli_mobile.P2pException.Failed -> e.message
+    is uniffi.p2pcli_mobile.P2pException.Rejected -> e.detail
+    is uniffi.p2pcli_mobile.P2pException.Failed -> e.detail
     is uniffi.p2pcli_mobile.P2pException.Disconnected -> "连接已断开"
     else -> e.message ?: e.toString()
 }

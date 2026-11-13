@@ -249,7 +249,7 @@ impl P2p {
                 },
             };
             let remote = Arc::new(res.map_err(|e| match e {
-                ConnectError::Rejected(c) => P2pError::Rejected { reason: c.into(), message: c.describe().into() },
+                ConnectError::Rejected(c) => P2pError::Rejected { reason: c.into(), detail: c.describe().into() },
                 other => P2pError::failed(other),
             })?);
             remotes.lock().unwrap().insert(conn_id, remote.clone());
@@ -563,8 +563,9 @@ impl Terminal {
         let _ = self.tx.send(TermCmd::Resize(cols, rows));
     }
 
-    /// 关掉手机上的这个终端；对方电脑上的会话接着跑
-    pub fn close(&self) {
+    /// 关掉手机上的这个终端；对方电脑上的会话接着跑。
+    /// 不叫 close：UniFFI 生成的对象自带 close（释放 Rust 那边的对象）
+    pub fn detach(&self) {
         let _ = self.tx.send(TermCmd::Close);
     }
 }

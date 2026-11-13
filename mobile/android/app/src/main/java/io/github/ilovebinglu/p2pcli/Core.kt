@@ -216,10 +216,10 @@ class Core(private val app: Application) : AppListener {
                         endpointId = endpointId,
                         name = name,
                         target = target,
-                        error = if (e.reason == RejectReason.BAD_PASSWORD) e.message else null,
+                        error = if (e.reason == RejectReason.BAD_PASSWORD) e.detail else null,
                     )
                 } else {
-                    showError(e.message)
+                    showError(e.detail)
                 }
             } catch (e: Exception) {
                 showError(errorText(e))
