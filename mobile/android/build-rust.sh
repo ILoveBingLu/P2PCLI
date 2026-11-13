@@ -33,7 +33,9 @@ lib="$repo/target/aarch64-linux-android/release/libp2pcli_mobile.so"
 mkdir -p "$out/jniLibs/arm64-v8a"
 cp "$lib" "$out/jniLibs/arm64-v8a/"
 rm -rf "$out/uniffi"
-# 生成绑定的命令行在本机跑（不是手机），从编好的手机库里读接口
-cargo run --locked --quiet -p p2pcli-mobile-ffi --features bindgen --bin uniffi-bindgen -- \
-    generate --library "$lib" --language kotlin --out-dir "$out/uniffi" --no-format
+# 正式版的库去掉了符号（工作区 release 配置 strip = true），UniFFI 写在库里的接口说明也跟着没了。
+# 接口在各平台都一样：从本机不去符号的调试版读，生成绑定的命令行也在本机跑
+cargo build --locked -p p2pcli-mobile-ffi --features bindgen
+case "$(uname -s)" in Darwin) host_lib="$repo/target/debug/libp2pcli_mobile.dylib" ;; *) host_lib="$repo/target/debug/libp2pcli_mobile.so" ;; esac
+"$repo/target/debug/uniffi-bindgen" generate --library "$host_lib" --language kotlin --out-dir "$out/uniffi" --no-format
 echo "Rust 库和 Kotlin 绑定已生成：$out"
