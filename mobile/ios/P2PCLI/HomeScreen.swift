@@ -90,8 +90,6 @@ struct HomeScreen: View {
         }
         // 用系统原生的标题栏：内容滚上去时系统自己画渐变模糊（滚动边缘效果）
         .navigationTitle("P2PCLI")
-        // logo 和名字就是标题：靠左和按钮放在同一行（系统的 inlineLarge），不另占一行
-        .toolbarTitleDisplayMode(.inlineLarge)
         .heroBrandTitle()
         .heroToolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -111,25 +109,68 @@ struct HomeScreen: View {
 }
 
 extension View {
-    /// 大标题前面放软件的 logo（和 Mac 版同一个液态玻璃图标）。用系统给大标题留的位置（iOS 26 起），
-    /// 还是系统的标题栏；系统不显示大标题的时候（比如 iPhone Duo 合上）就只显示文字标题
+    /// 首页的标题就是软件的 logo 和名字（logo 和 Mac 版同一个液态玻璃图标），都用系统的标题栏：
+    /// - 有横着的标题栏（普通 iPhone、iPad、iPhone Duo 展开竖着拿）：放在标题栏最左边，和右边的按钮同一行，
+    ///   宽度由系统分配，侧栏窄的时候也不会压到按钮
+    /// - iPhone Duo 有右侧竖栏时（合上、展开横着拿）：按钮都在竖栏里，标题用系统的大标题位置
     @ViewBuilder
     func heroBrandTitle() -> some View {
-        if #available(iOS 26.0, *) {
-            self.toolbar {
-                ToolbarItem(placement: .largeTitle) {
-                    // 和按钮同一行：位置不够（iPad、iPhone Duo 展开时的侧栏）时字自动缩小，不压到按钮上
-                    HStack(spacing: 9) {
-                        Image("logo").resizable().frame(width: 32, height: 32).accessibilityHidden(true)
-                        Text("P2PCLI").font(.title.bold()).lineLimit(1).minimumScaleFactor(0.6)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityAddTraits(.isHeader)
-                }
-            }
+        if #available(iOS 27.1, *) {
+            self.modifier(BrandTitleByBars())
+        } else if #available(iOS 26.0, *) {
+            self.modifier(BrandTitle(verticalBars: false))
         } else {
-            self
+            self.navigationBarTitleDisplayMode(.large)
         }
+    }
+}
+
+@available(iOS 27.1, *)
+private struct BrandTitleByBars: ViewModifier {
+    /// 系统把栏竖着放在侧边时不为空
+    @Environment(\.toolbarVerticalEdge) private var verticalEdge
+
+    func body(content: Content) -> some View {
+        content.modifier(BrandTitle(verticalBars: verticalEdge != nil))
+    }
+}
+
+@available(iOS 26.0, *)
+private struct BrandTitle: ViewModifier {
+    let verticalBars: Bool
+
+    func body(content: Content) -> some View {
+        if verticalBars {
+            content
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .largeTitle) { Brand(logo: 36, font: .largeTitle.bold()) }
+                }
+        } else {
+            content
+                .navigationBarTitleDisplayMode(.inline)
+                // 系统的文字标题不再显示一遍（返回按钮上还是叫 P2PCLI）
+                .toolbar(removing: .title)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { Brand(logo: 30, font: .title2.bold()) }
+                        // 标题不是按钮：不要玻璃底
+                        .sharedBackgroundVisibility(.hidden)
+                }
+        }
+    }
+}
+
+private struct Brand: View {
+    let logo: CGFloat
+    let font: Font
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image("logo").resizable().frame(width: logo, height: logo).accessibilityHidden(true)
+            Text("P2PCLI").font(font).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
