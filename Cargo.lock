@@ -3584,8 +3584,6 @@ dependencies = [
 [[package]]
 name = "netdev"
 version = "0.46.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3c52c2584961c68f5a6e3356797344061f818c93b8acc9cd6d7e284795e563e"
 dependencies = [
  "block2",
  "dispatch2",
@@ -4295,7 +4293,7 @@ dependencies = [
  "libc",
  "n0-future",
  "n0-watcher",
- "netdev 0.45.1",
+ "netdev 0.46.3",
  "noq-proto",
  "noq-udp",
  "portable-pty",
