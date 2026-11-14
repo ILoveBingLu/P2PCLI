@@ -19,6 +19,18 @@ export function sessionTitles(sessions: TerminalSession[]): Map<string, string> 
   }));
 }
 
+/** 会话编号的前 8 位：别的设备开在本机上的会话编号前面带着设备公钥，跳过它 */
+export function shortSessionId(id: string): string {
+  return id.slice(-32).slice(0, 8);
+}
+
+/** 别的设备开在本机上的会话：显示成“来自 xx”。设备名先用备注，没记过名字时说“其他设备” */
+export function ownerLabel(session: TerminalSession, deviceRemark: (endpointId: string) => string): string | null {
+  const owner = session.owner;
+  if (!owner) return null;
+  return t("来自 {{name}}", { name: deviceRemark(owner.endpoint_id).trim() || owner.name || t("其他设备") });
+}
+
 /** 刚刚、3 分钟前、2 小时前、昨天 19:30、10月20日 */
 export function relativeTime(secs: number | null | undefined): string {
   if (!secs) return "";

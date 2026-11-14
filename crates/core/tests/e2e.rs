@@ -1339,6 +1339,53 @@ async fn local_persistent_session_lists_reattaches_and_ends() {
     node.shutdown().await;
 }
 
+/// 别的设备（手机、别的电脑）开在本机上的会话：本机列表里也有，标着是谁开的，本机能接着用、能结束。
+/// 连接方那边照旧只看得到自己的。要真的起 tmux，默认不跑
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux on macOS/Linux"]
+async fn local_can_continue_sessions_opened_by_other_devices() {
+    let node = Node::start(
+        NodeConfig {
+            data_dir: temp_dir("local-foreign"),
+            device_name: Some("本机".into()),
+            offline: true,
+            session_program: std::env::var_os("P2PCLI_TMUX").map(Into::into),
+            ..Default::default()
+        },
+        TestDelegate::new(),
+    )
+    .await
+    .unwrap();
+    let phone_id = iroh::SecretKey::generate().public();
+    let phone = phone_id.to_string();
+    node.host.paired.add(&phone_id, "测试手机", "harmony").unwrap();
+    // 手机开的会话：直接用会话管理器以手机的身份建一个
+    let (_cmd, phone_session) = node.host.terminals.attach(&phone, None, 80, 24).await.expect("要能建会话");
+
+    let local = node.local_remote().await;
+    let compound = format!("{phone}-{phone_session}");
+    let sessions = local.list_terminals().await.unwrap();
+    let found = sessions.iter().find(|s| s.id == compound).unwrap_or_else(|| panic!("本机列表里要有手机开的会话：{sessions:?}"));
+    let owner = found.owner.as_ref().expect("要标出是哪台设备开的");
+    assert_eq!(owner.endpoint_id, phone);
+    assert_eq!(owner.name, "测试手机");
+    // 手机那边看自己的列表，编号还是原来的样子，也不带 owner
+    let theirs = node.host.terminals.list(&phone).await.unwrap();
+    assert!(theirs.iter().any(|s| s.id == phone_session && s.owner.is_none()));
+
+    let (mut input, mut output) = local.attach_terminal(Some(compound.clone()), 100, 30).await.expect("本机要能接回手机开的会话");
+    assert_eq!(output.session_id, compound, "接回后的编号要和列表里一样");
+    input.write(b"echo shared-$((2+3))\r").await.unwrap();
+    read_until(&mut input, &mut output, "shared-5").await;
+    input.close();
+    drop(output);
+
+    local.end_terminal(compound.clone()).await.unwrap();
+    assert!(node.host.terminals.list(&phone).await.unwrap().is_empty(), "本机结束以后手机那边也没了");
+    node.shutdown().await;
+}
+
 /// 拥塞控制按链路延迟自动选：本机回环延迟接近 0，要保持 Cubic（BBR3 在低延迟链路上更慢）。
 /// 跨境这类长延迟、有丢包的链路选 BBR3，在 tests/lossy_link.rs 里用模拟链路验证（手动跑）
 #[cfg(unix)]

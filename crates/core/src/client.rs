@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, Msg, RejectCode, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, Msg, RejectCode, SessionOwner, TerminalSession, read_frame, read_msg, write_data, write_msg};
 #[cfg(feature = "host")]
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
@@ -154,6 +154,13 @@ pub async fn handshake(
     }
 }
 
+/// 本机连接上的会话编号对应哪台设备的哪个会话：本机自己开的是 32 位编号；
+/// 别的设备（手机、别的电脑）开在本机上的写成“设备公钥-编号”，本机的人也能接着用。
+/// 只有本机连接认这种写法，网络上来的请求永远只能碰连接方自己的会话
+fn local_target<'a>(me: &'a str, session_id: &'a str) -> (&'a str, &'a str) {
+    session_id.split_once('-').unwrap_or((me, session_id))
+}
+
 /// 本机内部通道的缓冲大小：终端输出慢慢读也不会丢，写满了就等
 #[cfg(feature = "host")]
 const LOCAL_PIPE: usize = 256 * 1024;
@@ -233,7 +240,20 @@ impl RemoteHost {
 
     pub async fn list_terminals(&self) -> Result<Vec<TerminalSession>> {
         if let Link::Local { host, owner } = &self.link {
-            return host.terminals.list(owner).await;
+            // 本机的人能接着用别的设备开在本机上的会话：列出所有设备开的，别人开的编号前面带上设备公钥
+            let sessions = host.terminals.list_all().await?;
+            return Ok(sessions.into_iter().map(|(device, mut session)| {
+                if device != *owner {
+                    let known = host.known_device(&device);
+                    session.id = format!("{device}-{}", session.id);
+                    session.owner = Some(SessionOwner {
+                        name: known.as_ref().map(|d| d.name.clone()).unwrap_or_default(),
+                        platform: known.map(|d| d.platform).unwrap_or_default(),
+                        endpoint_id: device,
+                    });
+                }
+                session
+            }).collect());
         }
         match self.session_request(Msg::ListTerminals).await? {
             Msg::Terminals { sessions } => Ok(sessions),
@@ -243,7 +263,8 @@ impl RemoteHost {
 
     pub async fn end_terminal(&self, session_id: String) -> Result<()> {
         if let Link::Local { host, owner } = &self.link {
-            return host.terminals.end(owner, &session_id).await;
+            let (owner, id) = local_target(owner, &session_id);
+            return host.terminals.end(owner, id).await;
         }
         match self.session_request(Msg::EndTerminal { session_id }).await? {
             Msg::TerminalEnded => Ok(()),
@@ -263,7 +284,8 @@ impl RemoteHost {
 
     pub async fn launch_agent(&self, session_id: String, kind: String, allow_bypass: bool) -> Result<()> {
         if let Link::Local { host, owner } = &self.link {
-            return host.terminals.launch_agent(owner, &session_id, &kind, allow_bypass).await;
+            let (owner, id) = local_target(owner, &session_id);
+            return host.terminals.launch_agent(owner, id, &kind, allow_bypass).await;
         }
         match self.session_request(Msg::LaunchAgent { session_id, kind, allow_bypass }).await? {
             Msg::AgentLaunched => Ok(()),
@@ -273,7 +295,8 @@ impl RemoteHost {
 
     pub async fn choose_agent_option(&self, session_id: String, approval_id: String, option_id: usize) -> Result<()> {
         if let Link::Local { host, owner } = &self.link {
-            return host.terminals.choose_agent_option(owner, &session_id, &approval_id, option_id).await;
+            let (owner, id) = local_target(owner, &session_id);
+            return host.terminals.choose_agent_option(owner, id, &approval_id, option_id).await;
         }
         match self.session_request(Msg::ChooseAgentOption { session_id, approval_id, option_id }).await? {
             Msg::AgentOptionChosen => Ok(()),
@@ -283,7 +306,8 @@ impl RemoteHost {
 
     pub async fn send_agent_message(&self, session_id: String, kind: String, request_id: String, text: String) -> Result<()> {
         if let Link::Local { host, owner } = &self.link {
-            return host.terminals.send_agent_message(owner, &session_id, &kind, &request_id, &text).await;
+            let (owner, id) = local_target(owner, &session_id);
+            return host.terminals.send_agent_message(owner, id, &kind, &request_id, &text).await;
         }
         if let Link::Net { capabilities, .. } = &self.link
             && !capabilities.iter().any(|capability| capability == AGENT_MESSAGE_V1) {
@@ -310,7 +334,8 @@ impl RemoteHost {
     /// 会话停在空闲提示符时切到这个目录
     pub async fn change_dir(&self, session_id: String, path: String) -> Result<()> {
         if let Link::Local { host, owner } = &self.link {
-            return host.terminals.change_dir(owner, &session_id, &path).await;
+            let (owner, id) = local_target(owner, &session_id);
+            return host.terminals.change_dir(owner, id, &path).await;
         }
         self.require_dir_picker()?;
         match self.session_request(Msg::ChangeDir { session_id, path }).await? {
@@ -633,8 +658,17 @@ async fn open_local(
     cols: u16,
     rows: u16,
 ) -> Result<(TermInput, TermOutput)> {
+    let (target, requested) = match session_id.as_deref() {
+        Some(session_id) => {
+            let (target, id) = local_target(owner, session_id);
+            (target, Some(id))
+        }
+        None => (owner, None),
+    };
     let attachment = if persistent {
-        match host.terminals.attach(owner, session_id.as_deref(), cols, rows).await {
+        match host.terminals.attach(target, requested, cols, rows).await {
+            // 别的设备开的会话：回给界面的编号和列表里一样，带着设备公钥
+            Ok((cmd, id)) if target != owner => Some((cmd, format!("{target}-{id}"))),
             Ok(attachment) => Some(attachment),
             // 没装 tmux、psmux 这类会话管理器：新开的退回普通终端，照样能用，只是软件关了就没了；
             // 要接回指定的后台会话就不能糊弄，照实报错

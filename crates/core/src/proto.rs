@@ -216,6 +216,19 @@ pub struct TerminalSession {
     /// 在线探测也带着它（只有程序种类和状态），后台的会话也能提醒
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<crate::agents::AgentInfo>,
+    /// 别的设备开在本机上的会话：是哪台设备开的。只出现在本机自己的会话列表里，
+    /// 本机的人能接着用手机、别的电脑开的会话；网络上回给连接方的列表里永远没有这项
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<SessionOwner>,
+}
+
+/// 开这个会话的设备
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionOwner {
+    pub endpoint_id: String,
+    /// 设备名；本机没记过这台设备时是空的
+    pub name: String,
+    pub platform: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

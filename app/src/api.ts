@@ -50,11 +50,21 @@ export interface TerminalSession {
   } | null;
   /** 会话里跑着的命令行 AI；没认出来、或者对方是旧版本时没有 */
   agent?: AgentInfo | null;
+  /** 别的设备（手机、别的电脑）开在本机上的会话：是谁开的。本机自己开的、远程设备上的会话没有 */
+  owner?: SessionOwner | null;
 }
 
 export interface InstalledAgent { kind: string; name: string; command: string }
 
 /** 同一条连接共享的会话快照；读取失败后不能再把旧 AI 状态当成实时状态。 */
+/** 开这个会话的设备：只有本机列表里、别的设备开在本机上的会话才有 */
+export interface SessionOwner {
+  endpoint_id: string;
+  /** 本机没记过这台设备时是空的 */
+  name: string;
+  platform: string;
+}
+
 export interface TerminalSessionSnapshot {
   sessions: TerminalSession[] | null;
   error: string | null;
