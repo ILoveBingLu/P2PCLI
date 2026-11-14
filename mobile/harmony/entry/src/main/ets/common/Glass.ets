@@ -48,9 +48,12 @@ export function barGlass(): uiMaterial.Material | undefined {
   return new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.REGULAR, applyShadow: false });
 }
 
-/** 弹出面板的底：支持材质时透明（让系统的材质透出来），不支持时用原来的面板色 */
+/**
+ * 弹出面板的底：一律用实心的面板色。
+ * 之前支持材质时设成透明，指望系统给面板垫上材质，实际面板没垫，整个面板透明，后面的首页直接透出来，看不清
+ */
 export function sheetBackground(): ResourceColor {
-  return glassSupported() ? Color.Transparent : Hero.surface;
+  return Hero.surface;
 }
 
 /**
