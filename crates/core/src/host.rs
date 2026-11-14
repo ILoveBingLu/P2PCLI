@@ -230,6 +230,11 @@ pub struct Host {
 }
 
 impl Host {
+    /// 本机记过的设备：受信的、同意过的、本机连过的都算。用来给别的设备开在本机上的会话标上设备名
+    pub fn known_device(&self, endpoint_id: &str) -> Option<crate::store::TrustedDevice> {
+        [&self.trust, &self.paired, &self.connected].into_iter().find_map(|store| store.get(endpoint_id))
+    }
+
     pub fn new(me: DeviceInfo, data_dir: &Path, local_key: &str, session_program: Option<PathBuf>, delegate: Arc<dyn HostDelegate>, collaboration: Arc<Store>) -> Self {
         let password_file = data_dir.join("pairing_password.txt");
         let fixed = std::fs::read_to_string(&password_file)

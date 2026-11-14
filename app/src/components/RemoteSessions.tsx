@@ -11,7 +11,7 @@ import { useContextMenu } from "./ContextMenu";
 import { AgentIcon, AgentStateLabel } from "./Agent";
 import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
-import { relativeTime, sessionTitles } from "./sessionText";
+import { ownerLabel, relativeTime, sessionTitles, shortSessionId } from "./sessionText";
 import { ClearSessionDialog } from "./ClearSessionDialog";
 import { t } from "@/i18n";
 
@@ -144,6 +144,7 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
                 const label = remarkFor(s.id).trim() || titles.get(s.id) || t("会话");
                 // 刷新失败时列表留着，但旧的 AI 状态不能当成现在的
                 const agent = error ? null : s.agent ?? null;
+                const from = ownerLabel(s, remarks.device);
                 return (
                   <li key={s.id}>
                     <button
@@ -169,7 +170,8 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
                               : <Badge variant="secondary">{t("后台运行")}</Badge>}
                         </span>
                         <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                          <span className="font-mono">{s.id.slice(0, 8)}</span>
+                          {from && <>{from} · </>}
+                          <span className="font-mono">{shortSessionId(s.id)}</span>
                           {s.created_at ? t(" · {{value}}创建", { value: relativeTime(s.created_at) }) : ""}
                         </span>
                       </span>

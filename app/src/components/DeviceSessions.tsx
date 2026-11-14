@@ -6,7 +6,7 @@ import { toast } from "@/components/ui/toast";
 import type { MenuAction } from "./ContextMenu";
 import type { SessionTarget } from "./RemoteSessions";
 import { AgentIcon, AgentStateLabel, agentStateText } from "./Agent";
-import { sessionTitles } from "./sessionText";
+import { ownerLabel, sessionTitles, shortSessionId } from "./sessionText";
 import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
 import { CollaborationAnchor } from "./CollaborationPorts";
@@ -63,15 +63,18 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
     remark: sessionRemark(session.id),
     status: session.attached ? t("已连接") : t("后台运行"),
     agent: live ? session.agent ?? null : null,
+    // 别的设备开在本机上的会话，标上是谁开的
+    from: ownerLabel(session, remarks.device),
   }));
   for (const tab of tabs) {
     if (tab.sessionId && listed.has(tab.sessionId)) continue;
-    const label = tab.sessionId ? sessionRemark(tab.sessionId) || t("会话 {{value}}", { value: tab.sessionId.slice(0, 8) }) : t("终端 {{key}}", { key: tab.key });
+    const label = tab.sessionId ? sessionRemark(tab.sessionId) || t("会话 {{value}}", { value: shortSessionId(tab.sessionId) }) : t("终端 {{key}}", { key: tab.key });
     rows.push({
       id: `tab-${tab.key}`, sessionId: tab.sessionId ?? "", tab, label,
       remark: tab.sessionId ? sessionRemark(tab.sessionId) : "",
       status: { opening: t("打开中"), open: t("已连接"), exited: t("已脱离"), closed: t("已断开") }[tab.state],
       agent: null,
+      from: null,
     });
   }
 
@@ -149,15 +152,17 @@ export function DeviceSessions({ endpointId, deviceName, target, status, tabs, s
       <div className="flex min-w-0 flex-col gap-1" onContextMenu={onContextMenu}>
         {rows.map((row) => (
           <CollaborationAnchor key={row.id} endpoint={{ deviceId: endpointId, deviceName, terminalId: row.sessionId, sessionName: row.label }}
-            disabled={!row.sessionId || !live || !listed.has(row.sessionId)}>
+            // 协作只对接本机自己开的会话；别的设备开的会话归那台设备
+            disabled={!row.sessionId || !live || !listed.has(row.sessionId) || !!row.from}>
           <Button variant={row.tab?.key === activeKey ? "secondary" : "ghost"}
             data-session-row={row.id}
             className="h-8 w-full min-w-0 justify-start gap-2 px-2 text-xs"
             aria-current={row.tab?.key === activeKey ? "true" : undefined}
-            title={row.agent ? `${row.label} · ${agentStateText(row.agent)} · ${row.status}` : undefined}
+            title={[row.label, row.from, row.agent && agentStateText(row.agent), (row.agent || row.from) && row.status].filter(Boolean).join(" · ") || undefined}
             onClick={() => openRow(row)}>
             {row.agent ? <AgentIcon kind={row.agent.kind} className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
             <span className="min-w-0 flex-1 truncate text-left">{row.label}</span>
+            {row.from && <span className="max-w-[45%] shrink truncate text-[10px] text-muted-foreground">{row.from}</span>}
             {row.agent
               ? <AgentStateLabel agent={row.agent} className="shrink-0 text-[10px]" />
               : row.tab && row.tab.state !== "open"

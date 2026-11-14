@@ -165,7 +165,17 @@ impl SessionManager {
         Ok(())
     }
 
+    /// 这台设备开在本机上的会话
     pub async fn list(&self, owner: &str) -> Result<Vec<TerminalSession>> {
+        Ok(self.list_owned(Some(owner)).await?.into_iter().map(|(_, s)| s).collect())
+    }
+
+    /// 本机上所有设备开的会话，带上是谁开的。只给本机自己用：连接方只能看自己的
+    pub async fn list_all(&self) -> Result<Vec<(String, TerminalSession)>> {
+        self.list_owned(None).await
+    }
+
+    async fn list_owned(&self, only: Option<&str>) -> Result<Vec<(String, TerminalSession)>> {
         let out = self.command(&["list-sessions", "-F", SESSION_FORMAT]).await?;
         if !out.status.success() {
             let error = String::from_utf8_lossy(&out.stderr).to_lowercase();
@@ -174,24 +184,34 @@ impl SessionManager {
             }
             bail!("读取会话列表失败：{}", error.trim());
         }
-        let prefix = format!("p2pcli-{owner}-");
+        let prefix = match only {
+            Some(owner) => format!("p2pcli-{owner}-"),
+            None => "p2pcli-".to_string(),
+        };
         let mut sessions = Vec::new();
         let mut active = HashSet::new();
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             let mut parts = line.splitn(11, '\t');
-            let Some(id) = parts.next().and_then(|n| n.strip_prefix(&prefix)) else { continue };
+            let Some((owner, id)) = parts.next()
+                .and_then(|n| n.strip_prefix(&prefix))
+                .and_then(|rest| match only {
+                    Some(owner) => Some((owner, rest)),
+                    None => rest.split_once('-'),
+                }) else { continue };
             if Self::name(owner, id).is_err() { continue; }
+            let owner = owner.to_string();
             let mut session = TerminalSession {
                 id: id.to_string(),
                 created_at: parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
                 attached: parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0,
                 details: None,
                 agent: None,
+                owner: None,
             };
             // Also repair restored sessions or options changed inside the terminal.
             // Normal polling needs no extra process when status is already off.
             if !status_hidden(parts.next().unwrap_or_default()) {
-                self.hide_status(&Self::name(owner, id)?).await?;
+                self.hide_status(&Self::name(&owner, id)?).await?;
             }
             let details = TerminalDetails {
                 shell_ready: false,
@@ -206,7 +226,7 @@ impl SessionManager {
             }
             let pane_pid = parts.next().and_then(|v| v.trim().parse().ok());
             let title = parts.next().unwrap_or_default();
-            let name = Self::name(owner, id)?;
+            let name = Self::name(&owner, id)?;
             active.insert(name.clone());
             session.agent = self.agent(&name, pane_pid, title).await;
             if session.agent.is_none() {
@@ -216,10 +236,10 @@ impl SessionManager {
                     }
                 }
             }
-            sessions.push(session);
+            sessions.push((owner, session));
         }
         self.activity.lock().unwrap().retain(&prefix, &active);
-        sessions.sort_by_key(|s| s.created_at);
+        sessions.sort_by_key(|(_, s)| s.created_at);
         Ok(sessions)
     }
 

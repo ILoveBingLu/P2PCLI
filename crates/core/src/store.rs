@@ -93,6 +93,10 @@ impl TrustStore {
         Ok(removed)
     }
 
+    pub fn get(&self, id: &str) -> Option<TrustedDevice> {
+        self.map.lock().unwrap().get(id).cloned()
+    }
+
     pub fn list(&self) -> Vec<(String, TrustedDevice)> {
         self.map
             .lock()
