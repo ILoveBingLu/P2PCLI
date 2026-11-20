@@ -12,6 +12,10 @@ use tracing::{info, warn};
 
 use crate::{AppState, UiDelegate, settings_path};
 
+/// 画面窗口的标题栏高度，和主窗口、前端 .screen-toolbar 一致
+#[cfg(target_os = "windows")]
+const TITLEBAR_HEIGHT: u32 = 44;
+
 /// 发给画面窗口的二进制消息：第一个字节是类型
 const EV_JSON: u8 = 1;
 const EV_FRAME: u8 = 2;
@@ -188,11 +192,23 @@ pub(crate) async fn open_screen_window(app: AppHandle, state: State<'_, AppState
         return Ok(());
     }
     state.screen_windows.lock().unwrap().insert(label.clone(), ScreenWindow { endpoint_id, device_name: device_name.clone(), platform });
-    let built = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html?window=screen".into()))
+    let builder = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html?window=screen".into()))
         .title(format!("{device_name} — 远程画面"))
         .inner_size(1280.0, 800.0)
-        .min_inner_size(480.0, 320.0)
-        .build();
+        .min_inner_size(480.0, 320.0);
+    // 标题栏和主窗口一样自己画（工具栏就是标题栏），窗口按钮用系统原生的：
+    // macOS 留着红绿灯，Windows 由 window-controls 插件画原生的最小化、最大化、关闭
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(14.0, 24.0));
+    #[cfg(target_os = "windows")]
+    let builder = {
+        use tauri_plugin_window_controls::WindowControlsBuilderExt;
+        builder.theme(Some(tauri::Theme::Dark)).window_controls_height(TITLEBAR_HEIGHT)
+    };
+    let built = builder.build();
     if let Err(e) = built {
         state.screen_windows.lock().unwrap().remove(&label);
         return Err(format!("打不开远程画面窗口：{e}"));
