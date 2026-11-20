@@ -2972,16 +2972,26 @@ html[data-mobile] [role="dialog"] {
   background: #000;
   color: var(--foreground);
 }
+/* 工具栏就是标题栏：高度和主窗口一样 44px，空白处能拖动窗口、双击最大化 */
 .screen-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  height: 44px;
   padding: 0 8px 0 12px;
   flex-shrink: 0;
-  background: var(--terminal);
+  background: var(--sidebar);
   border-bottom: 1px solid var(--border);
+  user-select: none;
 }
+/* macOS 给左边的红绿灯留位置，Windows 给右边的原生按钮留位置（46 × 3 再多 2px） */
+.screen-toolbar.titlebar-macos { padding-left: 90px; }
+.screen-toolbar.titlebar-windows { padding-right: 148px; }
+.screen-toolbar.titlebar-windows::after,
+.screen-toolbar.titlebar-macos::after { content: none; }
+/* Tauri 按事件目标判断拖动：标题里的字和图标要让给拖动区 */
+.screen-toolbar-title * { pointer-events: none; }
 .screen-toolbar-title {
   display: flex;
   align-items: center;
@@ -3049,4 +3059,5 @@ html[data-mobile] [role="dialog"] {
 .screen-overlay > p { margin: 0; max-width: 460px; }
 .screen-overlay-note { font-size: 12px; color: var(--muted); }
 .screen-overlay-soft { background: rgb(0 0 0 / 0.6); }
-.screen-window[data-fullscreen] .screen-toolbar { height: 32px; }
+/* 全屏时 macOS 的红绿灯藏起来了，不用再留位置 */
+.screen-window[data-fullscreen] .screen-toolbar.titlebar-macos { padding-left: 12px; }

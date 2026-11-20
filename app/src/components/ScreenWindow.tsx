@@ -4,6 +4,7 @@
 // 画面只走直连：连接落到中继上时对方暂停发画面，终端照常能用，直连恢复后自动接着放。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink, Unplug } from "lucide-react";
 import {
@@ -31,6 +32,9 @@ type Phase =
   | { kind: "ended"; message: string | null };
 
 const isMac = navigator.userAgent.includes("Mac");
+// 和主窗口一样：标题栏自己画，给系统原生的窗口按钮留位置
+const nativeMac = isTauri() && /Macintosh/.test(navigator.userAgent);
+const nativeWindows = isTauri() && /Windows/.test(navigator.userAgent);
 
 function b64(s: string): Uint8Array {
   const bin = atob(s);
@@ -431,7 +435,7 @@ export default function ScreenWindow() {
 
   return (
     <div className="screen-window" data-fullscreen={fullscreen ? "" : undefined}>
-      <div className="screen-toolbar" data-tauri-drag-region>
+      <div className={`screen-toolbar${nativeMac ? " titlebar-macos" : ""}${nativeWindows ? " titlebar-windows" : ""}`} data-tauri-drag-region>
         <div className="screen-toolbar-title" data-tauri-drag-region>
           <Monitor />
           <span className="truncate">{device?.name ?? ""}</span>
