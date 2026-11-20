@@ -11,6 +11,8 @@ async fn main() -> anyhow::Result<()> {
     use p2pcli_screen::mac_encode::Encoder;
 
     let out = std::env::args().nth(1).unwrap_or_else(|| "enc.h264".into());
+    // 第二个参数写 h265 就测 H.265
+    let codec = if std::env::args().nth(2).as_deref() == Some("h265") { p2pcli_core::screen::VideoCodec::H265 } else { p2pcli_core::screen::VideoCodec::H264 };
     let (w, h) = (1920usize, 1080usize);
     let empty = CFDictionary::<CFString, CFType>::from_slices(&[], &[]);
     let attrs = unsafe { CFDictionary::<CFString, CFType>::from_slices(&[kCVPixelBufferIOSurfacePropertiesKey], &[empty.as_ref()]) };
@@ -38,16 +40,14 @@ async fn main() -> anyhow::Result<()> {
         }
         let key = i == 0 || i == 45;
         let t = std::time::Instant::now();
-        let rx = Encoder::encode(&mut enc, &pb, unsafe { CMTime::new(i as i64, 60) }, 60, if i < 45 { 8_000_000 } else { 1_000_000 }, key)?;
+        let rx = Encoder::encode(&mut enc, &pb, unsafe { CMTime::new(i as i64, 60) }, 60, if i < 45 { 8_000_000 } else { 1_000_000 }, key, codec)?;
         let Some(f) = rx.await?? else { println!("帧 {i}: 编码器丢帧"); continue };
         total += f.data.len();
         println!("帧 {i}: key={} {} 字节 编码 {:?}", f.key, f.data.len(), t.elapsed());
         if let Some(c) = &f.config {
             println!("配置：{} {}x{} avcC {}", c.codec, c.width, c.height, c.description);
             let rec = base64::engine::general_purpose::STANDARD.decode(&c.description)?;
-            let sl = u16::from_be_bytes([rec[6], rec[7]]) as usize;
-            let pl = u16::from_be_bytes([rec[9 + sl], rec[10 + sl]]) as usize;
-            for p in [&rec[8..8 + sl], &rec[11 + sl..11 + sl + pl]] { file.write_all(&[0, 0, 0, 1])?; file.write_all(p)?; }
+            for p in parameter_sets(&rec, c.codec.starts_with("hvc1")) { file.write_all(&[0, 0, 0, 1])?; file.write_all(&p)?; }
         }
         let mut d = &f.data[..];
         while d.len() >= 4 { let n = u32::from_be_bytes(d[..4].try_into()?) as usize; file.write_all(&[0, 0, 0, 1])?; file.write_all(&d[4..4 + n])?; d = &d[4 + n..]; }
@@ -55,5 +55,29 @@ async fn main() -> anyhow::Result<()> {
     println!("总共 {total} 字节");
     Ok(())
 }
+/// 从 avcC / hvcC 里取出参数集，写成 Annex B 文件时放在关键帧前面
+#[cfg(target_os = "macos")]
+fn parameter_sets(rec: &[u8], hevc: bool) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    if hevc {
+        let mut i = 23;
+        for _ in 0..rec[22] {
+            let n = u16::from_be_bytes([rec[i + 1], rec[i + 2]]) as usize;
+            i += 3;
+            for _ in 0..n {
+                let len = u16::from_be_bytes([rec[i], rec[i + 1]]) as usize;
+                out.push(rec[i + 2..i + 2 + len].to_vec());
+                i += 2 + len;
+            }
+        }
+    } else {
+        let sl = u16::from_be_bytes([rec[6], rec[7]]) as usize;
+        let pl = u16::from_be_bytes([rec[9 + sl], rec[10 + sl]]) as usize;
+        out.push(rec[8..8 + sl].to_vec());
+        out.push(rec[11 + sl..11 + sl + pl].to_vec());
+    }
+    out
+}
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}

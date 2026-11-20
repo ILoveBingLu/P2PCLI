@@ -253,10 +253,11 @@ pub(crate) async fn screen_open(
     quality: Option<Quality>,
     control: bool,
     display: Option<String>,
+    codecs: Option<Vec<p2pcli_core::screen::VideoCodec>>,
     events: Channel<InvokeResponseBody>,
 ) -> Result<ScreenOpened, String> {
     let remote = state.remote(conn_id)?;
-    let open = ScreenOpen { display, quality: quality.unwrap_or_default(), control };
+    let open = ScreenOpen { display, quality: quality.unwrap_or_default(), control, codecs: codecs.unwrap_or_default() };
     let (started, mut input, mut output) = remote.open_screen(open).await.map_err(|e| format!("{e:#}"))?;
     let screen_id = state.next();
     let (tx, mut rx) = mpsc::unbounded_channel::<ViewerMsg>();

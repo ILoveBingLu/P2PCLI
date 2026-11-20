@@ -91,6 +91,9 @@ enum Cmd {
         /// 把收到的 H.264 存成 Annex B 文件，用来验证能不能解码
         #[arg(long)]
         save: Option<PathBuf>,
+        /// 请对方用 H.265（对方编不了会自己退回 H.264）
+        #[arg(long)]
+        h265: bool,
     },
     /// 网络诊断：IPv6、NAT 类型、中继
     Diag,
@@ -249,7 +252,7 @@ async fn main() -> Result<()> {
     }
 
     match cli.cmd {
-        Cmd::Screen { target, password, seconds, quality, save } => {
+        Cmd::Screen { target, password, seconds, quality, save, h265 } => {
             let remote = match connect_target(&node, &target, password).await {
                 Ok(r) => r,
                 Err(ConnectError::Rejected(c)) => bail!("被拒：{}", c.describe()),
@@ -268,7 +271,7 @@ async fn main() -> Result<()> {
                 "smooth" => p2pcli_core::screen::Quality::Smooth,
                 _ => p2pcli_core::screen::Quality::Balanced,
             };
-            watch_screen(&remote, quality, seconds, save).await?;
+            watch_screen(&remote, quality, seconds, save, h265).await?;
             remote.close();
             node.shutdown().await;
             Ok(())
@@ -403,10 +406,15 @@ async fn connect_target(node: &Node, target: &str, password: Option<String>) -> 
 }
 
 /// 只看不操作：收画面、马上回确认，每秒打印一行
-async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>) -> Result<()> {
+async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool) -> Result<()> {
     use p2pcli_core::screen::{ScreenEvent, ScreenOpen, ViewerMsg};
     let started = Instant::now();
-    let (info, mut input, mut output) = remote.open_screen(ScreenOpen { display: None, quality, control: false }).await?;
+    let (info, mut input, mut output) = remote.open_screen(ScreenOpen {
+        display: None,
+        quality,
+        control: false,
+        codecs: if h265 { vec![p2pcli_core::screen::VideoCodec::H265, p2pcli_core::screen::VideoCodec::H264] } else { vec![] },
+    }).await?;
     eprintln!("开始看画面，用时 {} 毫秒：屏幕 {:?}，当前 {}", started.elapsed().as_millis(), info.displays, info.display);
     let mut file = match &save { Some(p) => Some(std::fs::File::create(p)?), None => None };
     let deadline = Instant::now() + Duration::from_secs(seconds);
@@ -449,9 +457,25 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
                 if let Some(f) = &mut file {
                     use base64::Engine as _;
                     let rec = base64::engine::general_purpose::STANDARD.decode(&c.description)?;
-                    let sl = u16::from_be_bytes([rec[6], rec[7]]) as usize;
-                    let pl = u16::from_be_bytes([rec[9 + sl], rec[10 + sl]]) as usize;
-                    for p in [&rec[8..8 + sl], &rec[11 + sl..11 + sl + pl]] {
+                    let mut sets: Vec<&[u8]> = Vec::new();
+                    if c.codec.starts_with("hvc1") {
+                        let mut i = 23;
+                        for _ in 0..rec[22] {
+                            let n = u16::from_be_bytes([rec[i + 1], rec[i + 2]]) as usize;
+                            i += 3;
+                            for _ in 0..n {
+                                let len = u16::from_be_bytes([rec[i], rec[i + 1]]) as usize;
+                                sets.push(&rec[i + 2..i + 2 + len]);
+                                i += 2 + len;
+                            }
+                        }
+                    } else {
+                        let sl = u16::from_be_bytes([rec[6], rec[7]]) as usize;
+                        let pl = u16::from_be_bytes([rec[9 + sl], rec[10 + sl]]) as usize;
+                        sets.push(&rec[8..8 + sl]);
+                        sets.push(&rec[11 + sl..11 + sl + pl]);
+                    }
+                    for p in sets {
                         f.write_all(&[0, 0, 0, 1])?;
                         f.write_all(p)?;
                     }

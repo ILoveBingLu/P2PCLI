@@ -13,6 +13,7 @@ import {
   type ScreenInput,
   type PathInfo,
   type RemoteInfo,
+  type ScreenCodec,
   type ScreenCursorShape,
   type ScreenMouseButton,
   type ScreenQuality,
@@ -48,6 +49,26 @@ function b64(s: string): Uint8Array {
 }
 
 const BUTTONS: ScreenMouseButton[] = ["left", "middle", "right", "back", "forward"];
+
+/** 本机显卡能硬件解码的格式。H.265 只在显卡能解时才要（软件解 H.265 太费 CPU），H.264 总是能用 */
+let codecsProbe: Promise<ScreenCodec[]> | null = null;
+function supportedCodecs(): Promise<ScreenCodec[]> {
+  codecsProbe ??= (async () => {
+    if (typeof VideoDecoder === "undefined") return ["h264"];
+    try {
+      const s = await VideoDecoder.isConfigSupported({ codec: "hvc1.1.6.L123.B0", codedWidth: 1920, codedHeight: 1080, hardwareAcceleration: "prefer-hardware" });
+      return s.supported ? ["h265", "h264"] : ["h264"];
+    } catch {
+      return ["h264"];
+    }
+  })();
+  return codecsProbe;
+}
+
+/** 解码配置里的 codec 字符串是哪种格式 */
+function codecName(codec: string) {
+  return codec.startsWith("hvc1") || codec.startsWith("hev1") ? "H.265" : "H.264";
+}
 
 /** 对方指针的样子做成本机能用的指针：按屏幕点的大小（Retina 的 2 倍图缩回 1 倍），热点也换算过去 */
 interface CursorLook { url: string; width: number; height: number; hotX: number; hotY: number; css: string }
@@ -341,7 +362,9 @@ export default function ScreenWindow() {
       }
       setPhase({ kind: "asking" });
       try {
-        const opened = await api.screenOpen(connId, quality, true, display, onEvent);
+        const codecs = await supportedCodecs();
+        if (cancelled) return;
+        const opened = await api.screenOpen(connId, quality, true, display, codecs, onEvent);
         if (cancelled) { void api.screenClose(opened.screen_id); return; }
         screenId.current = opened.screen_id;
         setStarted(opened.started);
@@ -538,7 +561,7 @@ export default function ScreenWindow() {
                 <Row label={t("画面")} value={paused === "relay" ? t("已暂停（连接走中继）") : paused ? t("正在找直连线路") : decode ? `${decode.width} × ${decode.height}` : t("统计中…")} />
                 <Row label={t("帧率")} value={stats && !paused ? t("{{fps}} 帧/秒", { fps: stats.fps }) : "—"} />
                 <Row label={t("画面码率")} value={stats && !paused ? `${(stats.bitrate / 1e6).toFixed(1)} Mbps` : "—"} hint={t("对方编码器现在用的码率，网络差时会自动往下降")} />
-                <Row label={t("编码")} value={decode ? `H.264 · ${decode.codec}` : "—"} mono />
+                <Row label={t("编码")} value={decode ? `${codecName(decode.codec)} · ${decode.codec}` : "—"} mono />
                 <Row label={t("解码")} value={decode ? (decode.hardware && !hwNote ? t("显卡硬件解码") : t("系统解码")) : "—"} />
               </Section>
             ) : undefined} />

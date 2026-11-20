@@ -135,6 +135,8 @@ pub struct CaptureOptions {
     pub bitrate: u32,
     /// 把鼠标指针画进画面。能单独读指针时为假：指针由观看方用本机的系统指针画，零延迟、跟手
     pub show_cursor: bool,
+    /// 想用的编码格式；这台电脑编不了 H.265 时实现自己退回 H.264，观看方按解码配置里的格式解
+    pub codec: VideoCodec,
 }
 
 /// 鼠标指针的样子：RGBA（不预乘透明度），观看方拿它当本机指针的图案
@@ -222,6 +224,19 @@ pub struct ScreenOpen {
     /// 想不想操作；被连方可能只给看
     #[serde(default)]
     pub control: bool,
+    /// 观看方能硬件解码的格式。有 H.265 而被连方也能硬件编码就用 H.265，不然用 H.264；
+    /// 老版本不带这项，就是 H.264
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codecs: Vec<VideoCodec>,
+}
+
+/// 视频编码格式。H.265 同样画质码率省三到五成，同样码率更清楚；H.264 哪儿都能用，兜底
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoCodec {
+    #[default]
+    H264,
+    H265,
 }
 
 /// 被连方同意以后回的第一条消息
@@ -485,13 +500,14 @@ struct Running {
 
 impl Running {
     /// 开抓屏要等系统回应（最多几秒），放到阻塞线程上，不占异步运行时
-    async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32, show_cursor: bool) -> Result<Self> {
+    async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32, show_cursor: bool, codec: VideoCodec) -> Result<Self> {
         let opts = CaptureOptions {
             display: display.to_string(),
             max_long_edge: quality.max_long_edge(),
             fps: quality.fps(),
             bitrate,
             show_cursor,
+            codec,
         };
         let backend = backend.clone();
         let capture = tokio::task::spawn_blocking(move || backend.start(opts)).await.map_err(|e| anyhow!("抓屏线程出错：{e}"))??;
@@ -538,12 +554,14 @@ where
     // 先把抓屏开起来，开不起来就按普通错误回给观看方，让它看到原因
     let rtt = Duration::from_millis(path::current(&conn).rtt_ms.unwrap_or(50));
     let mut rate = RateControl::new(quality, rtt);
+    // 观看方能硬件解码 H.265 就请编码器用 H.265（这台编不了时实现自己退回 H.264）
+    let codec = if open.codecs.contains(&VideoCodec::H265) { VideoCodec::H265 } else { VideoCodec::H264 };
     // 能单独读指针就不把指针画进画面：观看方用本机的系统指针画，跟手
     let separate_cursor = {
         let (backend, display) = (backend.clone(), display.clone());
         tokio::task::spawn_blocking(move || backend.cursor(&display).is_some()).await.unwrap_or(false)
     };
-    let mut running = match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor).await {
+    let mut running = match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, codec).await {
         Ok(r) => r,
         Err(e) => {
             let _ = crate::proto::write_msg(&mut send, &crate::proto::Msg::Error { message: format!("{e:#}") }).await;
@@ -736,7 +754,7 @@ where
                         let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Switched { display: display.clone() } })).await;
                         continue;
                     }
-                    drop(std::mem::replace(&mut running, match Running::start(&backend, &want, quality, rate.bitrate, !separate_cursor).await {
+                    drop(std::mem::replace(&mut running, match Running::start(&backend, &want, quality, rate.bitrate, !separate_cursor, codec).await {
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
@@ -751,7 +769,7 @@ where
                     if q == quality { continue; }
                     quality = q;
                     rate.set_quality(q);
-                    drop(std::mem::replace(&mut running, match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor).await {
+                    drop(std::mem::replace(&mut running, match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, codec).await {
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
@@ -904,35 +922,111 @@ pub fn avcc_config(sps: &[u8], pps: &[u8], width: u32, height: u32) -> Result<Vi
 /// [`annexb_to_avcc`] 的结果
 #[derive(Debug, Default)]
 pub struct Avcc {
-    /// AVCC 格式的帧数据，不含 SPS、PPS
+    /// 每个 NAL 前面 4 字节长度的帧数据，不含参数集
     pub data: Vec<u8>,
+    /// 只有 H.265 有
+    pub vps: Option<Vec<u8>>,
     pub sps: Option<Vec<u8>>,
     pub pps: Option<Vec<u8>>,
-    /// 含 IDR，是关键帧
+    /// 含 IDR（H.265 还有 CRA 这类随机访问帧），是关键帧
     pub key: bool,
 }
 
-/// Annex B（00 00 00 01 分隔）转成 AVCC（4 字节长度），顺便把 SPS、PPS 挑出来。
-/// Windows 的编码器吐 Annex B，WebCodecs 配了 description 就要 AVCC
+/// Annex B（00 00 00 01 分隔）转成每个 NAL 带 4 字节长度的格式，顺便把参数集挑出来。
+/// Windows 的编码器吐 Annex B，WebCodecs 配了 description（avcC、hvcC）就要带长度的
 pub fn annexb_to_avcc(data: &[u8]) -> Avcc {
-    let mut out = Vec::with_capacity(data.len() + 16);
-    let (mut sps, mut pps, mut key) = (None, None, false);
+    annexb_to_lengths(data, VideoCodec::H264)
+}
+
+pub fn annexb_to_lengths(data: &[u8], codec: VideoCodec) -> Avcc {
+    let mut out = Avcc { data: Vec::with_capacity(data.len() + 16), ..Default::default() };
     for nal in split_annexb(data) {
         if nal.is_empty() {
             continue;
         }
-        match nal[0] & 0x1F {
-            7 => { sps = Some(nal.to_vec()); continue; }
-            8 => { pps = Some(nal.to_vec()); continue; }
-            // 访问单元分隔符，WebCodecs 不需要
-            9 => continue,
-            5 => key = true,
-            _ => {}
+        match codec {
+            VideoCodec::H264 => match nal[0] & 0x1F {
+                7 => { out.sps = Some(nal.to_vec()); continue; }
+                8 => { out.pps = Some(nal.to_vec()); continue; }
+                // 访问单元分隔符，WebCodecs 不需要
+                9 => continue,
+                5 => out.key = true,
+                _ => {}
+            },
+            VideoCodec::H265 => match (nal[0] >> 1) & 0x3F {
+                32 => { out.vps = Some(nal.to_vec()); continue; }
+                33 => { out.sps = Some(nal.to_vec()); continue; }
+                34 => { out.pps = Some(nal.to_vec()); continue; }
+                35 => continue,
+                // BLA、IDR、CRA：解码器能从这里开始解
+                16..=21 => out.key = true,
+                _ => {}
+            },
         }
-        out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
-        out.extend_from_slice(nal);
+        out.data.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+        out.data.extend_from_slice(nal);
     }
-    Avcc { data: out, sps, pps, key }
+    out
+}
+
+/// 去掉防竞争字节（00 00 03 里的 03），得到 RBSP
+fn rbsp(nal: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(nal.len());
+    let mut zeros = 0;
+    for &b in nal {
+        if zeros >= 2 && b == 3 {
+            zeros = 0;
+            continue;
+        }
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+        out.push(b);
+    }
+    out
+}
+
+/// 从 VPS、SPS、PPS 拼出 hvcC（HEVCDecoderConfigurationRecord）和 WebCodecs 的 codec 字符串。
+/// Windows 的 H.265 编码器只吐原始码流，没有现成的 hvcC。按 8 位 4:2:0 的 Main 写，硬件编码器出的就是这种
+pub fn hvcc_config(vps: &[u8], sps: &[u8], pps: &[u8], width: u32, height: u32) -> Result<VideoConfig> {
+    // SPS：2 字节 NAL 头，1 字节（VPS 编号、子层数、时域嵌套），后面 12 字节就是 general profile_tier_level，
+    // 正好是 hvcC 里第 1~12 字节
+    let r = rbsp(sps);
+    if r.len() < 15 {
+        bail!("H.265 的 SPS 太短");
+    }
+    let ptl = &r[3..15];
+    let mut rec = vec![1u8];
+    rec.extend_from_slice(ptl);
+    rec.extend_from_slice(&[0xF0, 0x00, 0xFC, 0xFD, 0xF8, 0xF8, 0x00, 0x00, 0x0F, 3]);
+    for (kind, nal) in [(32u8, vps), (33, sps), (34, pps)] {
+        rec.push(0x80 | kind);
+        rec.extend_from_slice(&1u16.to_be_bytes());
+        rec.extend_from_slice(&(nal.len() as u16).to_be_bytes());
+        rec.extend_from_slice(nal);
+    }
+    hevc_config(&rec, width, height)
+}
+
+/// 已经有 hvcC（macOS 的编码器给现成的），算出 codec 字符串（ISO/IEC 14496-15 附录 E）
+pub fn hevc_config(hvcc: &[u8], width: u32, height: u32) -> Result<VideoConfig> {
+    use base64::Engine as _;
+    if hvcc.len() < 23 {
+        bail!("hvcC 太短");
+    }
+    let space = ["", "A", "B", "C"][(hvcc[1] >> 6) as usize];
+    let tier = if hvcc[1] & 0x20 != 0 { 'H' } else { 'L' };
+    let profile = hvcc[1] & 0x1F;
+    // 兼容标志按位倒过来写成十六进制
+    let compat = u32::from_be_bytes(hvcc[2..6].try_into().unwrap()).reverse_bits();
+    let level = hvcc[12];
+    let mut constraints: Vec<u8> = hvcc[6..12].to_vec();
+    while constraints.last() == Some(&0) {
+        constraints.pop();
+    }
+    let mut codec = format!("hvc1.{space}{profile}.{compat:X}.{tier}{level}");
+    for c in constraints {
+        codec.push_str(&format!(".{c:X}"));
+    }
+    Ok(VideoConfig { codec, width, height, description: base64::engine::general_purpose::STANDARD.encode(hvcc) })
 }
 
 fn split_annexb(data: &[u8]) -> Vec<&[u8]> {
@@ -974,7 +1068,7 @@ mod tests {
         data.extend_from_slice(&pps);
         data.extend_from_slice(&[0, 0, 0, 1]);
         data.extend_from_slice(&idr);
-        let Avcc { data: avcc, sps: s, pps: p, key } = annexb_to_avcc(&data);
+        let Avcc { data: avcc, sps: s, pps: p, key, .. } = annexb_to_avcc(&data);
         assert!(key);
         assert_eq!(s.as_deref(), Some(&sps[..]));
         assert_eq!(p.as_deref(), Some(&pps[..]));
@@ -983,6 +1077,62 @@ mod tests {
         assert_eq!(avcc, want);
         let cfg = avcc_config(&sps, &pps, 1920, 1080).unwrap();
         assert_eq!(cfg.codec, "avc1.640028");
+    }
+
+    #[test]
+    fn hevc_record_and_codec_string() {
+        // 硬件编码器常见的 Main、4.1 级、只有逐行标志的参数集
+        let vps = [0x40, 0x01, 0x0C, 0x01, 0xFF, 0xFF];
+        let mut sps = vec![0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7B];
+        sps.extend_from_slice(&[0xA0, 0x03]);
+        let pps = [0x44, 0x01, 0xC1, 0x72];
+        let cfg = hvcc_config(&vps, &sps, &pps, 1920, 1080).unwrap();
+        assert_eq!(cfg.codec, "hvc1.1.6.L123.90");
+        // 带长度的转换：参数集挑出来，IDR 算关键帧
+        let mut data = Vec::new();
+        for nal in [&vps[..], &sps[..], &pps[..], &[0x26, 0x01, 0xAF, 0x05][..], &[0x02, 0x01, 0xD0][..]] {
+            data.extend_from_slice(&[0, 0, 0, 1]);
+            data.extend_from_slice(nal);
+        }
+        let out = annexb_to_lengths(&data, VideoCodec::H265);
+        assert!(out.key);
+        assert_eq!(out.vps.as_deref(), Some(&vps[..]));
+        assert_eq!(out.sps.as_deref(), Some(&sps[..]));
+        assert_eq!(out.data.len(), 4 + 4 + 4 + 3);
+        // 防竞争字节要去掉
+        assert_eq!(rbsp(&[0, 0, 3, 1, 0, 0, 3, 0]), vec![0, 0, 1, 0, 0, 0]);
+        // 老版本观看方不带格式：默认 H.264
+        let open: ScreenOpen = serde_json::from_str(r#"{"quality":"balanced"}"#).unwrap();
+        assert!(open.codecs.is_empty());
+        let open: ScreenOpen = serde_json::from_str(r#"{"codecs":["h265","h264"]}"#).unwrap();
+        assert_eq!(open.codecs, vec![VideoCodec::H265, VideoCodec::H264]);
+    }
+
+    /// macOS 硬件编码器给的真实 hvcC：从里面取出参数集，用 Windows 那边拼 hvcC 的办法再拼一次，结果要对得上
+    #[test]
+    fn hevc_record_matches_videotoolbox() {
+        use base64::Engine as _;
+        let real = base64::engine::general_purpose::STANDARD
+            .decode("AQFgAAAAsAAAAAAAe/AA/P34+AAACwOgAAEAGkABDAP//wFgAAADALAAAAMAAAMAewAAGwJAoQABADBCAQMBYAAAAwCwAAADAAADAHsAAKADwIARB8uIG7kUjLn4T0L6hvVKagIaAgfwgEGiAAEAB0QBwHLwWyQ=")
+            .unwrap();
+        assert_eq!(hevc_config(&real, 1920, 1080).unwrap().codec, "hvc1.1.6.L123.B0");
+        let mut nals = Vec::new();
+        let mut i = 23;
+        for _ in 0..real[22] {
+            let n = u16::from_be_bytes([real[i + 1], real[i + 2]]) as usize;
+            i += 3;
+            for _ in 0..n {
+                let len = u16::from_be_bytes([real[i], real[i + 1]]) as usize;
+                nals.push(real[i + 2..i + 2 + len].to_vec());
+                i += 2 + len;
+            }
+        }
+        let rebuilt = hvcc_config(&nals[0], &nals[1], &nals[2], 1920, 1080).unwrap();
+        assert_eq!(rebuilt.codec, "hvc1.1.6.L123.B0");
+        let rebuilt = base64::engine::general_purpose::STANDARD.decode(rebuilt.description).unwrap();
+        // profile、tier、level 那 12 字节和三组参数集都要一样
+        assert_eq!(rebuilt[1..13], real[1..13]);
+        assert_eq!(rebuilt[22..], real[22..]);
     }
 
     #[test]
