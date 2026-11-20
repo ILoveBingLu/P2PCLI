@@ -1782,6 +1782,7 @@ pub fn run() {
             screen::screen_send,
             screen::screen_close,
             screen::screen_connection,
+            screen::screen_report,
             remote_info,
             overview,
             collab_request,
