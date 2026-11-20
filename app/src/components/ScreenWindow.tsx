@@ -325,6 +325,12 @@ export default function ScreenWindow() {
     if (!controlRef.current) return;
     const p = pos(e);
     if (!p) return;
+    // 在画面外的黑边上显示本机指针，画面里只看对方的
+    const canvas = canvasRef.current;
+    if (canvas && (canvas.dataset.outside !== undefined) === p.inside) {
+      if (p.inside) delete canvas.dataset.outside;
+      else canvas.dataset.outside = "";
+    }
     pendingMove.current = { k: "move", x: p.x, y: p.y };
     send({ t: "input", ev: pendingMove.current }, true);
   };
