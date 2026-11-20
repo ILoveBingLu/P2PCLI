@@ -3028,6 +3028,22 @@ html[data-mobile] [role="dialog"] {
   color: var(--foreground);
 }
 .screen-tool[data-active] { color: var(--accent); }
+/* 标题栏的连接按钮：信号格 + 线路和延时，点开是连接详情 */
+.screen-path-button {
+  flex: none;
+  height: 28px;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.screen-path-button:hover,
+.screen-path-button[aria-expanded="true"] {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--foreground);
+}
 .screen-stage {
   position: relative;
   flex: 1;

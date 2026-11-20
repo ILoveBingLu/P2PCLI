@@ -599,6 +599,8 @@ export const api = {
   connect: (target: string, password: string | null, mutual = false) => invoke<Connected>("connect", { target, password, mutual }),
   disconnect: (connId: number) => invoke("disconnect", { connId }),
   pathInfo: (connId: number) => invoke<PathInfo>("path_info", { connId }),
+  /** 这条连接的对方是谁：版本、系统 */
+  remoteInfo: (connId: number) => invoke<RemoteInfo>("remote_info", { connId }),
   listTerminals: (connId: number) => invoke<TerminalSession[]>("list_terminals", { connId }),
   connectionStats: (connId: number) => invoke<ConnStats>("connection_stats", { connId }),
   installedAgents: (connId: number, refresh = false) => invoke<InstalledAgent[]>("installed_agents", { connId, refresh }),

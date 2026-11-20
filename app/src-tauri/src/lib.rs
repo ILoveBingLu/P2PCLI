@@ -951,6 +951,12 @@ fn close_connection(state: &AppState, conn_id: u64) {
     state.forwards.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
 }
 
+/// 这条连接的对方是谁：版本、系统等（远程画面窗口的连接详情用）
+#[tauri::command]
+fn remote_info(state: State<'_, AppState>, conn_id: u64) -> Result<RemoteInfo, String> {
+    Ok(state.remote(conn_id)?.info.clone())
+}
+
 #[tauri::command]
 fn path_info(state: State<'_, AppState>, conn_id: u64) -> Result<PathInfo, String> {
     Ok(state.remote(conn_id)?.path())
@@ -1776,6 +1782,7 @@ pub fn run() {
             screen::screen_send,
             screen::screen_close,
             screen::screen_connection,
+            remote_info,
             overview,
             collab_request,
             collab_deliveries,
