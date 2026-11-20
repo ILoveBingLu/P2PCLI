@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownUp, BookOpen, Bot, Check, Download, FolderOpen, Globe2, Info, Network, LoaderCircle, LockKeyhole, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowDownUp, BookOpen, Bot, Check, Download, FolderOpen, Globe2, Info, Monitor, Network, LoaderCircle, LockKeyhole, RefreshCw, Save, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
 import { Tabs, Checkbox, Description, Radio, RadioGroup, Switch } from "@heroui/react";
 import { api, platformLabel, type CliStatus, type InstalledAgent, type Overview, type SettingsView, type SystemPermission } from "../api";
 import { AboutPanel } from "./AboutPanel";
 import { AiHintSettings } from "./AiHintSettings";
+import { ScreenSettings } from "./ScreenSettings";
 import { AgentIcon } from "./Agent";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
@@ -70,6 +71,7 @@ function settingsSections() {
     { id: "files", label: t("文件传输"), icon: ArrowDownUp },
     { id: "agents", label: t("AI 启动"), icon: Bot },
     { id: "aihint", label: t("多机互动"), icon: BookOpen },
+    { id: "screen", label: t("远程画面"), icon: Monitor },
     { id: "trusted", label: t("受信设备"), icon: ShieldCheck },
     { id: "permissions", label: t("系统权限"), icon: LockKeyhole },
     { id: "about", label: t("关于"), icon: Info },
@@ -502,6 +504,9 @@ export function SettingsPage({
               </Tabs.Panel>
               <Tabs.Panel id="aihint">
                 <AiHintSettings />
+              </Tabs.Panel>
+              <Tabs.Panel id="screen">
+                <ScreenSettings />
               </Tabs.Panel>
               <Tabs.Panel id="trusted">
                 <p className="detail-note mb-4">

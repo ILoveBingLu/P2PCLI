@@ -6,6 +6,7 @@ import {
   FileText,
   Laptop,
   LoaderCircle,
+  Monitor,
   Radio,
   RefreshCw,
   ShieldAlert,
@@ -19,6 +20,7 @@ import {
   type Diagnosis,
   type FileRequest,
   type IncomingRequest,
+  type ScreenRequest,
 } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -286,6 +288,103 @@ export function FileApproveDialog({
           <Button disabled={busy || left === 0} onClick={() => respond(true)}>
             {busy ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Check data-icon="inline-start" />}
             {t("接收")}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/** 没受信的设备要看本机画面：60 秒内不点就当拒绝。能选只让看，还是也让操作键盘鼠标 */
+export function ScreenApproveDialog({
+  req,
+  onRespond,
+}: {
+  req: ScreenRequest;
+  onRespond: (r: ScreenRequest, allow: boolean, control: boolean) => Promise<void>;
+}) {
+  const [left, setLeft] = useState(60);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const deadline = useRef(Date.now() + 60000);
+  const sending = useRef(false);
+
+  const respond = useCallback(
+    async (allow: boolean, control: boolean) => {
+      if (sending.current) return;
+      sending.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        await onRespond(req, allow, control);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        sending.current = false;
+        setBusy(false);
+      }
+    },
+    [onRespond, req],
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setLeft(Math.max(0, Math.ceil((deadline.current - Date.now()) / 1000))),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (left === 0) void respond(false, false);
+  }, [left, respond]);
+
+  const offerControl = req.control && !req.view_only;
+  return (
+    <AlertDialog open>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <div className="dialog-symbol">
+            <Monitor />
+          </div>
+          <AlertDialogTitle>{req.control ? t("有设备想查看并操作本机画面") : t("有设备想查看本机画面")}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("对方会看到这台电脑屏幕上的所有内容。只在你认识这台设备时允许，随时可以在标题栏右边停止。")}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="request-device">
+          <div className="device-symbol">
+            <Laptop />
+          </div>
+          <div className="min-w-0">
+            <strong className="block truncate">{req.name}</strong>
+            <span>{platformLabel(req.platform)}</span>
+          </div>
+        </div>
+        <div className="fingerprint">
+          <span>{t("设备指纹")}</span>
+          <Tooltip content={req.remote}>
+            <TooltipTrigger role="group" aria-label={t("完整设备指纹")} className="ml-auto">
+              <code>{req.remote.slice(0, 16)}</code>
+            </TooltipTrigger>
+          </Tooltip>
+        </div>
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <AlertDialogFooter>
+          <Button variant="outline" disabled={busy} autoFocus onClick={() => respond(false, false)}>
+            {t("拒绝")}{left > 0 ? `（${left}s）` : ""}
+          </Button>
+          {offerControl && (
+            <Button variant="outline" disabled={busy || left === 0} onClick={() => respond(true, false)}>
+              {t("只让看")}
+            </Button>
+          )}
+          <Button disabled={busy || left === 0} onClick={() => respond(true, offerControl)}>
+            {busy ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Check data-icon="inline-start" />}
+            {offerControl ? t("允许查看和操作") : t("允许查看")}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

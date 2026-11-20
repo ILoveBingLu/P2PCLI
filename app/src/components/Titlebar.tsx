@@ -5,7 +5,7 @@ import logo from "@/assets/logo.svg";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import type { Overview, SessionSummary } from "../api";
+import { api, type Overview, type SessionSummary } from "../api";
 import { InUseIndicator } from "./InUseIndicator";
 import { LocalDevicePopover } from "./LocalDevicePopover";
 import { PhonePairPopover } from "./PhonePairPopover";
@@ -82,7 +82,8 @@ export function Titlebar({
       </Button>
       <div className="titlebar-spacer titlebar-drag" data-tauri-drag-region />
       <div className="titlebar-actions">
-        <InUseIndicator sessions={ov?.sessions ?? []} onKick={onKick} />
+        <InUseIndicator sessions={ov?.sessions ?? []} screens={ov?.screen_viewers ?? []} onKick={onKick}
+          onStopScreen={(v) => void api.stopScreenShare(v.id).then(onRefresh)} />
         <Badge variant="outline">{terminalCount} {t("个终端")}</Badge>
         {connectionAction}
         <PhonePairPopover ov={ov} />

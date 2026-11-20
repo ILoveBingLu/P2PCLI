@@ -2963,3 +2963,90 @@ html[data-mobile] [role="dialog"] {
   color: #666;
   font-size: 12px;
 }
+
+/* 远程画面窗口：上面一条工具栏，下面画面按比例铺满，黑边留在四周 */
+.screen-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #000;
+  color: var(--foreground);
+}
+.screen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  flex-shrink: 0;
+  background: var(--terminal);
+  border-bottom: 1px solid var(--border);
+}
+.screen-toolbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  font-weight: 500;
+}
+.screen-toolbar-title > svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
+.screen-stats {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.screen-segment {
+  display: flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--default);
+}
+.screen-segment > button {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.screen-segment > button[data-active] {
+  background: var(--surface);
+  color: var(--foreground);
+}
+.screen-tool[data-active] { color: var(--accent); }
+.screen-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.screen-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  outline: none;
+  touch-action: none;
+}
+/* 对方的鼠标画在画面里，会比本机慢一点；本机鼠标照常显示，手感跟手 */
+.screen-canvas[data-control] { cursor: default; }
+.screen-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background: var(--terminal);
+}
+.screen-overlay > svg { width: 28px; height: 28px; color: var(--muted); }
+.screen-overlay > p { margin: 0; max-width: 460px; }
+.screen-overlay-note { font-size: 12px; color: var(--muted); }
+.screen-overlay-soft { background: rgb(0 0 0 / 0.6); }
+.screen-window[data-fullscreen] .screen-toolbar { height: 32px; }

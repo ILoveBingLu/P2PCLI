@@ -4,6 +4,7 @@ mod ai_hint;
 mod cli;
 mod links;
 mod permissions;
+mod screen;
 #[cfg(desktop)]
 mod update;
 mod logging;
@@ -81,6 +82,12 @@ struct Settings {
     /// 不给本机的 AI 自动安装 p2pcli 使用说明；默认装
     #[serde(default)]
     ai_hint_off: bool,
+    /// 不让别的设备看本机画面；默认能看（受信设备直接看，别的设备要本机点同意）
+    #[serde(default)]
+    screen_off: bool,
+    /// 别的设备只能看本机画面，不能操作键盘鼠标
+    #[serde(default)]
+    screen_view_only: bool,
 }
 
 fn settings_path(dir: &Path) -> PathBuf {
@@ -143,6 +150,8 @@ struct UiDelegate {
     pending: Mutex<HashMap<u64, oneshot::Sender<Decision>>>,
     /// 等主人决定收不收的文件
     pending_files: Mutex<HashMap<u64, oneshot::Sender<bool>>>,
+    /// 等主人决定给不给看画面
+    pending_screens: Mutex<HashMap<u64, oneshot::Sender<p2pcli_core::host::ScreenDecision>>>,
 }
 
 impl HostDelegate for UiDelegate {
@@ -176,6 +185,11 @@ impl HostDelegate for UiDelegate {
         if let HostEvent::RequestCancelled { id } = &ev {
             self.pending.lock().unwrap().remove(id);
             self.pending_files.lock().unwrap().remove(id);
+            self.pending_screens.lock().unwrap().remove(id);
+        }
+        if let HostEvent::ScreenStarted { viewer } = &ev {
+            let what = if viewer.control { "正在查看并操作本机画面" } else { "正在查看本机画面" };
+            let _ = self.app.notification().builder().title(format!("{} {what}", viewer.name)).body("可以在 P2PCLI 标题栏右边随时停止").show();
         }
         if let HostEvent::Connected { name, .. } = &ev {
             let _ = self
@@ -216,6 +230,10 @@ impl HostDelegate for UiDelegate {
             .show();
         let _ = self.app.emit("file-request", &req);
         Box::pin(async move { rx.await.unwrap_or(false) })
+    }
+
+    fn approve_screen(&self, req: p2pcli_core::host::ScreenRequest) -> BoxFuture<p2pcli_core::host::ScreenDecision> {
+        self.approve_screen_request(req)
     }
 }
 
@@ -269,6 +287,10 @@ struct AppState {
     forwards: Mutex<HashMap<u64, (u64, p2pcli_core::ports::Forward)>>,
     /// 代码编辑器窗口：窗口标签 → 它是哪台设备的、还没取走的请求（打开哪个文件、换根目录）
     editor_windows: Mutex<HashMap<String, EditorWindow>>,
+    /// 正在看的远程画面：编号 → 发给对方的消息（键鼠、确认）。丢掉就停
+    screens: Mutex<screen::ScreenSenders>,
+    /// 远程画面窗口：窗口标签 → 哪台设备
+    screen_windows: Mutex<screen::ScreenWindows>,
     next: AtomicU64,
     /// 本机自己那条常驻连接的编号：启动时建好，一直在 remotes 里，侧边栏的“本机”用它开终端、读会话
     local_conn: AtomicU64,
@@ -352,6 +374,8 @@ struct Overview {
     paired: Vec<TrustedView>,
     /// 收到的文件放在哪
     inbox_dir: String,
+    /// 正在看本机画面的设备
+    screen_viewers: Vec<p2pcli_core::screen::ScreenViewerSummary>,
 }
 
 /// UI language from the process environment: LC_ALL, then LC_MESSAGES, then LANG.
@@ -400,6 +424,7 @@ fn overview(state: State<'_, AppState>) -> Overview {
         password_fixed: node.host.password_fixed(),
         server,
         sessions: node.host.sessions(),
+        screen_viewers: node.host.screen_viewers(),
         recent: node.recent.list(),
         remarks: node.recent.remarks(),
         nearby: node.nearby(),
@@ -1400,6 +1425,8 @@ async fn save_settings(
         lan_hidden: !lan_visible.unwrap_or(true),
         agent_commands,
         ai_hint_off: state.settings.lock().unwrap().ai_hint_off,
+        screen_off: state.settings.lock().unwrap().screen_off,
+        screen_view_only: state.settings.lock().unwrap().screen_view_only,
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
@@ -1539,6 +1566,7 @@ pub fn run() {
                 app: app.handle().clone(),
                 pending: Mutex::new(HashMap::new()),
                 pending_files: Mutex::new(HashMap::new()),
+                pending_screens: Mutex::new(HashMap::new()),
             });
             let cfg = NodeConfig {
                 data_dir: data_dir.clone(),
@@ -1558,6 +1586,9 @@ pub fn run() {
             };
             let node = tauri::async_runtime::block_on(Node::start(cfg, delegate.clone()))?;
             info!(id = %node.id(), "P2PCLI 已启动");
+            // 远程画面的硬件实现挂到被连方上；换网络配置时 Host 沿用同一个，挂一次就够
+            #[cfg(desktop)]
+            screen::attach_backend(&node);
 
             app.manage(AppState {
                 node: RwLock::new(node),
@@ -1570,6 +1601,8 @@ pub fn run() {
                 lsps: Mutex::new(HashMap::new()),
                 forwards: Mutex::new(HashMap::new()),
                 editor_windows: Mutex::new(HashMap::new()),
+                screens: Mutex::new(HashMap::new()),
+                screen_windows: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
                 local_conn: AtomicU64::new(0),
             });
@@ -1702,6 +1735,7 @@ pub fn run() {
             if window.label() != "main" {
                 if let WindowEvent::Destroyed = event {
                     window.app_handle().state::<AppState>().editor_windows.lock().unwrap().remove(window.label());
+                    screen::window_closed(&window.app_handle().state::<AppState>(), window.label());
                 }
                 return;
             }
@@ -1718,6 +1752,17 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             system_locale,
+            screen::respond_screen,
+            screen::stop_screen_share,
+            screen::screen_settings,
+            screen::set_screen_settings,
+            screen::screen_request_permission,
+            screen::remote_supports_screen,
+            screen::open_screen_window,
+            screen::screen_window_info,
+            screen::screen_open,
+            screen::screen_send,
+            screen::screen_close,
             overview,
             collab_request,
             collab_deliveries,

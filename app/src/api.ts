@@ -283,7 +283,91 @@ export interface Overview {
   paired: TrustedView[];
   /** 收到的文件放在哪 */
   inbox_dir: string;
+  /** 正在看本机画面的设备 */
+  screen_viewers?: ScreenViewer[];
 }
+
+/** 正在看本机画面的一台设备 */
+export interface ScreenViewer {
+  id: number;
+  session: number;
+  remote: string;
+  name: string;
+  control: boolean;
+  since: number;
+}
+
+/** 有设备要看本机画面 */
+export interface ScreenRequest {
+  id: number;
+  remote: string;
+  name: string;
+  platform: string;
+  trusted: boolean;
+  control: boolean;
+  /** 设置里只允许看 */
+  view_only: boolean;
+}
+
+export interface ScreenSettings {
+  supported: boolean;
+  enabled: boolean;
+  view_only: boolean;
+  capture_permission: boolean;
+  control_permission: boolean;
+}
+
+export type ScreenQuality = "sharp" | "balanced" | "smooth";
+
+export interface ScreenDisplay {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  primary: boolean;
+}
+
+export interface ScreenStarted {
+  displays: ScreenDisplay[];
+  display: string;
+  control: boolean;
+  control_note?: string | null;
+}
+
+export interface ScreenVideoConfig {
+  codec: string;
+  width: number;
+  height: number;
+  /** avcC，base64 */
+  description: string;
+}
+
+export type ScreenMouseButton = "left" | "right" | "middle" | "back" | "forward";
+export type ScreenInput =
+  | { k: "move"; x: number; y: number }
+  | { k: "button"; button: ScreenMouseButton; down: boolean; x: number; y: number }
+  | { k: "wheel"; dx: number; dy: number; x: number; y: number }
+  | { k: "key"; code: string; down: boolean }
+  | { k: "release_all" };
+
+export type ScreenViewerMsg =
+  | { t: "key_frame" }
+  | { t: "switch"; display: string }
+  | { t: "set_quality"; quality: ScreenQuality }
+  | { t: "input"; ev: ScreenInput };
+
+export type ScreenHostMsg =
+  | { t: "paused"; reason: "relay" | "connecting" }
+  | { t: "resumed" }
+  | { t: "switched"; display: string }
+  | { t: "stats"; bitrate: number; fps: number };
+
+/** 画面窗口收到的东西 */
+export type ScreenStreamEvent =
+  | { t: "config"; config: ScreenVideoConfig }
+  | { t: "host"; msg: ScreenHostMsg }
+  | { t: "closed"; reason: string | null }
+  | { t: "frame"; key: boolean; seq: number; data: Uint8Array };
 
 export type PresenceState = "checking" | "online" | "offline" | "old_version";
 
@@ -567,6 +651,33 @@ export const api = {
   /** expected 是打开时的哈希；对不上会报 conflict:，force 直接覆盖 */
   writeFile: (connId: number, path: string, text: string, bom: boolean, expected: string | null, force = false) =>
     invoke<FileMeta>("write_file", { connId, path, text, bom, expected, force }),
+  /** 远程画面：本机被看时的设置 */
+  screenSettings: () => invoke<ScreenSettings>("screen_settings"),
+  setScreenSettings: (enabled: boolean, viewOnly: boolean) => invoke<ScreenSettings>("set_screen_settings", { enabled, viewOnly }),
+  screenRequestPermission: (capture: boolean) => invoke<ScreenSettings>("screen_request_permission", { capture }),
+  respondScreen: (id: number, allow: boolean, control: boolean) => invoke<void>("respond_screen", { id, allow, control }),
+  stopScreenShare: (id?: number) => invoke<void>("stop_screen_share", { id: id ?? null }),
+  /** 远程画面：看别的设备 */
+  remoteSupportsScreen: (connId: number) => invoke<boolean>("remote_supports_screen", { connId }),
+  openScreenWindow: (endpointId: string, deviceName: string, platform: string) => invoke<void>("open_screen_window", { endpointId, deviceName, platform }),
+  screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
+  /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
+  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, onEvent: (ev: ScreenStreamEvent) => void) => {
+    const events = new Channel<ArrayBuffer>();
+    const decoder = new TextDecoder();
+    events.onmessage = (raw) => {
+      const buf = new Uint8Array(raw);
+      if (buf[0] === 2) {
+        const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+        onEvent({ t: "frame", key: buf[1] === 1, seq: Number(view.getBigUint64(2)), data: buf.subarray(10) });
+      } else {
+        onEvent(JSON.parse(decoder.decode(buf.subarray(1))) as ScreenStreamEvent);
+      }
+    };
+    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, events });
+  },
+  screenSend: (screenId: number, msgs: ScreenViewerMsg[]) => invoke<void>("screen_send", { screenId, msgs }),
+  screenClose: (screenId: number) => invoke<void>("screen_close", { screenId }),
   getSettings: () => invoke<SettingsView>("get_settings"),
   systemPermissions: () => invoke<SystemPermission[]>("system_permissions"),
   requestSystemPermission: (permission: string) => invoke<SystemPermission[]>("request_system_permission", { permission }),

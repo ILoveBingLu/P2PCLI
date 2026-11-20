@@ -117,7 +117,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into(), crate::screen::SCREEN_V1.into()],
         },
     )
     .await?;
@@ -495,6 +495,32 @@ impl RemoteHost {
         let (send, mut recv) = self.open_stream(&Msg::ForwardPort { port }).await?;
         match timeout(Duration::from_secs(15), read_msg(&mut recv)).await.map_err(|_| anyhow!("对方没有响应"))?? {
             Msg::PortOpened => Ok(Tunnel::Quic(send, recv)),
+            Msg::Error { message } => bail!("{message}"),
+            other => bail!("意外的回复：{other:?}"),
+        }
+    }
+
+    /// 对方能不能给看画面（新版本、支持的系统）
+    pub fn supports_screen(&self) -> bool {
+        matches!(&self.link, Link::Net { capabilities, .. } if capabilities.iter().any(|c| c == crate::screen::SCREEN_V1))
+    }
+
+    /// 看对方的画面。走中继时直接不开；对方要点同意（受信设备按对方的设置可以直接放行）
+    pub async fn open_screen(&self, open: crate::screen::ScreenOpen) -> Result<(crate::screen::ScreenStarted, crate::screen::ScreenInput<SendStream>, crate::screen::ScreenOutput<RecvStream>)> {
+        if self.is_local() {
+            bail!("本机自己不用看画面");
+        }
+        if !self.supports_screen() {
+            bail!("对方的 P2PCLI 版本较旧或系统不支持远程画面，请更新对方的 P2PCLI");
+        }
+        crate::screen::check_path(&self.path())?;
+        let (send, mut recv) = self.open_stream(&Msg::ScreenOpen { open }).await?;
+        // 对方可能要弹窗等主人点
+        match timeout(APPROVE_TIMEOUT + Duration::from_secs(15), read_msg(&mut recv)).await.map_err(|_| anyhow!("对方一直没有响应"))?? {
+            Msg::ScreenStarted { started } => {
+                let _ = send.set_priority(crate::screen::VIDEO_PRIORITY);
+                Ok((started, crate::screen::ScreenInput::new(send), crate::screen::ScreenOutput::new(recv)))
+            }
             Msg::Error { message } => bail!("{message}"),
             other => bail!("意外的回复：{other:?}"),
         }

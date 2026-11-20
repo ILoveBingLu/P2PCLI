@@ -32,6 +32,7 @@ pub mod remote_ops;
 pub mod pty;
 pub mod rdv_ws;
 pub mod rendezvous;
+pub mod screen;
 pub mod store;
 pub mod sessions;
 mod session_diagnostics;

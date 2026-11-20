@@ -13,3 +13,6 @@ tokio.workspace = true
 anyhow.workspace = true
 tracing-subscriber.workspace = true
 clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
+# 被连方用真实的抓屏和硬件编码测远程画面
+p2pcli-screen = { path = "../screen" }

@@ -169,6 +169,9 @@ pub enum Msg {
     /// 端口转发：对方连它自己 localhost 上的这个端口，回 PortOpened 以后这条流上就是原样的 TCP 字节
     ForwardPort { port: u16 },
     PortOpened,
+    /// 远程画面：看对方的屏幕（可以操作）。对方同意后回 ScreenStarted，之后这条流按 screen 模块的格式走。需要 screen_v1
+    ScreenOpen { open: crate::screen::ScreenOpen },
+    ScreenStarted { started: crate::screen::ScreenStarted },
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,
