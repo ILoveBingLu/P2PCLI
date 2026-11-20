@@ -360,7 +360,20 @@ export type ScreenHostMsg =
   | { t: "paused"; reason: "relay" | "connecting" }
   | { t: "resumed" }
   | { t: "switched"; display: string }
-  | { t: "stats"; bitrate: number; fps: number };
+  | { t: "stats"; bitrate: number; fps: number }
+  | { t: "cursor"; x: number; y: number; visible: boolean }
+  | { t: "cursor_shape"; shape: ScreenCursorShape };
+
+/** 对方指针的样子：RGBA（base64），热点按图片像素，scale 是图片像素和屏幕点的比例 */
+export interface ScreenCursorShape {
+  id: number;
+  width: number;
+  height: number;
+  hot_x: number;
+  hot_y: number;
+  scale: number;
+  rgba: string;
+}
 
 /** 画面窗口收到的东西 */
 export type ScreenStreamEvent =

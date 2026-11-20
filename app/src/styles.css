@@ -3041,10 +3041,12 @@ html[data-mobile] [role="dialog"] {
   outline: none;
   touch-action: none;
 }
-/* 操作对方时只用对方的鼠标：对方的指针画在画面里（形状也是对方的），本机指针在画面上藏起来，
-   移到画面四周的黑边上再显示；只看时本机指针照常显示 */
-.screen-canvas[data-control] { cursor: none; }
-.screen-canvas[data-control][data-outside] { cursor: default; }
+/* 只看时，对方的指针按它报来的位置画在画面上；操作时本机指针直接换成对方指针的样子（在脚本里设） */
+.screen-remote-cursor {
+  position: absolute;
+  pointer-events: none;
+  image-rendering: auto;
+}
 .screen-overlay {
   position: absolute;
   inset: 0;

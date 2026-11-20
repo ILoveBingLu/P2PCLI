@@ -14,15 +14,17 @@ use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 use windows::core::{BOOL, PCWSTR};
 
 mod capture;
+mod cursor;
 mod encode;
 mod input;
 
 pub fn backend() -> Option<Arc<dyn ScreenBackend>> {
-    Some(Arc::new(WinBackend { input: Mutex::new(input::Injector::default()) }))
+    Some(Arc::new(WinBackend { input: Mutex::new(input::Injector::default()), cursor: cursor::CursorReader::default() }))
 }
 
 pub struct WinBackend {
     input: Mutex<input::Injector>,
+    cursor: cursor::CursorReader,
 }
 
 /// 一块屏幕：系统里的设备名（\\.\DISPLAY1）当编号，加上它在虚拟桌面里的位置（物理像素）
@@ -105,5 +107,9 @@ impl ScreenBackend for WinBackend {
 
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
         self.input.lock().unwrap().inject(display, ev)
+    }
+
+    fn cursor(&self, display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
+        self.cursor.read(display)
     }
 }

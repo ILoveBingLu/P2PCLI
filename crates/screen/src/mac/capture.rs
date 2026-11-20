@@ -199,7 +199,8 @@ impl MacCapture {
             // 不然 P3 的数值被当成 sRGB 显示，颜色发灰发淡
             config.setColorSpaceName(kCGColorSpaceSRGB);
             config.setMinimumFrameInterval(CMTime::new(1, opts.fps.max(1) as i32));
-            config.setShowsCursor(true);
+            // 能单独读指针时不画进画面：观看方用本机的系统指针画，跟手
+            config.setShowsCursor(opts.show_cursor);
             config.setScalesToFit(true);
             // 编码器拿着一帧、这里存着一帧，系统那边还要有空闲的缓冲
             config.setQueueDepth(5);

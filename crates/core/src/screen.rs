@@ -44,6 +44,8 @@ const MAX_QUEUE: Duration = Duration::from_millis(200);
 const CONGESTED_QUEUE: Duration = Duration::from_millis(60);
 /// 一段时间里至少有这么多次确认，才按最快的那次判断
 const MIN_SAMPLES: usize = 3;
+/// 多久读一次指针：60 帧每秒
+const CURSOR_POLL: Duration = Duration::from_millis(16);
 /// 最少隔这么久降一次码率
 const DECREASE_GAP: Duration = Duration::from_millis(600);
 /// 这么久没堵才往上加码率
@@ -131,6 +133,35 @@ pub struct CaptureOptions {
     pub max_long_edge: u32,
     pub fps: u32,
     pub bitrate: u32,
+    /// 把鼠标指针画进画面。能单独读指针时为假：指针由观看方用本机的系统指针画，零延迟、跟手
+    pub show_cursor: bool,
+}
+
+/// 鼠标指针的样子：RGBA（不预乘透明度），观看方拿它当本机指针的图案
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CursorShape {
+    /// 图案变了编号就变
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    /// 热点（点击的那个点），按图片像素算
+    pub hot_x: f64,
+    pub hot_y: f64,
+    /// 图片像素和屏幕上的点的比例：Retina 是 2
+    pub scale: f64,
+    /// base64 的 RGBA
+    pub rgba: String,
+}
+
+/// 指针现在在哪、什么样
+#[derive(Debug, Clone)]
+pub struct CursorInfo {
+    /// 相对当前屏幕的 0~1
+    pub x: f64,
+    pub y: f64,
+    /// 在这块屏幕上、没被藏起来
+    pub visible: bool,
+    pub shape: Option<Arc<CursorShape>>,
 }
 
 /// 平台实现：桌面端在 macOS、Windows 上各接一个
@@ -143,6 +174,10 @@ pub trait ScreenBackend: Send + Sync + 'static {
     fn start(&self, opts: CaptureOptions) -> Result<Arc<dyn ScreenCapture>>;
     /// 注入一个键鼠事件，坐标是相对 display 的 0~1
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()>;
+    /// 单独读鼠标指针的位置和样子。读不了就是空，那时指针画在画面里
+    fn cursor(&self, _display: &str) -> Option<CursorInfo> {
+        None
+    }
 }
 
 /// 一路正在抓的画面。丢掉就停止
@@ -233,6 +268,10 @@ pub enum HostMsg {
     Switched { display: String },
     /// 每秒一次：当前码率、实际帧率
     Stats { bitrate: u32, fps: u32 },
+    /// 指针挪了：相对当前屏幕的 0~1
+    Cursor { x: f64, y: f64, visible: bool },
+    /// 指针换样子了（箭头、文本光标、手形……）
+    CursorShape { shape: CursorShape },
     /// 出错了，画面结束
     Error { message: String },
 }
@@ -446,12 +485,13 @@ struct Running {
 
 impl Running {
     /// 开抓屏要等系统回应（最多几秒），放到阻塞线程上，不占异步运行时
-    async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32) -> Result<Self> {
+    async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32, show_cursor: bool) -> Result<Self> {
         let opts = CaptureOptions {
             display: display.to_string(),
             max_long_edge: quality.max_long_edge(),
             fps: quality.fps(),
             bitrate,
+            show_cursor,
         };
         let backend = backend.clone();
         let capture = tokio::task::spawn_blocking(move || backend.start(opts)).await.map_err(|e| anyhow!("抓屏线程出错：{e}"))??;
@@ -498,7 +538,12 @@ where
     // 先把抓屏开起来，开不起来就按普通错误回给观看方，让它看到原因
     let rtt = Duration::from_millis(path::current(&conn).rtt_ms.unwrap_or(50));
     let mut rate = RateControl::new(quality, rtt);
-    let mut running = match Running::start(&backend, &display, quality, rate.bitrate).await {
+    // 能单独读指针就不把指针画进画面：观看方用本机的系统指针画，跟手
+    let separate_cursor = {
+        let (backend, display) = (backend.clone(), display.clone());
+        tokio::task::spawn_blocking(move || backend.cursor(&display).is_some()).await.unwrap_or(false)
+    };
+    let mut running = match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor).await {
         Ok(r) => r,
         Err(e) => {
             let _ = crate::proto::write_msg(&mut send, &crate::proto::Msg::Error { message: format!("{e:#}") }).await;
@@ -569,6 +614,34 @@ where
         }
         let _ = send.shutdown().await;
     });
+    // 指针：单独一个线程每 16 毫秒读一次（macOS 读指针样子要碰 AppKit，可能会阻塞一下），有变化才报
+    let (cursor_tx, mut cursor_rx) = mpsc::channel::<CursorInfo>(4);
+    if separate_cursor {
+        let backend = backend.clone();
+        let current_display = current_display.clone();
+        std::thread::Builder::new()
+            .name("p2pcli-cursor".into())
+            .spawn(move || {
+                let mut last: Option<(i64, i64, bool, u64)> = None;
+                while !cursor_tx.is_closed() {
+                    let display = current_display.lock().unwrap().clone();
+                    if let Some(c) = backend.cursor(&display) {
+                        // 位置按万分之一比较，抖一点点不报
+                        let key = ((c.x * 10000.0) as i64, (c.y * 10000.0) as i64, c.visible, c.shape.as_ref().map_or(0, |s| s.id));
+                        if last != Some(key) {
+                            last = Some(key);
+                            if cursor_tx.blocking_send(c).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    std::thread::sleep(CURSOR_POLL);
+                }
+            })?;
+    } else {
+        drop(cursor_tx);
+    }
+    let mut last_shape: Option<u64> = None;
     let mut inflight: VecDeque<Inflight> = VecDeque::new();
     let mut seq: u64 = 0;
     let mut paused: Option<PauseReason> = None;
@@ -663,7 +736,7 @@ where
                         let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Switched { display: display.clone() } })).await;
                         continue;
                     }
-                    drop(std::mem::replace(&mut running, match Running::start(&backend, &want, quality, rate.bitrate).await {
+                    drop(std::mem::replace(&mut running, match Running::start(&backend, &want, quality, rate.bitrate, !separate_cursor).await {
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
@@ -678,7 +751,7 @@ where
                     if q == quality { continue; }
                     quality = q;
                     rate.set_quality(q);
-                    drop(std::mem::replace(&mut running, match Running::start(&backend, &display, quality, rate.bitrate).await {
+                    drop(std::mem::replace(&mut running, match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor).await {
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
@@ -718,6 +791,18 @@ where
                     last_stats = Instant::now();
                     let _ = out_tx.try_send(json(&Wire::Host { msg: HostMsg::Stats { bitrate: rate.bitrate, fps } }));
                 }
+            }
+            Some(c) = cursor_rx.recv() => {
+                // 暂停时画面整个不发，指针也不发
+                if paused.is_some() { continue; }
+                if let Some(shape) = &c.shape
+                    && last_shape != Some(shape.id)
+                {
+                    last_shape = Some(shape.id);
+                    if out_tx.send(json(&Wire::Host { msg: HostMsg::CursorShape { shape: (**shape).clone() } })).await.is_err() { break Ok(()); }
+                }
+                // 位置发不出去就丢掉，反正下一次的更新
+                let _ = out_tx.try_send(json(&Wire::Host { msg: HostMsg::Cursor { x: c.x, y: c.y, visible: c.visible } }));
             }
             _ = stop.notified() => break Ok(()),
             _ = conn.closed() => break Ok(()),

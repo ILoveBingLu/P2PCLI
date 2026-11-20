@@ -10,6 +10,8 @@ p2pcli-core.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tokio = { workspace = true }
+# 指针图案用 base64 装进 JSON
+base64 = "0.22"
 
 # macOS：ScreenCaptureKit 抓屏（画面留在 GPU 的 IOSurface 里）→ VideoToolbox 硬件 H.264 编码；CGEvent 注入键鼠
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -21,6 +23,8 @@ objc2-core-media = "0.3"
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-screen-capture-kit = "0.3"
+# 读整个系统当前的鼠标指针样子
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSGraphicsContext", "objc2-core-graphics", "objc2-core-foundation"] }
 block2 = "0.6"
 dispatch2 = "0.3"
 
@@ -51,5 +55,4 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
-base64 = "0.22"
 tracing-subscriber.workspace = true
