@@ -53,7 +53,7 @@ export function ScreenSettings() {
     <div className="flex flex-col gap-5">
       <Alert>
         <AlertDescription>
-          {t("在终端右侧的悬浮条里点显示器图标，就能在单独的窗口里查看和操作对方的屏幕。抓屏、编码、解码都用两边电脑的显卡，几乎不占 CPU。画面只走直连（IPv6、IPv4 打洞、局域网），连接落到中继上时画面暂停，终端照常能用。")}
+          {t("点左侧的设备，在右边设备页点“远程控制”（或者在设备上右键选“远程控制”），就能在单独的窗口里查看和操作对方的屏幕。抓屏、编码、解码都用两边电脑的显卡，几乎不占 CPU。画面只走直连（IPv6、IPv4 打洞、局域网），连接落到中继上时画面暂停，终端照常能用。")}
         </AlertDescription>
       </Alert>
 

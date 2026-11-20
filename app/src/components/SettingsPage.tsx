@@ -71,7 +71,7 @@ function settingsSections() {
     { id: "files", label: t("文件传输"), icon: ArrowDownUp },
     { id: "agents", label: t("AI 启动"), icon: Bot },
     { id: "aihint", label: t("多机互动"), icon: BookOpen },
-    { id: "screen", label: t("远程画面"), icon: Monitor },
+    { id: "screen", label: t("远程控制"), icon: Monitor },
     { id: "trusted", label: t("受信设备"), icon: ShieldCheck },
     { id: "permissions", label: t("系统权限"), icon: LockKeyhole },
     { id: "about", label: t("关于"), icon: Info },
