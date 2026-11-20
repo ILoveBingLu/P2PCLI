@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screen",
+  "description": "远程画面窗口的权限：每台设备一个，标签是 screen- 开头",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["screen-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-title",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-start-dragging"
+  ]
+}

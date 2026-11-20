@@ -34,6 +34,8 @@ tauri-plugin-barcode-scanner = "2"
 # 手机只当连接的一方，更新走应用商店
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 p2pcli-core = { workspace = true, features = ["host"] }
+# 远程画面：抓屏、硬件编码、注入键鼠
+p2pcli-screen = { path = "../../crates/screen" }
 tauri-plugin-single-instance = "2.5.4"
 tauri-plugin-updater = "2.14.0"
 

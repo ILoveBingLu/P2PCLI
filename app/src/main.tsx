@@ -13,6 +13,9 @@ if (isMobile) document.documentElement.dataset.mobile = "";
 // 代码编辑器的单独窗口（index.html?window=editor）只渲染编辑器，主窗口照旧
 const isEditorWindow = new URLSearchParams(location.search).get("window") === "editor";
 const EditorWindow = lazy(() => import("./components/editor/EditorWindow"));
+// 远程画面的单独窗口（index.html?window=screen）
+const isScreenWindow = new URLSearchParams(location.search).get("window") === "screen";
+const ScreenWindow = lazy(() => import("./components/ScreenWindow"));
 // 手机端是另一套界面（mobile/），桌面的 App 不在手机上用
 const MobileApp = lazy(() => import("./mobile/MobileApp"));
 
@@ -33,10 +36,11 @@ void (async () => {
     <React.StrictMode>
       <LocaleRoot>
         {isEditorWindow ? <Suspense fallback={null}><EditorWindow /></Suspense>
+          : isScreenWindow ? <Suspense fallback={null}><ScreenWindow /></Suspense>
           : isMobile ? <Suspense fallback={null}><MobileApp /></Suspense>
           : <App />}
       </LocaleRoot>
     </React.StrictMode>,
   );
-  if (!isEditorWindow) startSelftest();
+  if (!isEditorWindow && !isScreenWindow) startSelftest();
 })();

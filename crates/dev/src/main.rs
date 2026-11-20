@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use p2pcli_core::client::{ConnectError, RemoteHost, TermEvent, asks_cursor_position};
-use p2pcli_core::host::{BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest};
+use p2pcli_core::host::{BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest, ScreenDecision, ScreenRequest};
 use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::rendezvous::{format_code, normalize_code, parse_server};
 
@@ -52,6 +52,18 @@ enum Approve {
     Trust,
 }
 
+/// 别人要看本机画面时怎么办
+#[derive(Clone, Copy, ValueEnum, Default)]
+enum ScreenMode {
+    /// 不给看（默认）
+    #[default]
+    No,
+    /// 只给看，不给操作
+    View,
+    /// 给看也给操作
+    Control,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// 等别人来连
@@ -60,6 +72,25 @@ enum Cmd {
         password: Option<String>,
         #[arg(long, value_enum, default_value = "ask")]
         approve: Approve,
+        /// 让别人看本机画面（用真实的抓屏和硬件编码）
+        #[arg(long, value_enum, default_value = "no")]
+        screen: ScreenMode,
+    },
+    /// 看对方画面（只看不操作）：收画面、回确认，每秒打印帧率、码率、线路
+    Screen {
+        /// 9 位设备码、局域网设备的公钥，或 <公钥>@<ip:端口>
+        target: String,
+        #[arg(long)]
+        password: Option<String>,
+        /// 看多少秒
+        #[arg(long, default_value_t = 20)]
+        seconds: u64,
+        /// sharp、balanced、smooth
+        #[arg(long, default_value = "balanced")]
+        quality: String,
+        /// 把收到的 H.264 存成 Annex B 文件，用来验证能不能解码
+        #[arg(long)]
+        save: Option<PathBuf>,
     },
     /// 网络诊断：IPv6、NAT 类型、中继
     Diag,
@@ -94,6 +125,7 @@ enum Cmd {
 
 struct CliDelegate {
     approve: Approve,
+    screen: ScreenMode,
 }
 
 impl HostDelegate for CliDelegate {
@@ -126,6 +158,16 @@ impl HostDelegate for CliDelegate {
 
     fn event(&self, ev: HostEvent) {
         eprintln!("【事件】{}", serde_json_line(&ev));
+    }
+
+    fn approve_screen(&self, req: ScreenRequest) -> BoxFuture<ScreenDecision> {
+        let d = match self.screen {
+            ScreenMode::No => ScreenDecision { allow: false, control: false },
+            ScreenMode::View => ScreenDecision { allow: true, control: false },
+            ScreenMode::Control => ScreenDecision { allow: true, control: true },
+        };
+        eprintln!("【看画面请求】{}（{}）想要操作={}，决定 {d:?}", req.name, req.platform, req.control);
+        Box::pin(async move { d })
     }
 
     fn approve_files(&self, req: FileRequest) -> BoxFuture<bool> {
@@ -169,9 +211,9 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
-    let approve = match &cli.cmd {
-        Cmd::Host { approve, .. } => *approve,
-        _ => Approve::No,
+    let (approve, screen) = match &cli.cmd {
+        Cmd::Host { approve, screen, .. } => (*approve, *screen),
+        _ => (Approve::No, ScreenMode::No),
     };
     let node = Node::start(
         NodeConfig {
@@ -193,11 +235,44 @@ async fn main() -> Result<()> {
             file_lanes: None,
             custom_transport: None,
         },
-        Arc::new(CliDelegate { approve }),
+        Arc::new(CliDelegate { approve, screen }),
     )
     .await?;
+    if !matches!(screen, ScreenMode::No) {
+        match p2pcli_screen::backend() {
+            Some(b) => {
+                eprintln!("远程画面：屏幕 {:?}", b.displays());
+                node.host.set_screen_backend(b);
+            }
+            None => eprintln!("这个系统不支持远程画面"),
+        }
+    }
 
     match cli.cmd {
+        Cmd::Screen { target, password, seconds, quality, save } => {
+            let remote = match connect_target(&node, &target, password).await {
+                Ok(r) => r,
+                Err(ConnectError::Rejected(c)) => bail!("被拒：{}", c.describe()),
+                Err(e) => bail!("{e}"),
+            };
+            eprintln!("已连上 {}（{}），线路：{:?}", remote.info.name, remote.info.platform, remote.path());
+            // 刚连上可能还在中继上，等打洞换成直连
+            for _ in 0..20 {
+                if matches!(remote.path().kind, p2pcli_core::path::PathKind::Ipv4 | p2pcli_core::path::PathKind::Ipv6) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            let quality = match quality.as_str() {
+                "sharp" => p2pcli_core::screen::Quality::Sharp,
+                "smooth" => p2pcli_core::screen::Quality::Smooth,
+                _ => p2pcli_core::screen::Quality::Balanced,
+            };
+            watch_screen(&remote, quality, seconds, save).await?;
+            remote.close();
+            node.shutdown().await;
+            Ok(())
+        }
         Cmd::Host { password, .. } => {
             if let Some(p) = password {
                 node.host.set_password(&p);
@@ -315,6 +390,95 @@ async fn main() -> Result<()> {
             std::process::exit(code.unwrap_or(255) as i32);
         }
     }
+}
+
+async fn connect_target(node: &Node, target: &str, password: Option<String>) -> Result<RemoteHost, ConnectError> {
+    if normalize_code(target).is_some() {
+        node.connect_code(target, password).await
+    } else if let Ok(id) = target.trim().parse::<iroh::EndpointId>() {
+        node.connect_endpoint(id, password).await
+    } else {
+        node.connect_addr(parse_server(target).map_err(ConnectError::Other)?, password).await
+    }
+}
+
+/// 只看不操作：收画面、马上回确认，每秒打印一行
+async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>) -> Result<()> {
+    use p2pcli_core::screen::{ScreenEvent, ScreenOpen, ViewerMsg};
+    let started = Instant::now();
+    let (info, mut input, mut output) = remote.open_screen(ScreenOpen { display: None, quality, control: false }).await?;
+    eprintln!("开始看画面，用时 {} 毫秒：屏幕 {:?}，当前 {}", started.elapsed().as_millis(), info.displays, info.display);
+    let mut file = match &save { Some(p) => Some(std::fs::File::create(p)?), None => None };
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let (mut frames, mut bytes, mut keys, mut total_frames, mut total_bytes) = (0u32, 0usize, 0u32, 0u64, 0usize);
+    let mut first_frame = None;
+    let mut tick = Instant::now();
+    let mut asked_key = false;
+    while Instant::now() < deadline {
+        // 第 5 秒要一次关键帧：屏幕不动时被连方也要能给出来
+        if !asked_key && started.elapsed() > Duration::from_secs(5) {
+            asked_key = true;
+            eprintln!("要一个关键帧");
+            input.send(&ViewerMsg::KeyFrame).await?;
+        }
+        let ev = match tokio::time::timeout(Duration::from_millis(500), output.next()).await {
+            Ok(r) => r?,
+            Err(_) => None,
+        };
+        match ev {
+            Some(ScreenEvent::Frame { seq, key, data, .. }) => {
+                input.send(&ViewerMsg::Ack { seq }).await?;
+                first_frame.get_or_insert_with(|| started.elapsed());
+                frames += 1;
+                total_frames += 1;
+                bytes += data.len();
+                total_bytes += data.len();
+                keys += u32::from(key);
+                if let Some(f) = &mut file {
+                    let mut d = &data[..];
+                    while d.len() >= 4 {
+                        let n = u32::from_be_bytes(d[..4].try_into()?) as usize;
+                        f.write_all(&[0, 0, 0, 1])?;
+                        f.write_all(&d[4..4 + n])?;
+                        d = &d[4 + n..];
+                    }
+                }
+            }
+            Some(ScreenEvent::Config(c)) => {
+                eprintln!("解码配置：{} {}x{}", c.codec, c.width, c.height);
+                if let Some(f) = &mut file {
+                    use base64::Engine as _;
+                    let rec = base64::engine::general_purpose::STANDARD.decode(&c.description)?;
+                    let sl = u16::from_be_bytes([rec[6], rec[7]]) as usize;
+                    let pl = u16::from_be_bytes([rec[9 + sl], rec[10 + sl]]) as usize;
+                    for p in [&rec[8..8 + sl], &rec[11 + sl..11 + sl + pl]] {
+                        f.write_all(&[0, 0, 0, 1])?;
+                        f.write_all(p)?;
+                    }
+                }
+            }
+            Some(ScreenEvent::Host(m)) => eprintln!("对方：{m:?}"),
+            None => {}
+        }
+        if tick.elapsed() >= Duration::from_secs(1) {
+            let secs = tick.elapsed().as_secs_f64();
+            let path = remote.path();
+            eprintln!(
+                "{:>4.0}s  {:>3} 帧/秒  {:>6.2} Mbps  关键帧 {}  线路 {:?} {}ms",
+                started.elapsed().as_secs_f64(), (frames as f64 / secs).round(), bytes as f64 * 8.0 / secs / 1e6, keys,
+                path.kind, path.rtt_ms.unwrap_or(0)
+            );
+            (frames, bytes, keys) = (0, 0, 0);
+            tick = Instant::now();
+        }
+    }
+    eprintln!(
+        "一共 {total_frames} 帧，{:.1} MB，第一帧用时 {:?}",
+        total_bytes as f64 / 1e6,
+        first_frame.unwrap_or_default()
+    );
+    input.close().await;
+    Ok(())
 }
 
 async fn run_once(remote: &RemoteHost, cmd: &str) -> Result<Option<u32>> {

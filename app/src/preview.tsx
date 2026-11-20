@@ -75,6 +75,8 @@ const previewSettings: SettingsView = {
     { address: "wss://p2pcli.yscopy.cn", label: "Cloudflare", note: "海外节点，适合在国外用，国内访问有时不稳" },
   ],
 };
+/** 预览里的远程画面设置 */
+const previewScreen = { supported: true, enabled: true, view_only: false, capture_permission: true, control_permission: false };
 const previewPermissions: SystemPermission[] = [{
   id: "local_network",
   name: "局域网访问",
@@ -1158,6 +1160,16 @@ mockIPC(
         return { kind: s === "relay" ? "relay" : "ipv6", rtt_ms: s === "relay" ? 180 : 12, remote: "[240e::1]:7788" };
       case "get_settings":
         return { ...previewSettings };
+      // 远程画面：预览里只看设置页和按钮，不真的抓屏
+      case "screen_settings":
+      case "screen_request_permission":
+        return { ...previewScreen };
+      case "set_screen_settings":
+        previewScreen.enabled = (args as { enabled: boolean }).enabled;
+        previewScreen.view_only = (args as { viewOnly: boolean }).viewOnly;
+        return { ...previewScreen };
+      case "remote_supports_screen":
+        return true;
       case "system_permissions":
       case "request_system_permission":
         return previewPermissions;

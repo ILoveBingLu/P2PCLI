@@ -1,0 +1,107 @@
+import { useCallback, useEffect, useState } from "react";
+import { Check, LoaderCircle, Monitor } from "lucide-react";
+import { Checkbox, Description } from "@heroui/react";
+import { api, type ScreenSettings as ScreenSettingsView } from "../api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { toast } from "@/components/ui/toast";
+import { t } from "@/i18n";
+
+const isMac = navigator.userAgent.includes("Mac");
+
+/** 远程画面：别的设备能不能看、能不能操作本机；macOS 上还要系统给录屏和辅助功能权限 */
+export function ScreenSettings() {
+  const [s, setS] = useState<ScreenSettingsView | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => api.screenSettings().then(setS).catch((e) => toast.error(String(e))), []);
+  useEffect(() => {
+    void load();
+    // 从系统设置里授权回来时刷新一下
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [load]);
+
+  const save = async (enabled: boolean, viewOnly: boolean) => {
+    setBusy(true);
+    try {
+      setS(await api.setScreenSettings(enabled, viewOnly));
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!s) return <div className="loading-state" role="status"><LoaderCircle className="animate-spin" /></div>;
+  if (!s.supported) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon"><Monitor /></EmptyMedia>
+          <EmptyTitle>{t("这台电脑暂不支持被查看画面")}</EmptyTitle>
+          <EmptyDescription>{t("目前支持 macOS 和 Windows。这台电脑照样能查看别的电脑的画面。")}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <Alert>
+        <AlertDescription>
+          {t("在终端右侧的悬浮条里点显示器图标，就能在单独的窗口里查看和操作对方的屏幕。抓屏、编码、解码都用两边电脑的显卡，几乎不占 CPU。画面只走直连（IPv6、IPv4 打洞、局域网），连接落到中继上时画面暂停，终端照常能用。")}
+        </AlertDescription>
+      </Alert>
+
+      <Checkbox isSelected={s.enabled} onChange={(on) => void save(on, s.view_only)} isDisabled={busy}>
+        <Checkbox.Content className="gap-3 text-sm">
+          <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
+          {t("允许别的设备查看本机画面")}
+        </Checkbox.Content>
+        <Description className="pl-7 text-xs text-muted-foreground">
+          {t("受信设备直接打开，别的设备要你在弹窗里点允许。有人在看时标题栏右边会一直亮着，随时可以停止。")}
+        </Description>
+      </Checkbox>
+
+      <Checkbox isSelected={!s.view_only} onChange={(on) => void save(s.enabled, !on)} isDisabled={busy || !s.enabled}>
+        <Checkbox.Content className="gap-3 text-sm">
+          <Checkbox.Control><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
+          {t("允许对方操作键盘和鼠标")}
+        </Checkbox.Content>
+        <Description className="pl-7 text-xs text-muted-foreground">
+          {t("关掉以后别的设备只能看，不能点也不能打字。")}
+        </Description>
+      </Checkbox>
+
+      {isMac && (
+        <div className="flex flex-col gap-2">
+          <p className="detail-note">{t("macOS 要先在系统设置里允许，别的设备才能看和操作本机：")}</p>
+          {([
+            [true, t("录屏"), t("让别的设备看到本机画面"), s.capture_permission],
+            [false, t("辅助功能"), t("让别的设备操作本机的键盘和鼠标"), s.control_permission],
+          ] as const).map(([capture, name, what, granted]) => (
+            <div key={name} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border px-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <strong className="text-sm">{name}</strong>
+                  <Badge variant={granted ? "success" : "warning"}>{granted ? t("已允许") : t("未允许")}</Badge>
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{what}</div>
+              </div>
+              {!granted && (
+                <Button variant="outline" size="sm" onClick={() => void api.screenRequestPermission(capture).then(setS)}>
+                  {t("去允许")}
+                </Button>
+              )}
+            </div>
+          ))}
+          <p className="text-xs text-muted-foreground">{t("在系统设置里打开 P2PCLI 后，录屏权限要重新打开 P2PCLI 才生效。")}</p>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -26,6 +26,7 @@ use crate::proto::{AGENT_MESSAGE_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
+use crate::screen::{SCREEN_V1, ScreenBackend, ScreenViewerSummary};
 use crate::store::{TrustStore, write_private};
 
 /// 本机能回应对面的哪些能力。手机端（关掉 host）不开终端、不让对面碰本机的文件和程序，只剩 AI 协作消息
@@ -99,6 +100,9 @@ pub enum HostEvent {
     Disconnected { session: u64 },
     TerminalOpened { session: u64 },
     TerminalClosed { session: u64 },
+    /// 有人开始看本机画面
+    ScreenStarted { viewer: ScreenViewerSummary },
+    ScreenStopped { id: u64 },
     /// 收到一批文件，已经放好
     FilesReceived {
         from: String,
@@ -112,6 +116,26 @@ pub enum HostEvent {
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// 有设备要看本机画面
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreenRequest {
+    pub id: u64,
+    pub remote: String,
+    pub name: String,
+    pub platform: String,
+    /// 受信设备：界面可以按设置直接放行
+    pub trusted: bool,
+    /// 对方想操作，不只是看
+    pub control: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenDecision {
+    pub allow: bool,
+    /// 允许操作键盘鼠标
+    pub control: bool,
+}
+
 /// 界面层实现：弹窗问主人、显示谁连着本机
 pub trait HostDelegate: Send + Sync + 'static {
     fn approve(&self, req: IncomingRequest) -> BoxFuture<Decision>;
@@ -119,6 +143,10 @@ pub trait HostDelegate: Send + Sync + 'static {
     /// 没配对过的设备发文件来，问主人收不收；没有界面的默认不收
     fn approve_files(&self, _req: FileRequest) -> BoxFuture<bool> {
         Box::pin(async { false })
+    }
+    /// 有设备要看本机画面，问主人（或按设置直接决定）；没有界面的默认不给看
+    fn approve_screen(&self, _req: ScreenRequest) -> BoxFuture<ScreenDecision> {
+        Box::pin(async { ScreenDecision { allow: false, control: false } })
     }
 }
 
@@ -227,6 +255,10 @@ pub struct Host {
     delegate: Arc<dyn HostDelegate>,
     /// 传文件那一头，Files 建好以后挂上来：对面推文件到指定目录、拉文件时要用
     files: OnceLock<Weak<Files>>,
+    /// 抓屏、编码、注入键鼠的平台实现；桌面端在支持的系统上挂上来，没挂就不提供远程画面
+    screen_backend: RwLock<Option<Arc<dyn ScreenBackend>>>,
+    /// 正在看本机画面的：编号 → (摘要, 叫它停下)
+    screens: Mutex<HashMap<u64, (ScreenViewerSummary, Arc<tokio::sync::Notify>)>>,
 }
 
 impl Host {
@@ -257,6 +289,33 @@ impl Host {
             next_id: AtomicU64::new(1),
             delegate,
             files: OnceLock::new(),
+            screen_backend: RwLock::new(None),
+            screens: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 挂上远程画面的平台实现
+    pub fn set_screen_backend(&self, backend: Arc<dyn ScreenBackend>) {
+        *self.screen_backend.write().unwrap() = Some(backend);
+    }
+
+    fn screen_backend(&self) -> Option<Arc<dyn ScreenBackend>> {
+        self.screen_backend.read().unwrap().clone()
+    }
+
+    /// 正在看本机画面的设备
+    pub fn screen_viewers(&self) -> Vec<ScreenViewerSummary> {
+        let mut v: Vec<_> = self.screens.lock().unwrap().values().map(|(s, _)| s.clone()).collect();
+        v.sort_by_key(|s| s.id);
+        v
+    }
+
+    /// 主人点了停止共享画面；id 为空就全停
+    pub fn stop_screen(&self, id: Option<u64>) {
+        for (sid, (_, stop)) in self.screens.lock().unwrap().iter() {
+            if id.is_none_or(|id| id == *sid) {
+                stop.notify_one();
+            }
         }
     }
 
@@ -533,7 +592,11 @@ impl Host {
                 version: me.version,
                 os: me.os,
                 multiplexer: self.terminals.describe().await,
-                capabilities: capabilities.iter().filter(|capability| serves(capability)).cloned().collect(),
+                capabilities: capabilities
+                    .iter()
+                    .filter(|capability| serves(capability) || (capability.as_str() == SCREEN_V1 && self.screen_backend().is_some()))
+                    .cloned()
+                    .collect(),
             },
         )
         .await?;
@@ -571,7 +634,8 @@ impl Host {
                 bi = conn.accept_bi() => match bi {
                     Ok((s, r)) => {
                         let me = self.clone();
-                        tokio::spawn(async move { me.terminal(session, remote.to_string(), collaboration, s, r).await });
+                        let conn = conn.clone();
+                        tokio::spawn(async move { me.terminal(session, remote.to_string(), collaboration, conn, s, r).await });
                     }
                     Err(_) => break,
                 },
@@ -586,11 +650,18 @@ impl Host {
         Ok(())
     }
 
-    async fn terminal(self: Arc<Self>, session: u64, owner: String, collaboration: bool, mut send: SendStream, mut recv: RecvStream) {
+    async fn terminal(self: Arc<Self>, session: u64, owner: String, collaboration: bool, conn: Connection, mut send: SendStream, mut recv: RecvStream) {
         let request = match timeout(Duration::from_secs(10), read_msg(&mut recv)).await {
             Ok(Ok(msg)) => msg,
             _ => return,
         };
+        #[cfg(feature = "host")]
+        if let Msg::ScreenOpen { open } = request {
+            self.screen(session, &owner, conn, open, send, recv).await;
+            return;
+        }
+        #[cfg(not(feature = "host"))]
+        let _ = conn;
         let result: Result<()> = async {
             match request {
                 Msg::CollabRequest { request } => {
@@ -754,6 +825,83 @@ impl Host {
             let _ = write_msg(&mut send, &Msg::Error { message: format!("{e:#}") }).await;
         }
         let _ = send.finish();
+    }
+
+    /// 有设备要看本机画面：问过主人、查过权限再开始发
+    #[cfg(feature = "host")]
+    async fn screen(self: Arc<Self>, session: u64, owner: &str, conn: Connection, open: crate::screen::ScreenOpen, mut send: SendStream, recv: RecvStream) {
+        let prepared: Result<Option<_>> = async {
+            let Some(backend) = self.screen_backend() else {
+                bail!("对方电脑不支持远程画面");
+            };
+            let remote: EndpointId = owner.parse()?;
+            let (name, platform) = self
+                .sessions
+                .lock()
+                .unwrap()
+                .get(&session)
+                .map(|e| (e.summary.name.clone(), e.summary.platform.clone()))
+                .unwrap_or_default();
+            let id = self.next();
+            let req = ScreenRequest {
+                id,
+                remote: owner.to_string(),
+                name: name.clone(),
+                platform,
+                trusted: self.trust.contains(&remote),
+                control: open.control,
+            };
+            let decision = tokio::select! {
+                d = self.delegate.approve_screen(req) => d,
+                _ = tokio::time::sleep(APPROVE_TIMEOUT) => {
+                    self.delegate.event(HostEvent::RequestCancelled { id });
+                    bail!("对方没有响应查看画面的请求");
+                }
+                _ = conn.closed() => {
+                    self.delegate.event(HostEvent::RequestCancelled { id });
+                    return Ok(None);
+                }
+            };
+            if !decision.allow {
+                bail!("denied: 对方没有允许查看画面");
+            }
+            backend.check_capture()?;
+            let (control, control_note) = if !open.control {
+                (false, None)
+            } else if !decision.control {
+                (false, Some("对方只允许查看，不能操作".to_string()))
+            } else {
+                match backend.check_control() {
+                    Ok(()) => (true, None),
+                    Err(e) => (false, Some(format!("{e:#}"))),
+                }
+            };
+            Ok(Some((backend, id, name, control, control_note)))
+        }
+        .await;
+        let (backend, id, name, control, control_note) = match prepared {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(e) => {
+                // 没开始发画面之前出的错，按普通会话请求的格式回
+                warn!(session, "远程画面没能开始：{e:#}");
+                let _ = write_msg(&mut send, &Msg::Error { message: format!("{e:#}") }).await;
+                let _ = send.finish();
+                return;
+            }
+        };
+        let _ = send.set_priority(crate::screen::VIDEO_PRIORITY);
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let summary = ScreenViewerSummary { id, session, remote: owner.to_string(), name, control, since: crate::store::now_secs() };
+        self.screens.lock().unwrap().insert(id, (summary.clone(), stop.clone()));
+        info!(session, control, "对方开始查看本机画面");
+        self.delegate.event(HostEvent::ScreenStarted { viewer: summary });
+        if let Err(e) = crate::screen::serve(conn, backend, open, control, control_note, send, recv, stop).await {
+            warn!(session, "远程画面结束：{e:#}");
+        }
+        self.screens.lock().unwrap().remove(&id);
+        info!(session, "对方不再查看本机画面");
+        self.delegate.event(HostEvent::ScreenStopped { id });
     }
 
     #[cfg(feature = "host")]
