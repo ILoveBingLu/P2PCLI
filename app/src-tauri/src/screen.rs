@@ -216,6 +216,44 @@ pub(crate) async fn open_screen_window(app: AppHandle, state: State<'_, AppState
     Ok(())
 }
 
+/// 画面窗口进出全屏，返回现在是不是全屏。
+/// macOS 用“简单全屏”（不新开桌面）并把菜单栏、程序坞整个藏掉：系统的全屏下鼠标碰到屏幕顶端会滑出菜单栏，
+/// 正好盖住我们滑下来的工具栏，退不出全屏。别的系统就是普通全屏。
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) fn screen_set_fullscreen(window: tauri::WebviewWindow, on: bool) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // 用户按绿灯进的是系统全屏，先退出来再说
+        if !on && window.is_fullscreen().unwrap_or(false) {
+            window.set_fullscreen(false).map_err(|e| e.to_string())?;
+            return Ok(false);
+        }
+        window.set_simple_fullscreen(on).map_err(|e| e.to_string())?;
+        if on {
+            // 排在进简单全屏之后执行（它会把菜单栏设成“自动隐藏”），这里改成整个藏掉；退出时它自己恢复原样
+            let _ = window.run_on_main_thread(|| {
+                use objc2_app_kit::{NSApplication, NSApplicationPresentationOptions as P};
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    NSApplication::sharedApplication(mtm).setPresentationOptions(P::HideDock | P::HideMenuBar);
+                }
+            });
+        }
+        Ok(on)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.set_fullscreen(on).map_err(|e| e.to_string())?;
+        Ok(on)
+    }
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub(crate) fn screen_set_fullscreen() -> Result<bool, String> {
+    Err(crate::MOBILE_UNSUPPORTED.into())
+}
+
 #[cfg(mobile)]
 #[tauri::command]
 pub(crate) fn open_screen_window() -> Result<(), String> {

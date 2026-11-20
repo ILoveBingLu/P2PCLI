@@ -1778,6 +1778,7 @@ pub fn run() {
             screen::remote_supports_screen,
             screen::open_screen_window,
             screen::screen_window_info,
+            screen::screen_set_fullscreen,
             screen::screen_open,
             screen::screen_send,
             screen::screen_close,

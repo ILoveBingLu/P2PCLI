@@ -102,7 +102,7 @@ impl ScreenBackend for WinBackend {
     }
 
     fn start(&self, opts: CaptureOptions) -> Result<Arc<dyn ScreenCapture>> {
-        Ok(Arc::new(capture::WinCapture::start(opts)?))
+        crate::awake::KeepAwake::start(|| Ok(Arc::new(capture::WinCapture::start(opts)?)))
     }
 
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {

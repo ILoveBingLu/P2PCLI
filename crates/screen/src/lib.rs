@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 use p2pcli_core::screen::ScreenBackend;
 
+#[cfg(any(target_os = "macos", windows))]
+mod awake;
 pub mod keymap;
 #[cfg(target_os = "macos")]
 mod mac;

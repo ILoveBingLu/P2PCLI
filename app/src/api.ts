@@ -679,6 +679,8 @@ export const api = {
   openScreenWindow: (endpointId: string, deviceName: string, platform: string) => invoke<void>("open_screen_window", { endpointId, deviceName, platform }),
   /** 画面窗口用哪条连接：在用的那条还活着就一直用它，断了才换成这台设备最新的一条 */
   screenConnection: (endpointId: string, current: number | null) => invoke<number | null>("screen_connection", { endpointId, current }),
+  /** 画面窗口进出全屏，返回现在是不是全屏（macOS 用简单全屏，藏掉菜单栏） */
+  screenSetFullscreen: (on: boolean) => invoke<boolean>("screen_set_fullscreen", { on }),
   screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
   /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
   screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], onEvent: (ev: ScreenStreamEvent) => void) => {

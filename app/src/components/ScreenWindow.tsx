@@ -521,6 +521,7 @@ export default function ScreenWindow() {
     if (screenId.current != null) send({ t: "input", ev: { k: "release_all" } });
   }, [send]);
 
+  const toggleRef = useRef<() => Promise<void>>(async () => {});
   // 键盘：画面获得焦点时所有键都发过去（包括 Tab、退格），本窗口不处理
   useEffect(() => {
     const remoteMac = device?.platform === "macos";
@@ -532,6 +533,13 @@ export default function ScreenWindow() {
     };
     const onKey = (e: KeyboardEvent, down: boolean) => {
       if (!e.code || e.code === "Unidentified") return;
+      // 进出全屏的快捷键本机自己处理，不发给对方：macOS ⌃⌘F，别的系统 F11
+      if (isMac ? e.code === "KeyF" && e.metaKey && e.ctrlKey : e.code === "F11") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (down && !e.repeat) void toggleRef.current();
+        return;
+      }
       const code = mapCode(e.code);
       if (down) {
         if (!controlRef.current || document.activeElement !== canvasRef.current) return;
@@ -584,18 +592,21 @@ export default function ScreenWindow() {
     setDisplay(d.id);
     if (screenId.current != null) send({ t: "switch", display: d.id });
   };
-  const toggleFullscreen = async () => {
-    const w = getCurrentWindow();
-    const next = !(await w.isFullscreen());
-    await w.setFullscreen(next);
-    setFullscreen(next);
-  };
-  // 用系统的方式进出全屏（macOS 的绿灯、⌃⌘F）也要跟上
+  // macOS 的简单全屏系统不认作全屏（isFullscreen 是假），自己记着
+  const fullscreenRef = useRef(false);
+  fullscreenRef.current = fullscreen;
+  const ownFullscreen = useRef(false);
+  const toggleFullscreen = useCallback(async () => {
+    const on = await api.screenSetFullscreen(!fullscreenRef.current).catch(() => fullscreenRef.current);
+    ownFullscreen.current = on;
+    setFullscreen(on);
+  }, []);
+  // 按 macOS 的绿灯进出系统全屏也要跟上
   useEffect(() => {
     const w = getCurrentWindow();
     let alive = true;
     const unlisten = w.onResized(() => {
-      void w.isFullscreen().then((v) => { if (alive) setFullscreen(v); }).catch(() => {});
+      void w.isFullscreen().then((v) => { if (alive) setFullscreen(ownFullscreen.current || v); }).catch(() => {});
     });
     return () => { alive = false; void unlisten.then((f) => f()); };
   }, []);
@@ -641,6 +652,7 @@ export default function ScreenWindow() {
       cancelHide();
     };
   }, [fullscreen, cancelHide, scheduleHide]);
+  toggleRef.current = toggleFullscreen;
   const reconnect = () => setAttempt((n) => n + 1);
 
   const platformsDiffer = !!device?.platform && (device.platform === "macos") !== isMac;
@@ -707,7 +719,7 @@ export default function ScreenWindow() {
             <Keyboard />
           </Button>
         )}
-        <Button variant="ghost" size="icon-sm" className="screen-tool" title={fullscreen ? t("退出全屏") : t("全屏")} aria-label={t("全屏")} onPress={() => void toggleFullscreen()}>
+        <Button variant="ghost" size="icon-sm" className="screen-tool" title={`${fullscreen ? t("退出全屏") : t("全屏")}（${isMac ? "⌃⌘F" : "F11"}）`} aria-label={t("全屏")} onPress={() => void toggleFullscreen()}>
           {fullscreen ? <Shrink /> : <Expand />}
         </Button>
       </div>

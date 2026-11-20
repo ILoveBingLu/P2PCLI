@@ -75,7 +75,7 @@ impl ScreenBackend for MacBackend {
     }
 
     fn start(&self, opts: CaptureOptions) -> Result<Arc<dyn ScreenCapture>> {
-        Ok(Arc::new(capture::MacCapture::start(opts)?))
+        crate::awake::KeepAwake::start(|| Ok(Arc::new(capture::MacCapture::start(opts)?)))
     }
 
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
