@@ -221,7 +221,27 @@ export default function ScreenWindow() {
     needKey.current = true;
   }, []);
 
+  // 诊断：解出了多少帧、出错几次，每 5 秒报给后端记日志
+  const decodedCount = useRef(0);
+  const errorCount = useRef(0);
+  const hardwareRef = useRef(false);
+  useEffect(() => {
+    let last = performance.now();
+    const timer = window.setInterval(() => {
+      const id = screenId.current;
+      const now = performance.now();
+      if (id != null) {
+        void api.screenReport(id, decodedCount.current, errorCount.current, decoder.current?.decodeQueueSize ?? 0, hardwareRef.current, (now - last) / 1000).catch(() => {});
+      }
+      decodedCount.current = 0;
+      errorCount.current = 0;
+      last = now;
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const draw = useCallback((frame: VideoFrame) => {
+    decodedCount.current += 1;
     const canvas = canvasRef.current;
     if (canvas) {
       if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
@@ -263,10 +283,12 @@ export default function ScreenWindow() {
       chosen = base;
     }
     setDecode({ codec: config.codec, width: config.width, height: config.height, hardware: chosen.hardwareAcceleration === "prefer-hardware" });
+    hardwareRef.current = chosen.hardwareAcceleration === "prefer-hardware";
     const d = new VideoDecoder({
       output: draw,
       error: () => {
         // 解码出错：重建解码器，要一个关键帧
+        errorCount.current += 1;
         resetDecoder();
         send({ t: "key_frame" });
       },

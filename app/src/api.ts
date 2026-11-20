@@ -697,6 +697,9 @@ export const api = {
   },
   screenSend: (screenId: number, msgs: ScreenViewerMsg[]) => invoke<void>("screen_send", { screenId, msgs }),
   screenClose: (screenId: number) => invoke<void>("screen_close", { screenId }),
+  /** 每 5 秒报一次本机解码的情况，记进日志排查卡顿 */
+  screenReport: (screenId: number, decoded: number, errors: number, queue: number, hardware: boolean, seconds: number) =>
+    invoke<void>("screen_report", { screenId, decoded, errors, queue, hardware, seconds }),
   getSettings: () => invoke<SettingsView>("get_settings"),
   systemPermissions: () => invoke<SystemPermission[]>("system_permissions"),
   requestSystemPermission: (permission: string) => invoke<SystemPermission[]>("request_system_permission", { permission }),

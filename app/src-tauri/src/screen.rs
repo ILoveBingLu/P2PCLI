@@ -279,13 +279,20 @@ pub(crate) async fn screen_open(
     drop(tx);
     let remote = remote.clone();
     tauri::async_runtime::spawn(async move {
+        // 诊断：每 5 秒记一行收到的帧率、码率、最长间隔，和对方报的、本机解码报的放在一起看
+        let mut diag = Diag::default();
         let reason: Option<String> = loop {
+            if diag.since.elapsed() >= DIAG_EVERY {
+                let path = remote.path();
+                diag.log(screen_id, &path);
+            }
             let ev = tokio::select! {
                 ev = output.next() => ev,
                 reason = remote.closed() => break Some(reason),
             };
             match ev {
                 Ok(Some(ScreenEvent::Frame { seq, key, data, .. })) => {
+                    diag.frame(key, data.len());
                     match ack.upgrade() {
                         Some(tx) => { let _ = tx.send(ViewerMsg::Ack { seq }); }
                         None => break None,
@@ -300,10 +307,14 @@ pub(crate) async fn screen_open(
                     }
                 }
                 Ok(Some(ScreenEvent::Config(config))) => {
+                    diag.codec = config.codec.clone();
                     let _ = events.send(json_event(&serde_json::json!({ "t": "config", "config": config })));
                 }
                 Ok(Some(ScreenEvent::Host(HostMsg::Error { message }))) => break Some(message),
                 Ok(Some(ScreenEvent::Host(msg))) => {
+                    if let HostMsg::Stats { bitrate, fps } = msg {
+                        diag.host = Some((fps, bitrate));
+                    }
                     let _ = events.send(json_event(&serde_json::json!({ "t": "host", "msg": msg })));
                 }
                 Ok(None) => break None,
@@ -320,6 +331,72 @@ pub(crate) async fn screen_open(
         info!(screen_id, "不再看对方画面");
     });
     Ok(ScreenOpened { screen_id, started })
+}
+
+/// 诊断日志隔多久记一次
+const DIAG_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 观看端的诊断计数：卡在哪一环（对方编码、网络、本机解码）从这里看
+struct Diag {
+    since: std::time::Instant,
+    last_frame: Option<std::time::Instant>,
+    frames: u32,
+    bytes: usize,
+    keys: u32,
+    max_gap: std::time::Duration,
+    codec: String,
+    host: Option<(u32, u32)>,
+}
+
+impl Default for Diag {
+    fn default() -> Self {
+        Diag { since: std::time::Instant::now(), last_frame: None, frames: 0, bytes: 0, keys: 0, max_gap: Default::default(), codec: String::new(), host: None }
+    }
+}
+
+impl Diag {
+    fn frame(&mut self, key: bool, bytes: usize) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_frame {
+            self.max_gap = self.max_gap.max(now - last);
+        }
+        self.last_frame = Some(now);
+        self.frames += 1;
+        self.bytes += bytes;
+        self.keys += u32::from(key);
+    }
+
+    fn log(&mut self, screen_id: u64, path: &p2pcli_core::path::PathInfo) {
+        let secs = self.since.elapsed().as_secs_f64();
+        info!(
+            screen_id,
+            收到帧率 = format!("{:.0}", self.frames as f64 / secs),
+            收到码率 = format!("{:.2}Mbps", self.bytes as f64 * 8.0 / secs / 1e6),
+            关键帧 = self.keys,
+            最长间隔 = format!("{}ms", self.max_gap.as_millis()),
+            对方帧率 = self.host.map(|h| h.0),
+            对方码率 = self.host.map(|h| format!("{:.2}Mbps", h.1 as f64 / 1e6)),
+            格式 = %self.codec,
+            线路 = ?path.kind,
+            延时 = ?path.rtt_ms,
+            "画面统计"
+        );
+        let codec = std::mem::take(&mut self.codec);
+        *self = Diag { codec, host: self.host, ..Default::default() };
+    }
+}
+
+/// 画面窗口每 5 秒报一次本机解码的情况，和收到的放在一起看卡在哪
+#[tauri::command]
+pub(crate) fn screen_report(screen_id: u64, decoded: u32, errors: u32, queue: u32, hardware: bool, seconds: f64) {
+    info!(
+        screen_id,
+        解出帧率 = format!("{:.0}", decoded as f64 / seconds.max(0.1)),
+        解码出错 = errors,
+        积压 = queue,
+        硬件解码 = hardware,
+        "画面解码统计"
+    );
 }
 
 /// 窗口发来的消息：键鼠、要关键帧、换屏、换画质
