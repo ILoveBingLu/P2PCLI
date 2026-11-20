@@ -81,13 +81,18 @@ impl Quality {
     }
     pub fn max_bitrate(self) -> u32 {
         match self {
-            Quality::Sharp => 40_000_000,
+            Quality::Sharp => 60_000_000,
             Quality::Balanced => 16_000_000,
             Quality::Smooth => 4_000_000,
         }
     }
+    /// 一开始用多少码率。清晰档直接拉满，不爬坡；只有真的堵了（确认回来的延迟一直在涨）才往下降。
+    /// 别的档从三分之一起步，网络确认没堵再慢慢往上加
     pub fn start_bitrate(self) -> u32 {
-        (self.max_bitrate() / 3).clamp(MIN_BITRATE, 8_000_000)
+        match self {
+            Quality::Sharp => self.max_bitrate(),
+            _ => (self.max_bitrate() / 3).clamp(MIN_BITRATE, 8_000_000),
+        }
     }
 }
 
@@ -412,7 +417,8 @@ impl RateControl {
 
     fn set_quality(&mut self, quality: Quality) {
         self.max = quality.max_bitrate();
-        self.bitrate = self.bitrate.min(self.max);
+        // 切到清晰档马上拉满；切到别的档不超过它的上限
+        self.bitrate = if quality == Quality::Sharp { quality.start_bitrate() } else { self.bitrate.min(self.max) };
     }
 
     /// 一帧被确认了：从发出到确认用了 delay，帧有 bytes 大
@@ -1165,6 +1171,22 @@ mod tests {
     }
 
     /// Wi-Fi 省电那种抖动：大部分确认按时到，隔一阵有几个晚到 100 多毫秒，不算堵
+    /// 清晰档一开始就是最高码率，中途切过去也马上拉满；真的堵了照样往下降
+    #[test]
+    fn sharp_starts_at_full_rate() {
+        let mut rate = RateControl::new(Quality::Sharp, Duration::from_millis(20));
+        assert_eq!(rate.bitrate, Quality::Sharp.max_bitrate());
+        let mut rate2 = RateControl::new(Quality::Balanced, Duration::from_millis(20));
+        rate2.set_quality(Quality::Sharp);
+        assert_eq!(rate2.bitrate, Quality::Sharp.max_bitrate());
+        rate2.set_quality(Quality::Smooth);
+        assert_eq!(rate2.bitrate, Quality::Smooth.max_bitrate());
+        for _ in 0..5 {
+            rate.on_ack(Duration::from_millis(400), 1000);
+        }
+        assert!(rate.tick(None).unwrap() < Quality::Sharp.max_bitrate());
+    }
+
     #[test]
     fn jitter_is_not_congestion() {
         let mut rate = RateControl::new(Quality::Balanced, Duration::from_millis(70));
