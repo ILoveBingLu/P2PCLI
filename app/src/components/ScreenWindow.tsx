@@ -11,6 +11,8 @@ import {
   api,
   type ScreenDisplay,
   type ScreenInput,
+  type PathInfo,
+  type RemoteInfo,
   type ScreenCursorShape,
   type ScreenMouseButton,
   type ScreenQuality,
@@ -20,6 +22,7 @@ import {
   type ScreenViewerMsg,
 } from "../api";
 import { Button } from "@/components/ui/button";
+import { ConnectionCard, Row, Section } from "./ConnectionCard";
 import { t } from "@/i18n";
 
 /** 隔这么久问一次这台设备现在用哪条连接（断开、重连都能跟上） */
@@ -92,6 +95,10 @@ export default function ScreenWindow() {
   const [fullscreen, setFullscreen] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [hwNote, setHwNote] = useState<string | null>(null);
+  // 连接详情：对方信息、线路，解码器在用的格式
+  const [info, setInfo] = useState<RemoteInfo | null>(null);
+  const [path, setPath] = useState<PathInfo | null>(null);
+  const [decode, setDecode] = useState<{ codec: string; width: number; height: number; hardware: boolean } | null>(null);
   // 对方单独报来的指针：样子和位置。对方是老版本时收不到，那时指针画在画面里
   const [look, setLook] = useState<CursorLook | null>(null);
   const [remoteCursor, setRemoteCursor] = useState<{ x: number; y: number; visible: boolean } | null>(null);
@@ -141,6 +148,17 @@ export default function ScreenWindow() {
     const unlisten = listen("remote-closed", () => void check());
     return () => { stop = true; window.clearInterval(timer); void unlisten.then((u) => u()); };
   }, [device]);
+
+  // 标题栏连接按钮上的线路和延时：每 2 秒取一次；对方信息换连接时取一次
+  useEffect(() => {
+    if (connId == null) { setPath(null); return; }
+    let stop = false;
+    void api.remoteInfo(connId).then((i) => { if (!stop) setInfo(i); }).catch(() => {});
+    const tick = () => api.pathInfo(connId).then((p) => { if (!stop) setPath(p); }).catch(() => {});
+    void tick();
+    const timer = window.setInterval(tick, 2000);
+    return () => { stop = true; window.clearInterval(timer); };
+  }, [connId]);
 
   useEffect(() => {
     if (!device) return;
@@ -223,6 +241,7 @@ export default function ScreenWindow() {
     } catch {
       chosen = base;
     }
+    setDecode({ codec: config.codec, width: config.width, height: config.height, hardware: chosen.hardwareAcceleration === "prefer-hardware" });
     const d = new VideoDecoder({
       output: draw,
       error: () => {
@@ -511,11 +530,19 @@ export default function ScreenWindow() {
         <div className="screen-toolbar-title" data-tauri-drag-region>
           <Monitor />
           <span className="truncate">{device?.name ?? ""}</span>
-          {live && stats && !paused && (
-            <span className="screen-stats">{t("{{fps}} 帧/秒 · {{mbps}} Mbps", { fps: stats.fps, mbps: (stats.bitrate / 1e6).toFixed(1) })}</span>
-          )}
-          {hwNote && <span className="screen-stats">{hwNote}</span>}
         </div>
+        {connId != null && info && (
+          <ConnectionCard connId={connId} info={info} path={path ?? undefined} placement="bottom end" className="screen-path-button"
+            extra={live ? (
+              <Section>
+                <Row label={t("画面")} value={paused === "relay" ? t("已暂停（连接走中继）") : paused ? t("正在找直连线路") : decode ? `${decode.width} × ${decode.height}` : t("统计中…")} />
+                <Row label={t("帧率")} value={stats && !paused ? t("{{fps}} 帧/秒", { fps: stats.fps }) : "—"} />
+                <Row label={t("画面码率")} value={stats && !paused ? `${(stats.bitrate / 1e6).toFixed(1)} Mbps` : "—"} hint={t("对方编码器现在用的码率，网络差时会自动往下降")} />
+                <Row label={t("编码")} value={decode ? `H.264 · ${decode.codec}` : "—"} mono />
+                <Row label={t("解码")} value={decode ? (decode.hardware && !hwNote ? t("显卡硬件解码") : t("系统解码")) : "—"} />
+              </Section>
+            ) : undefined} />
+        )}
         {live && started && started.displays.length > 1 && (
           <div className="screen-segment" role="group" aria-label={t("屏幕")}>
             {started.displays.map((d) => (

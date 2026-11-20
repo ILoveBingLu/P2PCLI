@@ -1189,7 +1189,6 @@
   "其他设备": "another device",
   "macOS 要先在系统设置里允许，别的设备才能看和操作本机：": "macOS needs these permissions in System Settings before other devices can view and control this computer:",
   "{{device}} — 远程画面": "{{device}} — Remote screen",
-  "{{fps}} 帧/秒 · {{mbps}} Mbps": "{{fps}} fps · {{mbps}} Mbps",
   "{{length}} 台设备在看本机画面": "{{length}} devices are viewing this screen",
   "{{value}} 在看本机画面": "{{value}} is viewing this screen",
   "⌘ 和 Ctrl 已对调（按本机习惯用快捷键），点一下改回原样": "⌘ and Ctrl are swapped (shortcuts work like on this computer). Click to send them as-is.",
@@ -1245,5 +1244,16 @@
   "重新打开画面": "Reopen screen",
   "远程控制": "Remote control",
   "对方的 P2PCLI 版本较旧，要更新后才能远程控制": "The other device's P2PCLI is outdated. Update it to use remote control.",
-  "点左侧的设备，在右边设备页点“远程控制”（或者在设备上右键选“远程控制”），就能在单独的窗口里查看和操作对方的屏幕。抓屏、编码、解码都用两边电脑的显卡，几乎不占 CPU。画面只走直连（IPv6、IPv4 打洞、局域网），连接落到中继上时画面暂停，终端照常能用。": "Click a device on the left and choose Remote control on its device page (or right-click the device and choose Remote control) to view and control its screen in a separate window. Capture, encoding and decoding all run on the GPUs of both computers and barely use the CPU. The screen only travels over direct connections (IPv6, IPv4 hole punching, LAN). When the connection falls back to a relay the screen pauses, and the terminal keeps working."
+  "点左侧的设备，在右边设备页点“远程控制”（或者在设备上右键选“远程控制”），就能在单独的窗口里查看和操作对方的屏幕。抓屏、编码、解码都用两边电脑的显卡，几乎不占 CPU。画面只走直连（IPv6、IPv4 打洞、局域网），连接落到中继上时画面暂停，终端照常能用。": "Click a device on the left and choose Remote control on its device page (or right-click the device and choose Remote control) to view and control its screen in a separate window. Capture, encoding and decoding all run on the GPUs of both computers and barely use the CPU. The screen only travels over direct connections (IPv6, IPv4 hole punching, LAN). When the connection falls back to a relay the screen pauses, and the terminal keeps working.",
+  "画面": "Picture",
+  "已暂停（连接走中继）": "Paused (connection is on a relay)",
+  "正在找直连线路": "Looking for a direct path",
+  "帧率": "Frame rate",
+  "{{fps}} 帧/秒": "{{fps}} fps",
+  "画面码率": "Video bitrate",
+  "对方编码器现在用的码率，网络差时会自动往下降": "The bitrate the other side's encoder is using now; it drops automatically when the network is poor",
+  "编码": "Encoding",
+  "解码": "Decoding",
+  "显卡硬件解码": "GPU hardware decoding",
+  "系统解码": "System decoding"
 }

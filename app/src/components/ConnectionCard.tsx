@@ -56,11 +56,16 @@ interface Sample {
  * 底部栏右边的线路和延时，点开是这条连接的详情：网络（延时、按键回显、带宽、丢包）、通道（线路、加密、两头地址）、
  * 对方设备（版本、系统、会话管理器）。打开时每秒取一次统计，用前后两次的差算带宽和丢包率；关着不取
  */
-export function ConnectionCard({ connId, info, path, echoLatency }: {
+export function ConnectionCard({ connId, info, path, echoLatency, extra, placement = "top end", className }: {
   connId: number;
   info: RemoteInfo;
   path?: PathInfo;
-  echoLatency: () => number | null;
+  /** 终端才有按键回显；不给就不显示这一行 */
+  echoLatency?: () => number | null;
+  /** 网络那段后面再加一段（远程画面窗口放画面的信息） */
+  extra?: ReactNode;
+  placement?: "top end" | "bottom end";
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState<Sample | null>(null);
@@ -75,7 +80,7 @@ export function ConnectionCard({ connId, info, path, echoLatency }: {
     let stop = false;
     let last: Sample | null = null;
     const tick = async () => {
-      setEcho(echoRef.current());
+      setEcho(echoRef.current?.() ?? null);
       try {
         const sample = { at: performance.now(), stats: await api.connectionStats(connId) };
         if (stop) return;
@@ -126,11 +131,11 @@ export function ConnectionCard({ connId, info, path, echoLatency }: {
 
   return (
     <Popover isOpen={open} onOpenChange={setOpen}>
-      <Button variant="ghost" size="xs" className="terminal-status-path-button" data-level={level} aria-label={t("连接详情：{{value}}", { value: pathLabel(current) })} title={t("连接详情")}>
+      <Button variant="ghost" size="xs" className={className ?? "terminal-status-path-button"} data-level={level} aria-label={t("连接详情：{{value}}", { value: pathLabel(current) })} title={t("连接详情")}>
         <Icon className="connection-signal" />
         <span>{pathLabel(current)}</span>
       </Button>
-      <Popover.Content placement="top end" offset={8} className="connection-card">
+      <Popover.Content placement={placement} offset={8} className="connection-card">
         <Popover.Dialog aria-label={t("连接详情")} className="flex flex-col">
           <div className="connection-card-head" data-level={level}>
             <Icon className="connection-signal" />
@@ -138,10 +143,11 @@ export function ConnectionCard({ connId, info, path, echoLatency }: {
             <strong>{rtt != null ? `${rtt} ms` : "—"}</strong>
           </div>
           <Section>
-            <Row label={t("按键回显")} value={echo != null ? `${echo} ms` : t("敲几个字后显示")} hint={t("从按键到屏幕上出现字的时间，比网络延时多算了对方程序处理的时间")} />
+            {echoLatency && <Row label={t("按键回显")} value={echo != null ? `${echo} ms` : t("敲几个字后显示")} hint={t("从按键到屏幕上出现字的时间，比网络延时多算了对方程序处理的时间")} />}
             <Row label={t("带宽占用")} value={up && down ? `↑ ${up}  ↓ ${down}` : t("统计中…")} />
             <Row label={t("丢包率")} value={loss ?? t("统计中…")} />
           </Section>
+          {extra}
           <Section>
             <Row label={t("线路")} value={current ? pathName(current.kind) : "—"} />
             <Row label={t("加密")} value={t("QUIC · TLS 1.3 端到端")} />
@@ -159,11 +165,11 @@ export function ConnectionCard({ connId, info, path, echoLatency }: {
   );
 }
 
-function Section({ children }: { children: ReactNode }) {
+export function Section({ children }: { children: ReactNode }) {
   return <dl className="connection-card-section">{children}</dl>;
 }
 
-function Row({ label, value, hint, mono }: { label: string; value: string; hint?: string; mono?: boolean }) {
+export function Row({ label, value, hint, mono }: { label: string; value: string; hint?: string; mono?: boolean }) {
   return (
     <div className="connection-card-row" title={hint}>
       <dt>{label}</dt>
