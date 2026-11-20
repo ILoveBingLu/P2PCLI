@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink, Unplug } from "lucide-react";
+import { Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink } from "lucide-react";
 import {
   api,
   type ScreenDisplay,
@@ -163,6 +163,9 @@ export default function ScreenWindow() {
       codedHeight: config.height,
       description: b64(config.description),
       optimizeForLatency: true,
+      // 两边编码器出的都是电脑屏幕的颜色：sRGB 色域和曲线、BT.709 矩阵、视频范围。
+      // 明确告诉解码器，不让它按电视的 BT.709 曲线去猜，颜色和对方屏幕上一致
+      colorSpace: { primaries: "bt709", transfer: "iec61966-2-1", matrix: "bt709", fullRange: false },
     };
     // 先要显卡解码，不行再让系统自己挑
     let chosen: VideoDecoderConfig = { ...base, hardwareAcceleration: "prefer-hardware" };
@@ -484,11 +487,6 @@ export default function ScreenWindow() {
         <Button variant="ghost" size="icon-sm" className="screen-tool" title={fullscreen ? t("退出全屏") : t("全屏")} aria-label={t("全屏")} onPress={() => void toggleFullscreen()}>
           {fullscreen ? <Shrink /> : <Expand />}
         </Button>
-        {live && (
-          <Button variant="ghost" size="icon-sm" className="screen-tool" title={t("停止查看")} aria-label={t("停止查看")} onPress={() => void getCurrentWindow().close()}>
-            <Unplug />
-          </Button>
-        )}
       </div>
       <div className="screen-stage">
         <canvas ref={canvasRef} className="screen-canvas" tabIndex={0}

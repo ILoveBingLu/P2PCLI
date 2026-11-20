@@ -13,7 +13,7 @@ use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2_core_foundation::{CFRetained, Type};
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayCopyDisplayMode, CGDisplayIsBuiltin, CGDisplayMode, CGGetActiveDisplayList, CGMainDisplayID,
-    kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
+    kCGColorSpaceSRGB, kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
 };
 use objc2_core_media::{CMSampleBuffer, CMTime};
 
@@ -195,6 +195,9 @@ impl MacCapture {
             config.setHeight(height as usize);
             config.setPixelFormat(PIXEL_FORMAT_NV12);
             config.setColorMatrix(kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
+            // Mac 屏幕多是广色域（Display P3）：让系统抓屏时就转成 sRGB，
+            // 不然 P3 的数值被当成 sRGB 显示，颜色发灰发淡
+            config.setColorSpaceName(kCGColorSpaceSRGB);
             config.setMinimumFrameInterval(CMTime::new(1, opts.fps.max(1) as i32));
             config.setShowsCursor(true);
             config.setScalesToFit(true);
