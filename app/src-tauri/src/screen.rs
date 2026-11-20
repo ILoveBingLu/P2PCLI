@@ -175,10 +175,11 @@ fn screen_label(endpoint_id: &str) -> String {
     format!("screen-{id}")
 }
 
-/// 打开（或叫到前面）某台设备的远程画面窗口。每台设备一个
+/// 打开（或叫到前面）某台设备的远程画面窗口。每台设备一个。
+/// 必须是 async 命令：Windows 上在同步命令里建窗口会死锁（WebView2 的限制），新窗口卡住、关不掉
 #[cfg(desktop)]
 #[tauri::command]
-pub(crate) fn open_screen_window(app: AppHandle, state: State<'_, AppState>, endpoint_id: String, device_name: String, platform: String) -> Result<(), String> {
+pub(crate) async fn open_screen_window(app: AppHandle, state: State<'_, AppState>, endpoint_id: String, device_name: String, platform: String) -> Result<(), String> {
     let label = screen_label(&endpoint_id);
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.unminimize();

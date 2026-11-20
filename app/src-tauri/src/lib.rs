@@ -1058,9 +1058,10 @@ fn open_editor_window() -> Result<(), String> {
     Err(MOBILE_UNSUPPORTED.into())
 }
 
+/// 必须是 async 命令：Windows 上在同步命令里建窗口会死锁（WebView2 的限制），新窗口卡住、关不掉
 #[cfg(desktop)]
 #[tauri::command]
-fn open_editor_window(app: AppHandle, state: State<'_, AppState>, endpoint_id: String, device_name: String, initial_root: Option<String>, request: Option<EditorRequest>) -> Result<(), String> {
+async fn open_editor_window(app: AppHandle, state: State<'_, AppState>, endpoint_id: String, device_name: String, initial_root: Option<String>, request: Option<EditorRequest>) -> Result<(), String> {
     let label = editor_label(&endpoint_id);
     if let Some(window) = app.get_webview_window(&label) {
         if let Some(request) = request {
