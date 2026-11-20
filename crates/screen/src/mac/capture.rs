@@ -23,7 +23,7 @@ use objc2_screen_capture_kit::{
     SCStreamOutputType,
 };
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureOptions, DisplayInfo, EncodedFrame, ScreenCapture};
+use p2pcli_core::screen::{CaptureOptions, DisplayInfo, EncodedFrame, ScreenCapture, VideoCodec};
 use tracing::{debug, info, warn};
 
 use super::encode::Encoder;
@@ -169,6 +169,8 @@ pub struct MacCapture {
     shared: Arc<Shared>,
     encoder: Arc<Mutex<Option<Encoder>>>,
     fps: u32,
+    /// 想用的编码格式（编不了 H.265 时编码器自己退回 H.264）
+    codec: VideoCodec,
     bitrate: Arc<AtomicU32>,
     want_key: Arc<AtomicBool>,
     /// 时间戳从这里算：同一帧重新编码时时间戳也要往前走
@@ -240,6 +242,7 @@ impl MacCapture {
             shared,
             encoder: Arc::new(Mutex::new(None)),
             fps: opts.fps,
+            codec: opts.codec,
             bitrate: Arc::new(AtomicU32::new(opts.bitrate)),
             want_key: Arc::new(AtomicBool::new(true)),
             started: std::time::Instant::now(),
@@ -261,6 +264,7 @@ impl ScreenCapture for MacCapture {
         let bitrate = self.bitrate.clone();
         let want_key = self.want_key.clone();
         let fps = self.fps;
+        let codec = self.codec;
         let started = self.started;
         Box::pin(async move {
             loop {
@@ -288,7 +292,7 @@ impl ScreenCapture for MacCapture {
                     let mut guard = encoder.lock().unwrap();
                     let Some(image) = (unsafe { sample.0.image_buffer() }) else { continue };
                     let pts = unsafe { CMTime::new(started.elapsed().as_micros() as i64, 1_000_000) };
-                    match Encoder::encode(&mut guard, &image, pts, fps, bitrate.load(Ordering::Relaxed), key) {
+                    match Encoder::encode(&mut guard, &image, pts, fps, bitrate.load(Ordering::Relaxed), key, codec) {
                         Ok(rx) => rx,
                         Err(e) => {
                             want_key.store(true, Ordering::Relaxed);

@@ -7,10 +7,10 @@ use std::sync::Mutex;
 
 use anyhow::{Result, anyhow, bail};
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, kCFBooleanTrue,
+    CFArray, CFBoolean, CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, kCFBooleanTrue,
 };
 use objc2_core_media::{
-    CMFormatDescription, CMSampleBuffer, CMTime, CMVideoFormatDescriptionGetDimensions,
+    CMFormatDescription, CMSampleBuffer, CMTime, CMVideoFormatDescriptionGetDimensions, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms,
     CMVideoFormatDescriptionGetH264ParameterSetAtIndex, kCMSampleAttachmentKey_NotSync, kCMTimeInvalid,
 };
 use objc2_core_video::{
@@ -25,24 +25,28 @@ use objc2_video_toolbox::{
     kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kVTCompressionPropertyKey_ProfileLevel,
     kVTCompressionPropertyKey_RealTime, kVTCompressionPropertyKey_TransferFunction,
     kVTCompressionPropertyKey_YCbCrMatrix, kVTEncodeFrameOptionKey_ForceKeyFrame,
-    kVTProfileLevel_H264_ConstrainedHigh_AutoLevel, kVTProfileLevel_H264_High_AutoLevel,
+    kVTProfileLevel_H264_ConstrainedHigh_AutoLevel, kVTProfileLevel_H264_High_AutoLevel, kVTProfileLevel_HEVC_Main_AutoLevel,
     kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
     kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
     kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder,
 };
-use p2pcli_core::screen::{EncodedFrame, avcc_config};
+use p2pcli_core::screen::{EncodedFrame, VideoCodec, avcc_config, hevc_config};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 
 /// 'avc1'
 const CODEC_H264: u32 = 0x6176_6331;
+/// 'hvc1'
+const CODEC_HEVC: u32 = 0x6876_6331;
 
 type Reply = oneshot::Sender<Result<Option<EncodedFrame>>>;
 
 /// 编码回调要用的东西；回调在 VideoToolbox 自己的线程上跑
 struct Context {
     pending: Mutex<Option<Reply>>,
+    /// 实际在用的格式：取解码配置时 H.264 和 H.265 不一样
+    codec: VideoCodec,
 }
 
 pub struct Encoder {
@@ -64,8 +68,20 @@ fn num(v: i32) -> CFRetained<CFNumber> {
 }
 
 impl Encoder {
-    fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self> {
-        let ctx = Box::into_raw(Box::new(Context { pending: Mutex::new(None) }));
+    /// 要 H.265 时先开 HEVC 硬件编码器（Apple 芯片、带 T2 的 Mac 才有），开不了就退回 H.264
+    fn new(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec) -> Result<Self> {
+        if codec == VideoCodec::H265 {
+            match Self::open(width, height, fps, bitrate, VideoCodec::H265) {
+                Ok(enc) => return Ok(enc),
+                Err(e) => warn!("开不了 H.265 硬件编码器，改用 H.264：{e:#}"),
+            }
+        }
+        Self::open(width, height, fps, bitrate, VideoCodec::H264)
+    }
+
+    fn open(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec) -> Result<Self> {
+        let hevc = codec == VideoCodec::H265;
+        let ctx = Box::into_raw(Box::new(Context { pending: Mutex::new(None), codec }));
         let t = CFBoolean::new(true);
         // 先要硬件编码器 + 低延迟码率控制；老机器不支持时退到“能用硬件就用”
         let specs: [Vec<(&CFString, &CFBoolean)>; 3] = unsafe {
@@ -80,7 +96,9 @@ impl Encoder {
         };
         let mut created = None;
         let mut last = 0;
-        for (n, spec) in specs.iter().enumerate() {
+        // H.265 只用硬件编码器（前两种）：软件编 H.265 太慢，不如退回 H.264
+        let tries = if hevc { &specs[..2] } else { &specs[..] };
+        for (n, spec) in tries.iter().enumerate() {
             let keys: Vec<&CFString> = spec.iter().map(|(k, _)| *k).collect();
             let values: Vec<&CFBoolean> = spec.iter().map(|(_, v)| *v).collect();
             let dict = CFDictionary::from_slices(&keys, &values);
@@ -90,7 +108,7 @@ impl Encoder {
                     None,
                     width as i32,
                     height as i32,
-                    CODEC_H264,
+                    if hevc { CODEC_HEVC } else { CODEC_H264 },
                     Some(dict.as_opaque()),
                     None,
                     None,
@@ -112,15 +130,20 @@ impl Encoder {
         }
         let Some((session, low_latency)) = created else {
             drop(unsafe { Box::from_raw(ctx) });
-            bail!("开不了 H.264 硬件编码器（{last}）");
+            bail!("开不了 {} 硬件编码器（{last}）", if hevc { "H.265" } else { "H.264" });
         };
+
 
         unsafe {
             set(&session, kVTCompressionPropertyKey_RealTime, CFBoolean::new(true));
             set(&session, kVTCompressionPropertyKey_AllowFrameReordering, CFBoolean::new(false));
-            let profile = if low_latency { kVTProfileLevel_H264_ConstrainedHigh_AutoLevel } else { kVTProfileLevel_H264_High_AutoLevel };
-            if set(&session, kVTCompressionPropertyKey_ProfileLevel, profile) != 0 {
-                set(&session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);
+            if hevc {
+                set(&session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel);
+            } else {
+                let profile = if low_latency { kVTProfileLevel_H264_ConstrainedHigh_AutoLevel } else { kVTProfileLevel_H264_High_AutoLevel };
+                if set(&session, kVTCompressionPropertyKey_ProfileLevel, profile) != 0 {
+                    set(&session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);
+                }
             }
             // 关键帧只在要的时候出（刚开始、解码出错、恢复直连）：可靠传输不会丢帧，定期关键帧只会白占带宽
             set(&session, kVTCompressionPropertyKey_MaxKeyFrameInterval, &num(i32::MAX / 2));
@@ -135,7 +158,7 @@ impl Encoder {
         let mut enc = Encoder { session, ctx, width, height, bitrate: 0 };
         enc.set_bitrate(bitrate);
         unsafe { enc.session.prepare_to_encode_frames() };
-        info!(width, height, fps, bitrate, low_latency, "H.264 硬件编码器已就绪");
+        info!(width, height, fps, bitrate, low_latency, codec = ?codec, "硬件编码器已就绪");
         Ok(enc)
     }
 
@@ -155,12 +178,12 @@ impl Encoder {
     }
 
     /// 把一帧送进编码器（尺寸变了就重建），返回等结果的接收端。只在一个线程上调
-    pub fn encode(slot: &mut Option<Encoder>, image: &CVImageBuffer, pts: CMTime, fps: u32, bitrate: u32, key: bool) -> Result<oneshot::Receiver<Result<Option<EncodedFrame>>>> {
+    pub fn encode(slot: &mut Option<Encoder>, image: &CVImageBuffer, pts: CMTime, fps: u32, bitrate: u32, key: bool, codec: VideoCodec) -> Result<oneshot::Receiver<Result<Option<EncodedFrame>>>> {
         let (w, h) = (CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image));
         let mut key = key;
         if slot.as_ref().is_none_or(|e| e.width != w || e.height != h) {
             *slot = None;
-            *slot = Some(Encoder::new(w, h, fps, bitrate)?);
+            *slot = Some(Encoder::new(w, h, fps, bitrate, codec)?);
             key = true;
         }
         let enc = slot.as_mut().unwrap();
@@ -202,7 +225,7 @@ unsafe extern "C-unwind" fn on_encoded(refcon: *mut c_void, _frame: *mut c_void,
     let result = if status != 0 {
         Err(anyhow!("硬件编码失败（{status}）"))
     } else if let Some(sample) = unsafe { sample.as_ref() } {
-        extract(sample).map(Some)
+        extract(sample, ctx.codec).map(Some)
     } else {
         Ok(None)
     };
@@ -231,7 +254,16 @@ fn parameter_set(fd: &CMFormatDescription, index: usize) -> Result<Vec<u8>> {
     Ok(unsafe { std::slice::from_raw_parts(p, len) }.to_vec())
 }
 
-fn extract(sample: &CMSampleBuffer) -> Result<EncodedFrame> {
+/// H.265 的解码配置：系统的格式描述里直接带着 hvcC
+fn hvcc(fd: &CMFormatDescription) -> Result<Vec<u8>> {
+    let atoms = unsafe { fd.extension(kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms) }
+        .ok_or_else(|| anyhow!("H.265 关键帧没有 hvcC"))?;
+    let atoms: CFRetained<CFDictionary<CFString, CFData>> = unsafe { CFRetained::cast_unchecked(atoms) };
+    let data = atoms.get(&CFString::from_static_str("hvcC")).ok_or_else(|| anyhow!("H.265 关键帧没有 hvcC"))?;
+    Ok(data.to_vec())
+}
+
+fn extract(sample: &CMSampleBuffer, codec: VideoCodec) -> Result<EncodedFrame> {
     let block = unsafe { sample.data_buffer() }.ok_or_else(|| anyhow!("编码结果是空的"))?;
     let len = unsafe { block.data_length() };
     let mut data = vec![0u8; len];
@@ -242,10 +274,15 @@ fn extract(sample: &CMSampleBuffer) -> Result<EncodedFrame> {
     let key = is_key(sample);
     let config = if key {
         let fd = unsafe { sample.format_description() }.ok_or_else(|| anyhow!("关键帧没有格式描述"))?;
-        let sps = parameter_set(&fd, 0)?;
-        let pps = parameter_set(&fd, 1)?;
         let dims = unsafe { CMVideoFormatDescriptionGetDimensions(&fd) };
-        Some(avcc_config(&sps, &pps, dims.width as u32, dims.height as u32)?)
+        Some(match codec {
+            VideoCodec::H265 => hevc_config(&hvcc(&fd)?, dims.width as u32, dims.height as u32)?,
+            VideoCodec::H264 => {
+                let sps = parameter_set(&fd, 0)?;
+                let pps = parameter_set(&fd, 1)?;
+                avcc_config(&sps, &pps, dims.width as u32, dims.height as u32)?
+            }
+        })
     } else {
         None
     };

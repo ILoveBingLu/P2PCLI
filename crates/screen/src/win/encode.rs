@@ -16,6 +16,7 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{Interface, GUID};
+use p2pcli_core::screen::VideoCodec;
 
 const ME_NEED_INPUT: u32 = 601; // METransformNeedInput
 const ME_HAVE_OUTPUT: u32 = 602; // METransformHaveOutput
@@ -33,6 +34,8 @@ pub struct Encoder {
     provides_samples: bool,
     out_size: u32,
     pub hardware: bool,
+    /// 实际在用的格式
+    pub format: VideoCodec,
     pub width: u32,
     pub height: u32,
     fps: u32,
@@ -65,9 +68,16 @@ fn pack(hi: u32, lo: u32) -> u64 {
 }
 
 /// 能用的 H.264 编码器，硬件的在前
-fn candidates(hardware: bool) -> Result<Vec<IMFActivate>> {
+fn subtype(codec: VideoCodec) -> GUID {
+    match codec {
+        VideoCodec::H264 => MFVideoFormat_H264,
+        VideoCodec::H265 => MFVideoFormat_HEVC,
+    }
+}
+
+fn candidates(hardware: bool, codec: VideoCodec) -> Result<Vec<IMFActivate>> {
     let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_NV12 };
-    let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_H264 };
+    let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: subtype(codec) };
     let flags = if hardware { MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER } else { MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER };
     let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
     let mut count = 0u32;
@@ -85,13 +95,27 @@ fn candidates(hardware: bool) -> Result<Vec<IMFActivate>> {
 }
 
 impl Encoder {
-    /// 先试硬件编码器，都不行再用软件的
-    pub fn new(device: &ID3D11Device, manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32) -> Result<Self> {
+    /// 要 H.265 时先找显卡的 H.265 编码器（只用硬件的），没有就退回 H.264；
+    /// H.264 先试硬件编码器，都不行再用软件的
+    pub fn new(device: &ID3D11Device, manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32, codec: VideoCodec) -> Result<Self> {
         unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
+        if codec == VideoCodec::H265 {
+            for activate in candidates(true, VideoCodec::H265).unwrap_or_default() {
+                let name = friendly_name(&activate);
+                match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H265) {
+                    Ok(enc) => {
+                        info!(encoder = %name, width, height, fps, bitrate, "H.265 硬件编码器已就绪");
+                        return Ok(enc);
+                    }
+                    Err(e) => warn!(encoder = %name, "这个 H.265 硬件编码器用不了：{e:#}"),
+                }
+            }
+            warn!("没有可用的 H.265 硬件编码器，改用 H.264");
+        }
         let mut last_err = None;
-        for activate in candidates(true).unwrap_or_default() {
+        for activate in candidates(true, VideoCodec::H264).unwrap_or_default() {
             let name = friendly_name(&activate);
-            match Self::open(&activate, Some(manager), width, height, fps, bitrate) {
+            match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H264) {
                 Ok(enc) => {
                     info!(encoder = %name, width, height, fps, bitrate, "H.264 硬件编码器已就绪");
                     return Ok(enc);
@@ -102,8 +126,8 @@ impl Encoder {
                 }
             }
         }
-        for activate in candidates(false)? {
-            match Self::open(&activate, None, width, height, fps, bitrate) {
+        for activate in candidates(false, VideoCodec::H264)? {
+            match Self::open(&activate, None, width, height, fps, bitrate, VideoCodec::H264) {
                 Ok(mut enc) => {
                     warn!(width, height, "没有可用的硬件编码器，改用系统的软件编码器");
                     enc.staging = Some(staging_texture(device, width, height)?);
@@ -115,7 +139,7 @@ impl Encoder {
         Err(last_err.unwrap_or_else(|| anyhow!("这台电脑上没有 H.264 编码器")))
     }
 
-    fn open(activate: &IMFActivate, manager: Option<&IMFDXGIDeviceManager>, width: u32, height: u32, fps: u32, bitrate: u32) -> Result<Self> {
+    fn open(activate: &IMFActivate, manager: Option<&IMFDXGIDeviceManager>, width: u32, height: u32, fps: u32, bitrate: u32, format: VideoCodec) -> Result<Self> {
         let transform: IMFTransform = unsafe { activate.ActivateObject()? };
         let hardware = manager.is_some();
         if hardware {
@@ -144,13 +168,17 @@ impl Encoder {
         let out = unsafe { MFCreateMediaType()? };
         unsafe {
             out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+            out.SetGUID(&MF_MT_SUBTYPE, &subtype(format))?;
             out.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
             out.SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))?;
             out.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1))?;
             out.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;
             out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-            out.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
+            let profile = match format {
+                VideoCodec::H264 => eAVEncH264VProfile_High.0 as u32,
+                VideoCodec::H265 => eAVEncH265VProfile_Main_420_8.0 as u32,
+            };
+            out.SetUINT32(&MF_MT_MPEG2_PROFILE, profile)?;
             out.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
             out.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
             // 电脑屏幕用的是 sRGB 曲线，不是电视的 BT.709 曲线：标错了解码端的明暗会不一样
@@ -215,6 +243,7 @@ impl Encoder {
             provides_samples,
             out_size,
             hardware,
+            format,
             width,
             height,
             fps,

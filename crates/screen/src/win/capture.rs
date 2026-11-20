@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureOptions, EncodedFrame, ScreenCapture, annexb_to_avcc, avcc_config};
+use p2pcli_core::screen::{CaptureOptions, EncodedFrame, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config, hvcc_config};
 use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
 use windows::Foundation::TypedEventHandler;
@@ -161,7 +161,8 @@ struct State {
     size: SizeInt32,
     converter: Option<Converter>,
     encoder: Option<Encoder>,
-    sps_pps: Option<(Vec<u8>, Vec<u8>)>,
+    /// 最近一次见到的参数集：(VPS（只有 H.265 有）, SPS, PPS)
+    sps_pps: Option<(Option<Vec<u8>>, Vec<u8>, Vec<u8>)>,
 }
 
 impl State {
@@ -318,7 +319,7 @@ impl State {
 
             let mut key = want_key.swap(false, Ordering::Relaxed);
             if self.encoder.is_none() {
-                let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate.load(Ordering::Relaxed))?;
+                let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate.load(Ordering::Relaxed), opts.codec)?;
                 debug!(hardware = enc.hardware, "编码器已换新");
                 self.encoder = Some(enc);
                 self.sps_pps = None;
@@ -342,20 +343,29 @@ impl State {
                     return Err(e);
                 }
             };
-            let avcc = annexb_to_avcc(&data);
-            if let (Some(sps), Some(pps)) = (&avcc.sps, &avcc.pps) {
-                self.sps_pps = Some((sps.clone(), pps.clone()));
+            let codec = enc.format;
+            let avcc = annexb_to_lengths(&data, codec);
+            let complete = |vps: &Option<Vec<u8>>| codec == VideoCodec::H264 || vps.is_some();
+            if let (Some(sps), Some(pps)) = (&avcc.sps, &avcc.pps)
+                && complete(&avcc.vps)
+            {
+                self.sps_pps = Some((avcc.vps.clone(), sps.clone(), pps.clone()));
             } else if self.sps_pps.is_none()
                 && let Some(header) = enc.sequence_header()
             {
-                let h = annexb_to_avcc(header);
-                if let (Some(sps), Some(pps)) = (h.sps, h.pps) {
-                    self.sps_pps = Some((sps, pps));
+                let h = annexb_to_lengths(header, codec);
+                if let (Some(sps), Some(pps)) = (h.sps, h.pps)
+                    && complete(&h.vps)
+                {
+                    self.sps_pps = Some((h.vps, sps, pps));
                 }
             }
             let config = if avcc.key {
-                let (sps, pps) = self.sps_pps.as_ref().ok_or_else(|| anyhow!("编码器没给出 H.264 参数集"))?;
-                Some(avcc_config(sps, pps, enc.width, enc.height)?)
+                let (vps, sps, pps) = self.sps_pps.as_ref().ok_or_else(|| anyhow!("编码器没给出参数集"))?;
+                Some(match (codec, vps) {
+                    (VideoCodec::H265, Some(vps)) => hvcc_config(vps, sps, pps, enc.width, enc.height)?,
+                    _ => avcc_config(sps, pps, enc.width, enc.height)?,
+                })
             } else {
                 None
             };

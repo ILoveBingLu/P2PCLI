@@ -10,7 +10,7 @@ async fn main() -> anyhow::Result<()> {
     let backend = p2pcli_screen::backend().expect("这个系统不支持");
     let display = backend.displays()?.into_iter().find(|d| d.primary).unwrap();
     let q = Quality::Balanced;
-    let cap = backend.start(CaptureOptions { display: display.id, max_long_edge: q.max_long_edge(), fps: q.fps(), bitrate: q.start_bitrate(), show_cursor: true })?;
+    let cap = backend.start(CaptureOptions { display: display.id, max_long_edge: q.max_long_edge(), fps: q.fps(), bitrate: q.start_bitrate(), show_cursor: true, codec: Default::default() })?;
     let b64 = |d: &[u8]| base64::engine::general_purpose::STANDARD.encode(d);
     let mut config = None;
     let mut frames = Vec::new();

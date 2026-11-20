@@ -318,6 +318,8 @@ export interface ScreenSettings {
 }
 
 export type ScreenQuality = "sharp" | "balanced" | "smooth";
+/** 视频编码格式：两边都支持 H.265 就用它（同样画质省三到五成码率），不然用 H.264 */
+export type ScreenCodec = "h264" | "h265";
 
 export interface ScreenDisplay {
   id: string;
@@ -679,7 +681,7 @@ export const api = {
   screenConnection: (endpointId: string, current: number | null) => invoke<number | null>("screen_connection", { endpointId, current }),
   screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
   /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
-  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, onEvent: (ev: ScreenStreamEvent) => void) => {
+  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], onEvent: (ev: ScreenStreamEvent) => void) => {
     const events = new Channel<ArrayBuffer>();
     const decoder = new TextDecoder();
     events.onmessage = (raw) => {
@@ -691,7 +693,7 @@ export const api = {
         onEvent(JSON.parse(decoder.decode(buf.subarray(1))) as ScreenStreamEvent);
       }
     };
-    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, events });
+    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, events });
   },
   screenSend: (screenId: number, msgs: ScreenViewerMsg[]) => invoke<void>("screen_send", { screenId, msgs }),
   screenClose: (screenId: number) => invoke<void>("screen_close", { screenId }),

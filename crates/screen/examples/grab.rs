@@ -11,6 +11,8 @@ async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let out = args.next().unwrap_or_else(|| "grab.h264".into());
     let frames: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(30);
+    // 第三个参数写 h265 就请编码器用 H.265
+    let codec = if args.next().as_deref() == Some("h265") { p2pcli_core::screen::VideoCodec::H265 } else { p2pcli_core::screen::VideoCodec::H264 };
     let backend = p2pcli_screen::backend().expect("这个系统不支持");
     let displays = backend.displays()?;
     println!("屏幕：{displays:?}");
@@ -18,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     backend.check_capture()?;
     let main = displays.iter().find(|d| d.primary).unwrap();
     let q = Quality::Balanced;
-    let cap = backend.start(CaptureOptions { display: main.id.clone(), max_long_edge: q.max_long_edge(), fps: q.fps(), bitrate: q.start_bitrate(), show_cursor: true })?;
+    let cap = backend.start(CaptureOptions { display: main.id.clone(), max_long_edge: q.max_long_edge(), fps: q.fps(), bitrate: q.start_bitrate(), show_cursor: true, codec })?;
     let mut file = std::fs::File::create(&out)?;
     let start = Instant::now();
     let mut total = 0;
@@ -32,11 +34,25 @@ async fn main() -> anyhow::Result<()> {
         if let Some(c) = &f.config {
             use base64::Engine as _;
             let rec = base64::engine::general_purpose::STANDARD.decode(&c.description)?;
-            let sps_len = u16::from_be_bytes([rec[6], rec[7]]) as usize;
-            let sps = &rec[8..8 + sps_len];
-            let pps_len = u16::from_be_bytes([rec[9 + sps_len], rec[10 + sps_len]]) as usize;
-            let pps = &rec[11 + sps_len..11 + sps_len + pps_len];
-            for p in [sps, pps] { file.write_all(&[0, 0, 0, 1])?; file.write_all(p)?; }
+            let mut sets: Vec<&[u8]> = Vec::new();
+            if c.codec.starts_with("hvc1") {
+                let mut i = 23;
+                for _ in 0..rec[22] {
+                    let n = u16::from_be_bytes([rec[i + 1], rec[i + 2]]) as usize;
+                    i += 3;
+                    for _ in 0..n {
+                        let len = u16::from_be_bytes([rec[i], rec[i + 1]]) as usize;
+                        sets.push(&rec[i + 2..i + 2 + len]);
+                        i += 2 + len;
+                    }
+                }
+            } else {
+                let sps_len = u16::from_be_bytes([rec[6], rec[7]]) as usize;
+                let pps_len = u16::from_be_bytes([rec[9 + sps_len], rec[10 + sps_len]]) as usize;
+                sets.push(&rec[8..8 + sps_len]);
+                sets.push(&rec[11 + sps_len..11 + sps_len + pps_len]);
+            }
+            for p in sets { file.write_all(&[0, 0, 0, 1])?; file.write_all(p)?; }
         }
         let mut d = &f.data[..];
         while d.len() >= 4 {
