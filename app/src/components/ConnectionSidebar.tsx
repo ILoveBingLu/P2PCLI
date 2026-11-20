@@ -12,7 +12,7 @@ import { DeviceSessions, type SidebarTab } from "./DeviceSessions";
 import { RemarkDialog } from "./RemarkDialog";
 import { useRemarks } from "./Remarks";
 import { useContextMenu, type MenuAction } from "./ContextMenu";
-import type { SessionTarget } from "./RemoteSessions";
+import { canBeControlled, openRemoteControl, type SessionTarget } from "./RemoteSessions";
 import { CollaborationAnchor, CollaborationSidebarStatus } from "./CollaborationPorts";
 import { t } from "@/i18n";
 
@@ -145,6 +145,14 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       if (picked.length) await api.sendFiles(endpointId, picked);
     } catch (error) { toast.error(t("发不了：{{error}}", { error: String(error) })); }
   };
+  /** 远程控制：没连上就先连，画面窗口等连上了自己打开 */
+  const controlAction = (device: { endpoint_id: string; name: string; platform: string }, target: SessionTarget | undefined, connect: () => void, disabled: boolean): MenuAction[] =>
+    canBeControlled(device.platform)
+      ? [{ id: "screen", label: t("远程控制"), icon: <Monitor className="size-4" />, disabled, onAction: () => {
+          if (!target) connect();
+          openRemoteControl({ endpoint_id: device.endpoint_id, name: deviceLabel(device), platform: device.platform });
+        } }]
+      : [];
   const sendActions = (endpointId: string, disabled: boolean): MenuAction[] => [
     { id: "send-files", label: t("发送文件…"), icon: <FileUp className="size-4" />, disabled, separated: true, onAction: () => void sendTo(endpointId, false) },
     { id: "send-folder", label: t("发送文件夹…"), icon: <FolderUp className="size-4" />, disabled, onAction: () => void sendTo(endpointId, true) },
@@ -173,6 +181,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         ];
       actions = [
         ...actions,
+        ...controlAction(device, target, () => connectDevice(device), !target && (busy || offline)),
         { id: "remark", label: deviceRemark(device).trim() ? t("修改备注") : t("添加备注"), icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }) },
         ...sendActions(endpointId, !target && offline),
         { id: "copy", label: t("复制设备码"), icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
@@ -191,6 +200,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       actions = target
         ? [{ id: "new", label: t("新建会话"), icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
         : [{ id: "connect", label: t("连接"), icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
+      actions.push(...controlAction(device, target, () => onConnectLan(device), !target && (busy || !device.online)));
       actions.push({
           id: "remark",
           label: deviceRemark(device) ? t("修改备注") : t("添加备注"),

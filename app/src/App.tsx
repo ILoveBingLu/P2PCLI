@@ -9,7 +9,6 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   FileCode2,
-  Monitor,
   FileUp,
   LoaderCircle,
   History,
@@ -114,8 +113,6 @@ export default function App() {
   const [requests, setRequests] = useState<IncomingRequest[]>([]);
   const [fileRequests, setFileRequests] = useState<FileRequest[]>([]);
   const [screenRequests, setScreenRequests] = useState<ScreenRequest[]>([]);
-  /** 各条连接的对方能不能给看画面 */
-  const [screenSupport, setScreenSupport] = useState<Record<number, boolean>>({});
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
   // 认出命令行 AI 时终端下面的输入框：收没收起来记在本机，每个标签的草稿分开存
@@ -241,12 +238,6 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [forwards.length, refreshForwards]);
   const isLocalTab = (tab: Tab) => tab.connId === ov?.local?.conn_id;
-  // 对方支不支持远程画面：每条连接问一次
-  const activeConn = activeTab && activeTab.state === "open" && !isLocalTab(activeTab) ? activeTab.connId : null;
-  useEffect(() => {
-    if (activeConn == null || activeConn in screenSupport) return;
-    void api.remoteSupportsScreen(activeConn).then((ok) => setScreenSupport((m) => ({ ...m, [activeConn]: ok }))).catch(() => {});
-  }, [activeConn, screenSupport]);
   /** 终端里 ⌘/Ctrl+点击了 http://localhost:5173/ 这种：对方电脑上的端口先转发到本机，再用浏览器打开 */
   const openUrlFromTerminal = async (tab: Tab, url: FoundUrl) => {
     try {
@@ -837,6 +828,7 @@ export default function App() {
           <RemoteSessions
             key={sessionTarget.connId}
             target={sessionTarget}
+            local={sessionTarget.connId === ov?.local?.conn_id}
             snapshot={liveSessions[sessionTarget.connId]}
             onRefresh={() => setSessionsRev((rev) => rev + 1)}
             onChangeSessions={(sessions) => updateLiveSessions(sessionTarget.connId, sessions)}
@@ -1036,13 +1028,6 @@ export default function App() {
                     title={t("在单独的窗口里打开代码编辑器，直接编辑这台设备上的文件")} onClick={() => openEditor(activeTab)}>
                     <FileCode2 />
                   </Button>
-                  {!isLocalTab(activeTab) && screenSupport[activeTab.connId] && (
-                    <Button variant="ghost" size="icon-sm" className="terminal-dock-button" aria-label={t("远程画面")}
-                      title={t("在单独的窗口里查看和操作这台设备的屏幕（只走直连）")}
-                      onClick={() => void api.openScreenWindow(activeTab.info.endpoint_id, activeTab.info.name, activeTab.info.platform).catch((e) => toast.error(String(e)))}>
-                      <Monitor />
-                    </Button>
-                  )}
                   {!isLocalTab(activeTab) && (
                     <PortForwards connId={activeTab.connId} deviceName={activeTab.info.name}
                       forwards={forwards.filter((f) => f.conn_id === activeTab.connId)} onChanged={refreshForwards} />

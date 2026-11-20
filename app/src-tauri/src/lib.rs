@@ -291,6 +291,8 @@ struct AppState {
     screens: Mutex<screen::ScreenSenders>,
     /// 远程画面窗口：窗口标签 → 哪台设备
     screen_windows: Mutex<screen::ScreenWindows>,
+    /// 主窗口已经不要、但画面还在用的连接：画面关了再断
+    screen_held: Mutex<std::collections::HashSet<u64>>,
     next: AtomicU64,
     /// 本机自己那条常驻连接的编号：启动时建好，一直在 remotes 里，侧边栏的“本机”用它开终端、读会话
     local_conn: AtomicU64,
@@ -935,6 +937,14 @@ fn disconnect(state: State<'_, AppState>, conn_id: u64) {
     if conn_id == state.local_conn.load(Ordering::Relaxed) {
         return;
     }
+    // 远程画面还开着：等画面关了再断
+    if screen::hold_disconnect(&state, conn_id) {
+        return;
+    }
+    close_connection(&state, conn_id);
+}
+
+fn close_connection(state: &AppState, conn_id: u64) {
     if let Some(r) = state.remotes.lock().unwrap().remove(&conn_id) {
         r.close();
     }
@@ -1604,6 +1614,7 @@ pub fn run() {
                 editor_windows: Mutex::new(HashMap::new()),
                 screens: Mutex::new(HashMap::new()),
                 screen_windows: Mutex::new(HashMap::new()),
+                screen_held: Mutex::new(Default::default()),
                 next: AtomicU64::new(1),
                 local_conn: AtomicU64::new(0),
             });
@@ -1764,6 +1775,7 @@ pub fn run() {
             screen::screen_open,
             screen::screen_send,
             screen::screen_close,
+            screen::screen_connection,
             overview,
             collab_request,
             collab_deliveries,

@@ -260,7 +260,7 @@ pub(crate) async fn screen_open(
     let (started, mut input, mut output) = remote.open_screen(open).await.map_err(|e| format!("{e:#}"))?;
     let screen_id = state.next();
     let (tx, mut rx) = mpsc::unbounded_channel::<ViewerMsg>();
-    state.screens.lock().unwrap().insert(screen_id, (window.label().to_string(), tx.clone()));
+    state.screens.lock().unwrap().insert(screen_id, ScreenEntry { window: window.label().to_string(), conn_id, tx: tx.clone() });
     info!(conn_id, screen_id, control = started.control, "开始看对方画面");
 
     // 发：确认、键鼠、换屏
@@ -313,7 +313,9 @@ pub(crate) async fn screen_open(
             }
         };
         let _ = events.send(json_event(&serde_json::json!({ "t": "closed", "reason": reason })));
-        app.state::<AppState>().screens.lock().unwrap().remove(&screen_id);
+        let state = app.state::<AppState>();
+        state.screens.lock().unwrap().remove(&screen_id);
+        release_held(&state, conn_id);
         info!(screen_id, "不再看对方画面");
     });
     Ok(ScreenOpened { screen_id, started })
@@ -322,7 +324,7 @@ pub(crate) async fn screen_open(
 /// 窗口发来的消息：键鼠、要关键帧、换屏、换画质
 #[tauri::command]
 pub(crate) fn screen_send(state: State<'_, AppState>, screen_id: u64, msgs: Vec<ViewerMsg>) {
-    if let Some((_, tx)) = state.screens.lock().unwrap().get(&screen_id) {
+    if let Some(ScreenEntry { tx, .. }) = state.screens.lock().unwrap().get(&screen_id) {
         for m in msgs {
             let _ = tx.send(m);
         }
@@ -343,12 +345,55 @@ pub(crate) fn attach_backend(node: &p2pcli_core::node::Node) {
     }
 }
 
-/// 正在看的画面：编号 → (哪个窗口, 发给对方的消息)。窗口关了就按窗口名把它的画面都停掉
-pub(crate) type ScreenSenders = std::collections::HashMap<u64, (String, mpsc::UnboundedSender<ViewerMsg>)>;
+/// 一路正在看的画面
+pub(crate) struct ScreenEntry {
+    /// 哪个窗口在看：窗口关了就按窗口名停掉
+    window: String,
+    /// 走的哪条连接：画面开着时这条连接不断
+    conn_id: u64,
+    /// 发给对方的消息（确认、键鼠）；丢掉就停
+    tx: mpsc::UnboundedSender<ViewerMsg>,
+}
+
+pub(crate) type ScreenSenders = std::collections::HashMap<u64, ScreenEntry>;
 
 /// 画面窗口关掉了：丢掉它的发送端，对方读到流结束就停止抓屏
 pub(crate) fn window_closed(state: &AppState, label: &str) {
     state.screen_windows.lock().unwrap().remove(label);
-    state.screens.lock().unwrap().retain(|_, (owner, _)| owner != label);
+    state.screens.lock().unwrap().retain(|_, e| e.window != label);
+}
+
+/// 主窗口要断开这条连接时，画面还在用就先不断，等画面关了再断。
+/// 远程控制从设备进，不依赖终端标签：关掉标签、离开设备页都不影响正在看的画面
+pub(crate) fn hold_disconnect(state: &AppState, conn_id: u64) -> bool {
+    let in_use = state.screens.lock().unwrap().values().any(|e| e.conn_id == conn_id);
+    if in_use {
+        state.screen_held.lock().unwrap().insert(conn_id);
+    }
+    in_use
+}
+
+/// 一路画面结束了：这条连接主窗口早就不要了、也没有别的画面在用，就真的断开
+fn release_held(state: &AppState, conn_id: u64) {
+    if state.screens.lock().unwrap().values().any(|e| e.conn_id == conn_id) {
+        return;
+    }
+    if state.screen_held.lock().unwrap().remove(&conn_id) {
+        info!(conn_id, "画面关了，断开主窗口早先要断的连接");
+        crate::close_connection(state, conn_id);
+    }
+}
+
+/// 画面窗口用哪条连接：已经在用的那条还活着就一直用它（同一台设备后来又连了新的也不换，
+/// 免得画面重开、对方再点一次同意）；断了才换成这台设备现在最新的一条
+#[tauri::command]
+pub(crate) fn screen_connection(state: State<'_, AppState>, endpoint_id: String, current: Option<u64>) -> Option<u64> {
+    let remotes = state.remotes.lock().unwrap();
+    if let Some(id) = current
+        && remotes.get(&id).is_some_and(|r| r.info.endpoint_id == endpoint_id && !r.is_closed())
+    {
+        return Some(id);
+    }
+    remotes.iter().filter(|(_, r)| r.info.endpoint_id == endpoint_id && !r.is_closed()).map(|(id, _)| *id).max()
 }
 pub(crate) type ScreenWindows = std::collections::HashMap<String, ScreenWindow>;

@@ -1211,7 +1211,6 @@
   "在主窗口里连上这台设备后，画面会自动打开": "The screen opens automatically once this device is connected in the main window",
   "在单独的窗口里查看和操作这台设备的屏幕（只走直连）": "View and control this device's screen in a separate window (direct connections only)",
   "在系统设置里打开 P2PCLI 后，录屏权限要重新打开 P2PCLI 才生效。": "After turning on P2PCLI in System Settings, reopen P2PCLI for screen recording to take effect.",
-  "在终端右侧的悬浮条里点显示器图标，就能在单独的窗口里查看和操作对方的屏幕。抓屏、编码、解码都用两边电脑的显卡，几乎不占 CPU。画面只走直连（IPv6、IPv4 打洞、局域网），连接落到中继上时画面暂停，终端照常能用。": "Click the monitor icon in the toolbar to the right of the terminal to view and control the other computer's screen in a separate window. Capture, encoding and decoding all run on the GPUs of both computers and barely use the CPU. The screen only travels over direct connections (IPv6, IPv4 hole punching, LAN). When the connection falls back to a relay the screen pauses, and the terminal keeps working.",
   "均衡": "Balanced",
   "对方会看到这台电脑屏幕上的所有内容。只在你认识这台设备时允许，随时可以在标题栏右边停止。": "They will see everything on this computer's screen. Only allow devices you recognize. You can stop at any time from the right side of the title bar.",
   "对方只允许查看": "View only on the other side",
@@ -1244,5 +1243,8 @@
   "远程画面只走直连，中继只给终端用。终端照常能用，直连恢复后画面自动接着放": "Remote screen only uses direct connections; relays are reserved for terminals. The terminal keeps working, and the screen resumes when a direct connection is back.",
   "连接现在走的是中继，画面暂停了": "The connection is going through a relay, so the screen is paused",
   "退出全屏": "Exit full screen",
-  "重新打开画面": "Reopen screen"
+  "重新打开画面": "Reopen screen",
+  "远程控制": "Remote control",
+  "对方的 P2PCLI 版本较旧，要更新后才能远程控制": "The other device's P2PCLI is outdated. Update it to use remote control.",
+  "点左侧的设备，在右边设备页点“远程控制”（或者在设备上右键选“远程控制”），就能在单独的窗口里查看和操作对方的屏幕。抓屏、编码、解码都用两边电脑的显卡，几乎不占 CPU。画面只走直连（IPv6、IPv4 打洞、局域网），连接落到中继上时画面暂停，终端照常能用。": "Click a device on the left and choose Remote control on its device page (or right-click the device and choose Remote control) to view and control its screen in a separate window. Capture, encoding and decoding all run on the GPUs of both computers and barely use the CPU. The screen only travels over direct connections (IPv6, IPv4 hole punching, LAN). When the connection falls back to a relay the screen pauses, and the terminal keeps working."
 }

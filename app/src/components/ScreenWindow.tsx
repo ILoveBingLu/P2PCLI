@@ -87,7 +87,12 @@ export default function ScreenWindow() {
   useEffect(() => {
     if (!device) return;
     let stop = false;
-    const check = () => api.editorConnection(device.endpointId).then((id) => { if (!stop) setConnId(id ?? null); }).catch(() => {});
+    let current: number | null = null;
+    const check = () => api.screenConnection(device.endpointId, current).then((id) => {
+      if (stop) return;
+      current = id ?? null;
+      setConnId(current);
+    }).catch(() => {});
     void check();
     const timer = window.setInterval(check, CONNECTION_POLL_MS);
     const unlisten = listen("remote-closed", () => void check());

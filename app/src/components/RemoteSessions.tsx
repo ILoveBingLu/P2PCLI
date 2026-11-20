@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, ChevronRight, LoaderCircle, Pencil, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2, Unplug } from "lucide-react";
+import { ArrowLeft, ChevronRight, LoaderCircle, Monitor, Pencil, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, Trash2, Unplug } from "lucide-react";
 import { api, pathLabel, platformLabel, type PathInfo, type RemoteInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,8 +17,19 @@ import { t } from "@/i18n";
 
 export interface SessionTarget { connId: number; info: RemoteInfo; code: string | null }
 
-export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onChangeSessions, onOpen, onBack, onEnded }: {
+/** 远程控制：在单独的窗口里看、操作这台设备的屏幕。只有 macOS、Windows 能被控制 */
+export function canBeControlled(platform: string) {
+  return platform === "macos" || platform === "windows";
+}
+
+export function openRemoteControl(info: { endpoint_id: string; name: string; platform: string }) {
+  void api.openScreenWindow(info.endpoint_id, info.name, info.platform).catch((e) => toast.error(String(e)));
+}
+
+export function RemoteSessions({ target, local = false, snapshot, openSessions, onRefresh, onChangeSessions, onOpen, onBack, onEnded }: {
   target: SessionTarget;
+  /** 是本机自己：不显示远程控制 */
+  local?: boolean;
   /** 和侧边栏、底部栏同一份会话快照，名字和 AI 状态才对得上 */
   snapshot: TerminalSessionSnapshot | undefined;
   /** 本机标签里正开着的会话 */
@@ -40,6 +51,15 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
   const remarks = useRemarks();
   const [remarkTarget, setRemarkTarget] = useState<{ id: string; label: string; remark: string } | null>(null);
   const menu = useContextMenu();
+
+  // 对方能不能被远程控制（新版本、macOS 或 Windows）
+  const [screenOk, setScreenOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (local) return;
+    let stop = false;
+    void api.remoteSupportsScreen(target.connId).then((ok) => { if (!stop) setScreenOk(ok); }).catch(() => {});
+    return () => { stop = true; };
+  }, [target.connId, local]);
 
   // 新的一份快照到了，手动刷新就算完成
   useEffect(() => setRefreshing(false), [snapshot]);
@@ -107,6 +127,13 @@ export function RemoteSessions({ target, snapshot, openSessions, onRefresh, onCh
               <span className="remote-device-user">{platformLabel(info.platform)} · {info.user}</span>
             </p>
           </div>
+          {!local && canBeControlled(info.platform) && (
+            <Button variant="outline" size="sm" disabled={screenOk === false}
+              title={screenOk === false ? t("对方的 P2PCLI 版本较旧，要更新后才能远程控制") : t("在单独的窗口里查看和操作这台设备的屏幕（只走直连）")}
+              onClick={() => openRemoteControl(info)}>
+              <Monitor data-icon="inline-start" />{t("远程控制")}
+            </Button>
+          )}
           <Button variant="ghost" size="icon-sm" title={t("刷新会话")} aria-label={t("刷新会话")} disabled={refreshing || sessions === null} onClick={refresh}>
             <RefreshCw className={refreshing ? "animate-spin" : undefined} />
           </Button>

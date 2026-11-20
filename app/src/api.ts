@@ -660,6 +660,8 @@ export const api = {
   /** 远程画面：看别的设备 */
   remoteSupportsScreen: (connId: number) => invoke<boolean>("remote_supports_screen", { connId }),
   openScreenWindow: (endpointId: string, deviceName: string, platform: string) => invoke<void>("open_screen_window", { endpointId, deviceName, platform }),
+  /** 画面窗口用哪条连接：在用的那条还活着就一直用它，断了才换成这台设备最新的一条 */
+  screenConnection: (endpointId: string, current: number | null) => invoke<number | null>("screen_connection", { endpointId, current }),
   screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
   /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
   screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, onEvent: (ev: ScreenStreamEvent) => void) => {
