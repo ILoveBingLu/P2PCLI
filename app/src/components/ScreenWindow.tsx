@@ -11,6 +11,7 @@ import {
   api,
   type ScreenDisplay,
   type ScreenInput,
+  type ScreenCursorShape,
   type ScreenMouseButton,
   type ScreenQuality,
   type ScreenStarted,
@@ -45,6 +46,33 @@ function b64(s: string): Uint8Array {
 
 const BUTTONS: ScreenMouseButton[] = ["left", "middle", "right", "back", "forward"];
 
+/** 对方指针的样子做成本机能用的指针：按屏幕点的大小（Retina 的 2 倍图缩回 1 倍），热点也换算过去 */
+interface CursorLook { url: string; width: number; height: number; hotX: number; hotY: number; css: string }
+
+function cursorLook(s: ScreenCursorShape): CursorLook | null {
+  try {
+    const full = document.createElement("canvas");
+    full.width = s.width;
+    full.height = s.height;
+    full.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(b64(s.rgba)), s.width, s.height), 0, 0);
+    const scale = s.scale > 0 ? s.scale : 1;
+    const width = Math.max(1, Math.round(s.width / scale));
+    const height = Math.max(1, Math.round(s.height / scale));
+    const small = document.createElement("canvas");
+    small.width = width;
+    small.height = height;
+    const ctx = small.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(full, 0, 0, width, height);
+    const url = small.toDataURL("image/png");
+    const hotX = Math.min(width - 1, Math.max(0, Math.round(s.hot_x / scale)));
+    const hotY = Math.min(height - 1, Math.max(0, Math.round(s.hot_y / scale)));
+    return { url, width, height, hotX, hotY, css: `url(${url}) ${hotX} ${hotY}, default` };
+  } catch {
+    return null;
+  }
+}
+
 /** 后端的错误文字带着“relay:”“denied:”这样的前缀，给人看时去掉 */
 function readable(message: string) {
   return message.replace(/^(relay|denied|permission):\s*/, "");
@@ -64,6 +92,21 @@ export default function ScreenWindow() {
   const [fullscreen, setFullscreen] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [hwNote, setHwNote] = useState<string | null>(null);
+  // 对方单独报来的指针：样子和位置。对方是老版本时收不到，那时指针画在画面里
+  const [look, setLook] = useState<CursorLook | null>(null);
+  const [remoteCursor, setRemoteCursor] = useState<{ x: number; y: number; visible: boolean } | null>(null);
+  const lookRef = useRef<CursorLook | null>(null);
+  lookRef.current = look;
+  const remoteCursorRef = useRef(remoteCursor);
+  remoteCursorRef.current = remoteCursor;
+  const insideRef = useRef(false);
+  // 窗口大小变了，只看时画的对方指针要跟着挪
+  const [, setLayoutTick] = useState(0);
+  useEffect(() => {
+    const onResize = () => setLayoutTick((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const screenId = useRef<number | null>(null);
@@ -249,6 +292,8 @@ export default function ScreenWindow() {
         else if (ev.msg.t === "resumed") setPaused(null);
         else if (ev.msg.t === "switched") setDisplay(ev.msg.display);
         else if (ev.msg.t === "stats") setStats({ fps: ev.msg.fps, bitrate: ev.msg.bitrate });
+        else if (ev.msg.t === "cursor") setRemoteCursor({ x: ev.msg.x, y: ev.msg.y, visible: ev.msg.visible });
+        else if (ev.msg.t === "cursor_shape") setLook(cursorLook(ev.msg.shape));
         return;
       case "closed":
         screenId.current = null;
@@ -321,16 +366,29 @@ export default function ScreenWindow() {
     return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)), inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
   }, []);
 
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (!controlRef.current) return;
-    const p = pos(e);
-    if (!p) return;
-    // 在画面外的黑边上显示本机指针，画面里只看对方的
+  /** 画面上的本机指针：操作时换成对方指针的样子（跟手，零延迟）；对方藏起指针时也藏；
+   * 对方是老版本（指针画在画面里）就藏起本机的，免得两个指针；在四周黑边上、只看时用普通箭头 */
+  const applyCursor = useCallback(() => {
     const canvas = canvasRef.current;
-    if (canvas && (canvas.dataset.outside !== undefined) === p.inside) {
-      if (p.inside) delete canvas.dataset.outside;
-      else canvas.dataset.outside = "";
+    if (!canvas) return;
+    let css = "default";
+    if (controlRef.current && insideRef.current) {
+      const remote = remoteCursorRef.current;
+      if (!remote) css = "none";
+      else if (!remote.visible) css = "none";
+      else css = lookRef.current?.css ?? "default";
     }
+    if (canvas.style.cursor !== css) canvas.style.cursor = css;
+  }, []);
+  useEffect(applyCursor, [applyCursor, look, remoteCursor?.visible, control, started]);
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const p = pos(e);
+    if (p && insideRef.current !== p.inside) {
+      insideRef.current = p.inside;
+      applyCursor();
+    }
+    if (!controlRef.current || !p) return;
     pendingMove.current = { k: "move", x: p.x, y: p.y };
     send({ t: "input", ev: pendingMove.current }, true);
   };
@@ -500,7 +558,20 @@ export default function ScreenWindow() {
           onPointerMove={onPointerMove}
           onPointerDown={(e) => onPointerButton(e, true)}
           onPointerUp={(e) => onPointerButton(e, false)}
+          onPointerLeave={() => { insideRef.current = false; applyCursor(); }}
           onContextMenu={(e) => e.preventDefault()} />
+        {live && !(control && canControl) && look && remoteCursor?.visible && (() => {
+          // 只看时按对方报来的位置画它的指针（画面按比例缩放、四周有黑边，要换算）
+          const canvas = canvasRef.current;
+          if (!canvas || !canvas.width) return null;
+          const r = canvas.getBoundingClientRect();
+          const stage = canvas.parentElement!.getBoundingClientRect();
+          const scale = Math.min(r.width / canvas.width, r.height / canvas.height);
+          const w = canvas.width * scale, h = canvas.height * scale;
+          const left = r.left - stage.left + (r.width - w) / 2 + remoteCursor.x * w - look.hotX;
+          const top = r.top - stage.top + (r.height - h) / 2 + remoteCursor.y * h - look.hotY;
+          return <img className="screen-remote-cursor" src={look.url} alt="" width={look.width} height={look.height} style={{ left, top }} />;
+        })()}
         {phase.kind !== "live" && (
           <div className="screen-overlay">
             {phase.kind === "waiting" && <><LoaderCircle className="animate-spin" /><p>{t("正在等这台设备连上…")}</p><p className="screen-overlay-note">{t("在主窗口里连上这台设备后，画面会自动打开")}</p></>}

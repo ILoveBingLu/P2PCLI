@@ -8,6 +8,7 @@ use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCapture
 use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend, ScreenCapture};
 
 mod capture;
+mod cursor;
 pub mod encode;
 mod input;
 
@@ -41,11 +42,12 @@ fn prompt_accessibility() -> bool {
 
 pub struct MacBackend {
     input: Mutex<input::Injector>,
+    cursor: cursor::CursorReader,
 }
 
 impl MacBackend {
     pub fn new() -> Self {
-        MacBackend { input: Mutex::new(input::Injector::new()) }
+        MacBackend { input: Mutex::new(input::Injector::new()), cursor: cursor::CursorReader::default() }
     }
 }
 
@@ -78,5 +80,9 @@ impl ScreenBackend for MacBackend {
 
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
         self.input.lock().unwrap().inject(display, ev)
+    }
+
+    fn cursor(&self, display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
+        self.cursor.read(display)
     }
 }

@@ -39,6 +39,11 @@ impl HostDelegate for Delegate {
 
 #[derive(Default)]
 struct Fake {
+    /// 能单独读指针
+    cursor: bool,
+    /// 抓屏时要不要把指针画进画面
+    show_cursor: Mutex<Option<bool>>,
+    cursor_reads: AtomicUsize,
     produced: AtomicUsize,
     keyframes: AtomicUsize,
     bitrate: AtomicU32,
@@ -66,11 +71,27 @@ impl ScreenBackend for FakeBackend {
     }
     fn start(&self, opts: CaptureOptions) -> Result<Arc<dyn ScreenCapture>> {
         self.0.bitrate.store(opts.bitrate, Ordering::Relaxed);
+        *self.0.show_cursor.lock().unwrap() = Some(opts.show_cursor);
         Ok(Arc::new(FakeCapture { fake: self.0.clone(), key: Arc::new(true.into()) }))
     }
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
         self.0.inputs.lock().unwrap().push((display.to_string(), ev.clone()));
         Ok(())
+    }
+    fn cursor(&self, _display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
+        if !self.0.cursor {
+            return None;
+        }
+        // 指针一直往右挪，样子不变
+        let n = self.0.cursor_reads.fetch_add(1, Ordering::Relaxed);
+        Some(p2pcli_core::screen::CursorInfo {
+            x: (n % 100) as f64 / 100.0,
+            y: 0.5,
+            visible: true,
+            shape: Some(Arc::new(p2pcli_core::screen::CursorShape {
+                id: 7, width: 2, height: 2, hot_x: 0.0, hot_y: 0.0, scale: 1.0, rgba: "AAAAAAAAAAAAAAAAAAAAAA==".into(),
+            })),
+        })
     }
 }
 
@@ -272,5 +293,41 @@ async fn denied_or_unsupported() {
     let (n, _) = pair(ScreenDecision { allow: true, control: true }, None).await;
     assert!(!n.remote.supports_screen());
     assert!(n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Smooth, control: false }).await.is_err());
+    n.shutdown().await;
+}
+
+/// 被连方能单独读指针：画面里不画指针，指针的样子只发一次，位置有变化就发，观看方用本机指针画、跟手
+#[tokio::test(flavor = "multi_thread")]
+async fn cursor_is_sent_separately() {
+    let fake = Arc::new(Fake { cursor: true, ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (_, mut input, mut output) =
+        n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true }).await.unwrap();
+    let (mut shapes, mut moves) = (0, 0);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(800);
+    while let Ok(ev) = tokio::time::timeout_at(deadline, output.next()).await {
+        match ev.unwrap().unwrap() {
+            ScreenEvent::Frame { seq, .. } => input.send(&ViewerMsg::Ack { seq }).await.unwrap(),
+            ScreenEvent::Host(p2pcli_core::screen::HostMsg::CursorShape { shape }) => {
+                assert_eq!(shape.id, 7);
+                shapes += 1;
+            }
+            ScreenEvent::Host(p2pcli_core::screen::HostMsg::Cursor { visible, .. }) => {
+                assert!(visible);
+                moves += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(*fake.show_cursor.lock().unwrap(), Some(false), "能单独读指针时不该把指针画进画面");
+    assert_eq!(shapes, 1, "样子没变只发一次");
+    assert!(moves >= 10, "指针在挪，位置要一直报：只收到 {moves} 次");
+    n.shutdown().await;
+
+    // 读不了指针的被连方：指针照旧画进画面
+    let fake = Arc::new(Fake::default());
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true }).await.unwrap();
+    assert_eq!(*fake.show_cursor.lock().unwrap(), Some(true));
     n.shutdown().await;
 }

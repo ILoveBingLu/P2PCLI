@@ -228,7 +228,8 @@ impl State {
             Ok(())
         }))?;
         let session = pool.CreateCaptureSession(&item)?;
-        let _ = session.SetIsCursorCaptureEnabled(true);
+        // 能单独读指针时不画进画面：观看方用本机的系统指针画，跟手
+        let _ = session.SetIsCursorCaptureEnabled(opts.show_cursor);
         // Windows 11 上去掉黄色边框；老系统不支持就算了
         let _ = session.SetIsBorderRequired(false);
         session.StartCapture().context("开始抓屏失败")?;
