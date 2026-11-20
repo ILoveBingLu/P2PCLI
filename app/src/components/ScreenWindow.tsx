@@ -97,6 +97,11 @@ function cursorLook(s: ScreenCursorShape): CursorLook | null {
   }
 }
 
+/** 传输速率：小于 1 Mbps 时用 kbps，不然一直显示 0.0 */
+function formatMbps(mbps: number) {
+  return mbps < 1 ? `${Math.round(mbps * 1000)} kbps` : `${mbps.toFixed(1)} Mbps`;
+}
+
 /** 后端的错误文字带着“relay:”“denied:”这样的前缀，给人看时去掉 */
 function readable(message: string) {
   return message.replace(/^(relay|denied|permission):\s*/, "");
@@ -221,6 +226,25 @@ export default function ScreenWindow() {
     needKey.current = true;
   }, []);
 
+  // 本机实际收到的：每秒多少帧、多少字节。对方报的码率是编码器的目标（上限），画面不动时实际传得少得多
+  const recvFrames = useRef(0);
+  const recvBytes = useRef(0);
+  const [recv, setRecv] = useState<{ fps: number; mbps: number } | null>(null);
+  useEffect(() => {
+    let last = performance.now();
+    const timer = window.setInterval(() => {
+      const now = performance.now();
+      const secs = (now - last) / 1000;
+      if (screenId.current != null) {
+        setRecv({ fps: Math.round(recvFrames.current / secs), mbps: recvBytes.current * 8 / secs / 1e6 });
+      }
+      recvFrames.current = 0;
+      recvBytes.current = 0;
+      last = now;
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // 诊断：解出了多少帧、出错几次，每 5 秒报给后端记日志
   const decodedCount = useRef(0);
   const errorCount = useRef(0);
@@ -343,6 +367,8 @@ export default function ScreenWindow() {
         });
         return;
       case "frame":
+        recvFrames.current += 1;
+        recvBytes.current += ev.data.byteLength;
         if (configPending.current > 0) {
           held.current.push(ev);
           return;
@@ -361,6 +387,7 @@ export default function ScreenWindow() {
         screenId.current = null;
         resetDecoder();
         setStats(null);
+        setRecv(null);
         setPhase({ kind: "ended", message: ev.reason ? readable(ev.reason) : null });
         return;
     }
@@ -563,6 +590,57 @@ export default function ScreenWindow() {
     await w.setFullscreen(next);
     setFullscreen(next);
   };
+  // 用系统的方式进出全屏（macOS 的绿灯、⌃⌘F）也要跟上
+  useEffect(() => {
+    const w = getCurrentWindow();
+    let alive = true;
+    const unlisten = w.onResized(() => {
+      void w.isFullscreen().then((v) => { if (alive) setFullscreen(v); }).catch(() => {});
+    });
+    return () => { alive = false; void unlisten.then((f) => f()); };
+  }, []);
+
+  // 全屏时工具栏收起来，画面铺满；鼠标碰到屏幕顶端才滑下来，移开一会儿再收回去。
+  // 连接详情弹着的时候不收（弹窗不在工具栏里，鼠标移过去会算“离开”）
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarShown, setToolbarShown] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+  const cancelHide = useCallback(() => {
+    if (hideTimer.current != null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  }, []);
+  const scheduleHide = useCallback((delay: number) => {
+    cancelHide();
+    hideTimer.current = window.setTimeout(function check() {
+      const bar = toolbarRef.current;
+      if (bar && (bar.matches(":hover") || bar.querySelector('[aria-expanded="true"]'))) {
+        hideTimer.current = window.setTimeout(check, 500);
+        return;
+      }
+      hideTimer.current = null;
+      setToolbarShown(false);
+    }, delay);
+  }, [cancelHide]);
+  useEffect(() => {
+    if (!fullscreen) {
+      cancelHide();
+      setToolbarShown(false);
+      return;
+    }
+    // 刚进全屏先露一下，让人知道工具栏在上面
+    setToolbarShown(true);
+    scheduleHide(1500);
+    const onMove = (e: PointerEvent) => {
+      if (e.clientY > 2) return;
+      cancelHide();
+      setToolbarShown(true);
+    };
+    window.addEventListener("pointermove", onMove);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      cancelHide();
+    };
+  }, [fullscreen, cancelHide, scheduleHide]);
   const reconnect = () => setAttempt((n) => n + 1);
 
   const platformsDiffer = !!device?.platform && (device.platform === "macos") !== isMac;
@@ -570,19 +648,28 @@ export default function ScreenWindow() {
   const canControl = !!started?.control;
 
   return (
-    <div className="screen-window" data-fullscreen={fullscreen ? "" : undefined}>
-      <div className={`screen-toolbar${nativeMac ? " titlebar-macos" : ""}${nativeWindows ? " titlebar-windows" : ""}`} data-tauri-drag-region>
-        <div className="screen-toolbar-title" data-tauri-drag-region>
+    <div className="screen-window" data-fullscreen={fullscreen ? "" : undefined} data-toolbar-shown={toolbarShown ? "" : undefined}>
+      <div ref={toolbarRef} className={`screen-toolbar${nativeMac ? " titlebar-macos" : ""}${nativeWindows ? " titlebar-windows" : ""}`}
+        data-tauri-drag-region={fullscreen ? undefined : true}
+        onPointerEnter={() => { if (fullscreen) cancelHide(); }}
+        onPointerLeave={() => { if (fullscreen) scheduleHide(600); }}>
+        <div className="screen-toolbar-title" data-tauri-drag-region={fullscreen ? undefined : true}>
           <Monitor />
           <span className="truncate">{device?.name ?? ""}</span>
         </div>
+        {live && recv && !paused && (
+          <span className="screen-stats" title={t("每秒收到的帧数 · 画面实际传输速率")}>
+            {t("{{fps}} 帧/秒", { fps: recv.fps })} · {formatMbps(recv.mbps)}
+          </span>
+        )}
         {connId != null && info && (
           <ConnectionCard connId={connId} info={info} path={path ?? undefined} placement="bottom end" className="screen-path-button"
             extra={live ? (
               <Section>
                 <Row label={t("画面")} value={paused === "relay" ? t("已暂停（连接走中继）") : paused ? t("正在找直连线路") : decode ? `${decode.width} × ${decode.height}` : t("统计中…")} />
-                <Row label={t("帧率")} value={stats && !paused ? t("{{fps}} 帧/秒", { fps: stats.fps }) : "—"} />
-                <Row label={t("画面码率")} value={stats && !paused ? `${(stats.bitrate / 1e6).toFixed(1)} Mbps` : "—"} hint={t("对方编码器现在用的码率，网络差时会自动往下降")} />
+                <Row label={t("帧率")} value={recv && !paused ? t("{{fps}} 帧/秒", { fps: recv.fps }) : "—"} hint={t("本机每秒收到的画面帧数。对方画面不动时会发得少")} />
+                <Row label={t("传输速率")} value={recv && !paused ? formatMbps(recv.mbps) : "—"} hint={t("画面每秒实际传过来的数据量")} />
+                <Row label={t("码率上限")} value={stats && !paused ? `${(stats.bitrate / 1e6).toFixed(1)} Mbps` : "—"} hint={t("对方编码器最多用到的码率，网络差时会自动往下降；画面变化少时实际用不到这么多")} />
                 <Row label={t("编码")} value={decode ? `${codecName(decode.codec)} · ${decode.codec}` : "—"} mono />
                 <Row label={t("解码")} value={decode ? (decode.hardware && !hwNote ? t("显卡硬件解码") : t("系统解码")) : "—"} />
               </Section>

@@ -3079,5 +3079,23 @@ html[data-mobile] [role="dialog"] {
 .screen-overlay > p { margin: 0; max-width: 460px; }
 .screen-overlay-note { font-size: 12px; color: var(--muted); }
 .screen-overlay-soft { background: rgb(0 0 0 / 0.6); }
-/* 全屏时 macOS 的红绿灯藏起来了，不用再留位置 */
-.screen-window[data-fullscreen] .screen-toolbar.titlebar-macos { padding-left: 12px; }
+/* 全屏时工具栏浮在画面上方、平时收起来，鼠标碰到屏幕顶端才滑下来（逻辑在 ScreenWindow 里）。
+   系统的窗口按钮全屏时都藏了（macOS 红绿灯、Windows 插件画的按钮），两边不用再留位置 */
+.screen-window[data-fullscreen] .screen-toolbar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 20;
+  padding: 0 8px 0 12px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
+  transform: translateY(-100%);
+  visibility: hidden;
+  transition: transform 160ms ease, visibility 0s linear 160ms;
+}
+.screen-window[data-fullscreen][data-toolbar-shown] .screen-toolbar {
+  transform: none;
+  visibility: visible;
+  transition: transform 160ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .screen-window[data-fullscreen] .screen-toolbar { transition: none; }
+}
