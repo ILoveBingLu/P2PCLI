@@ -8,7 +8,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{AppState, UiDelegate, settings_path};
 
@@ -385,13 +385,15 @@ struct Diag {
     bytes: usize,
     keys: u32,
     max_gap: std::time::Duration,
+    /// 两帧之间隔了 STALL_LOG 以上的次数
+    stalls: u32,
     codec: String,
     host: Option<(u32, u32)>,
 }
 
 impl Default for Diag {
     fn default() -> Self {
-        Diag { since: std::time::Instant::now(), last_frame: None, frames: 0, bytes: 0, keys: 0, max_gap: Default::default(), codec: String::new(), host: None }
+        Diag { since: std::time::Instant::now(), last_frame: None, frames: 0, bytes: 0, keys: 0, max_gap: Default::default(), stalls: 0, codec: String::new(), host: None }
     }
 }
 
@@ -401,9 +403,10 @@ impl Diag {
         if let Some(last) = self.last_frame {
             let gap = now - last;
             self.max_gap = self.max_gap.max(gap);
-            // 单独记每一次明显的停顿，和对方每秒的诊断（丢包、线路切换）按时间对
+            // 明显的停顿数一下，跟着每 5 秒的统计一起记。画面不动时本来就没有帧，所以只算个数不逐条记
             if gap >= STALL_LOG {
-                info!(screen_id, seq, 间隔 = format!("{}ms", gap.as_millis()), 关键帧 = key, 大小 = format!("{}KB", bytes / 1024), "画面停顿");
+                self.stalls += 1;
+                debug!(screen_id, seq, 间隔 = format!("{}ms", gap.as_millis()), 关键帧 = key, 大小 = format!("{}KB", bytes / 1024), "画面停顿");
             }
         }
         self.last_frame = Some(now);
@@ -420,6 +423,7 @@ impl Diag {
             收到码率 = format!("{:.2}Mbps", self.bytes as f64 * 8.0 / secs / 1e6),
             关键帧 = self.keys,
             最长间隔 = format!("{}ms", self.max_gap.as_millis()),
+            停顿次数 = self.stalls,
             对方帧率 = self.host.map(|h| h.0),
             对方码率 = self.host.map(|h| format!("{:.2}Mbps", h.1 as f64 / 1e6)),
             格式 = %self.codec,

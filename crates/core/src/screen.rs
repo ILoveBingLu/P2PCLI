@@ -387,11 +387,20 @@ pub struct ScreenViewerSummary {
 /// 码率控制：按确认回来的延迟估排队，排队多了降，长时间不堵慢慢往上加。
 ///
 /// 判断堵没堵看一段时间里排队最少的那次确认：真堵的时候队列压在每个包上，连最快的也慢；
-/// Wi-Fi 省电、系统调度这类抖动只让一部分确认晚到，最快的那次照样快
+/// Wi-Fi 省电、系统调度这类抖动只让一部分确认晚到，最快的那次照样快。
+///
+/// 一帧本身的传输时间要从延迟里扣掉，按链路能跑多快估（QUIC 的拥塞窗口 / 往返），不能只按编码码率估：
+/// 码率压低以后按码率估的传输时间远比实际长，扣多了“最小延迟”就掉到真实往返的一半，
+/// 之后每个小帧都像在排队，码率越降越低，最后贴着下限出不来（跨境 80 ms 的线路上实测过）。
+/// 最小延迟也不会低于 QUIC 量到的最小往返
 struct RateControl {
     bitrate: u32,
     max: u32,
     min_delay: Duration,
+    /// QUIC 量到的最小往返：一帧的确认不可能比这还快
+    floor: Duration,
+    /// 链路大概能跑多快（拥塞窗口 / 往返），比特每秒；还不知道时为 0
+    link_bps: u64,
     min_delay_at: Instant,
     last_decrease: Instant,
     last_congested: Instant,
@@ -407,6 +416,8 @@ impl RateControl {
             bitrate: quality.start_bitrate(),
             max: quality.max_bitrate(),
             min_delay: rtt,
+            floor: Duration::ZERO,
+            link_bps: 0,
             min_delay_at: now,
             last_decrease: now - DECREASE_GAP,
             last_congested: now,
@@ -421,16 +432,25 @@ impl RateControl {
         self.bitrate = if quality == Quality::Sharp { quality.start_bitrate() } else { self.bitrate.min(self.max) };
     }
 
+    /// QUIC 那边的链路情况：最小往返、拥塞窗口能撑起的速度
+    fn set_link(&mut self, min_rtt: Duration, link_bps: u64) {
+        self.floor = min_rtt;
+        self.link_bps = link_bps;
+        self.min_delay = self.min_delay.max(min_rtt);
+    }
+
     /// 一帧被确认了：从发出到确认用了 delay，帧有 bytes 大
     fn on_ack(&mut self, delay: Duration, bytes: usize) {
-        // 一帧本身要占的传输时间不算排队：按当前码率估
-        let send_time = Duration::from_secs_f64(bytes as f64 * 8.0 / self.bitrate.max(MIN_BITRATE) as f64);
+        // 一帧本身要占的传输时间不算排队：按链路速度估，不知道链路速度时按码率估
+        let rate = self.link_bps.max(self.bitrate.max(MIN_BITRATE) as u64);
+        let send_time = Duration::from_secs_f64(bytes as f64 * 8.0 / rate as f64);
         let base = delay.saturating_sub(send_time.min(delay / 2));
         // 最小延迟 10 秒内没刷新就慢慢放宽，网络换路以后能跟上
         if base < self.min_delay || self.min_delay_at.elapsed() > Duration::from_secs(10) {
             self.min_delay = if base < self.min_delay { base } else { (self.min_delay + base) / 2 };
             self.min_delay_at = Instant::now();
         }
+        self.min_delay = self.min_delay.max(self.floor);
         let queue = base.saturating_sub(self.min_delay);
         self.best_queue = Some(self.best_queue.map_or(queue, |q| q.min(queue)));
         self.samples += 1;
@@ -464,13 +484,27 @@ impl RateControl {
             return None;
         }
         if now - self.last_congested >= INCREASE_AFTER && self.bitrate < self.max {
-            // 每个周期加 8%，从最低涨到最高大概要半分钟
-            self.bitrate = (((self.bitrate as f64) * 1.08) as u32).min(self.max);
+            // 每个周期加 15%，从最低涨到均衡档的最高大概十几秒
+            self.bitrate = (((self.bitrate as f64) * 1.15) as u32).min(self.max);
             self.last_congested = now - INCREASE_AFTER + Duration::from_millis(500);
             return Some(self.bitrate);
         }
         None
     }
+}
+
+/// 选中那条路的最小往返，和拥塞窗口按平滑往返折算的速度
+fn link_info(conn: &iroh::endpoint::Connection) -> Option<(Duration, u64)> {
+    let paths = conn.paths();
+    let p = paths.iter().find(|p| p.is_selected())?;
+    let srtt = p.rtt();
+    let controller = conn.congestion_state(p.id())?;
+    let window = controller.window();
+    let min_rtt = crate::quic::min_rtt(controller)?;
+    if srtt.is_zero() {
+        return None;
+    }
+    Some((min_rtt, (window as f64 * 8.0 / srtt.as_secs_f64()) as u64))
 }
 
 struct Inflight {
@@ -479,7 +513,10 @@ struct Inflight {
     bytes: usize,
 }
 
-/// 被连方的诊断：每秒记一行线路、丢包、拥塞窗口和确认延迟，和观看方记的停顿对着看，
+/// 被连方的诊断日志隔多久记一行
+const HOST_DIAG_EVERY: Duration = Duration::from_secs(5);
+
+/// 被连方的诊断：每 5 秒记一行线路、丢包、拥塞窗口和确认延迟，和观看方记的停顿对着看，
 /// 判断卡顿是丢包重传、路径切换还是码率控制造成的
 struct HostDiag {
     since: Instant,
@@ -910,6 +947,9 @@ where
                     }
                     paused = now_path;
                 }
+                if let Some((min_rtt, link_bps)) = link_info(&conn) {
+                    rate.set_link(min_rtt, link_bps);
+                }
                 let oldest = inflight.front().map(|f| f.sent.elapsed());
                 if let Some(age) = oldest {
                     diag.max_oldest = diag.max_oldest.max(age);
@@ -917,7 +957,7 @@ where
                 if paused.is_none() && !rate.may_send(oldest) {
                     diag.blocked += 1;
                 }
-                if diag.since.elapsed() >= Duration::from_secs(1) {
+                if diag.since.elapsed() >= HOST_DIAG_EVERY {
                     diag.log(&conn, rate.bitrate, inflight.len());
                 }
                 if let Some(b) = rate.tick(oldest) {
@@ -1318,6 +1358,39 @@ mod tests {
             }
         }
         assert!(rate.bitrate >= start);
+    }
+
+    /// 跨境 80 ms、链路很快、码率已经掉到下限：大帧的传输时间按链路速度扣，最小延迟不会掉到往返以下，
+    /// 小帧不再像在排队，码率能涨回去
+    #[test]
+    fn low_bitrate_does_not_spiral_down() {
+        let mut rate = RateControl::new(Quality::Balanced, Duration::from_millis(80));
+        rate.bitrate = MIN_BITRATE;
+        rate.set_link(Duration::from_millis(78), 50_000_000);
+        for round in 0..30 {
+            for i in 0..14 {
+                // 偶尔有 30 KB 的大帧，链路 50 Mbps 只要 5 毫秒；小帧有 Wi-Fi 那种几十毫秒的抖动
+                let (delay, bytes) = if i % 7 == 0 { (90, 30_000) } else { (82 + (i * 9 % 50), 2_000) };
+                rate.on_ack(Duration::from_millis(delay as u64), bytes);
+            }
+            assert!(rate.min_delay >= Duration::from_millis(78), "第 {round} 轮最小延迟掉到了 {:?}", rate.min_delay);
+            // 测试里不等真实时间：当作上次堵已经过去很久
+            rate.last_congested = Instant::now() - INCREASE_AFTER;
+            rate.tick(Some(Duration::from_millis(90)));
+        }
+        assert!(rate.bitrate > MIN_BITRATE * 10, "码率没涨起来：{}", rate.bitrate);
+    }
+
+    /// 不知道链路速度时（还没有确认）照旧按码率估，真堵了照样降
+    #[test]
+    fn link_floor_still_detects_real_queue() {
+        let mut rate = RateControl::new(Quality::Balanced, Duration::from_millis(80));
+        rate.set_link(Duration::from_millis(78), 50_000_000);
+        let start = rate.bitrate;
+        for _ in 0..6 {
+            rate.on_ack(Duration::from_millis(400), 2_000);
+        }
+        assert!(rate.tick(None).unwrap() < start);
     }
 
     #[test]
