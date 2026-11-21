@@ -1,7 +1,10 @@
 //! ScreenCaptureKit 抓屏：在 GPU 里缩放、转成 NV12（视频范围、BT.709），画面一直在 IOSurface 里，
 //! 编码器直接拿去用。屏幕没变化时系统不给新帧，不占带宽。
+//!
+//! 4:4:4：系统抓成 BGRA，再用 Metal 排成三倍高的灰度图（见 [`super::pack`]）交给编码器。
+//! 编码器开不了这么高的画面时，同样用 Metal 转成普通的 NV12，退回 4:2:0。
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,6 +19,7 @@ use objc2_core_graphics::{
     kCGColorSpaceDisplayP3, kCGColorSpaceSRGB, kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
 };
 use objc2_core_media::{CMSampleBuffer, CMTime};
+use objc2_core_video::{CVImageBuffer, CVPixelBufferGetHeight, CVPixelBufferGetWidth};
 
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol};
 use objc2_screen_capture_kit::{
@@ -23,15 +27,24 @@ use objc2_screen_capture_kit::{
     SCStreamOutputType,
 };
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureOptions, ColorFormat, DisplayInfo, EncodedFrame, Primaries, ScreenCapture, VideoCodec};
+use p2pcli_core::screen::{CaptureOptions, ColorFormat, DisplayInfo, EncodedFrame, Layout, Primaries, ScreenCapture, VideoCodec};
+use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
 
 use super::encode::Encoder;
+use super::pack::{PIXEL_FORMAT_BGRA, Packer};
 
 /// kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange（'420v'）：硬件编码器最喜欢的格式
 const PIXEL_FORMAT_NV12: u32 = 0x3432_3076;
 /// kCVPixelFormatType_420YpCbCr8BiPlanarFullRange（'420f'）：同样的排法，用满 0~255
 const PIXEL_FORMAT_NV12_FULL: u32 = 0x3432_3066;
+
+/// 送进编码器的是什么画面：系统直接给的 NV12（4:2:0）
+const MODE_NV12: u8 = 0;
+/// 系统给 BGRA，Metal 排成 4:4:4 叠图（W×3H）
+const MODE_STACKED: u8 = 1;
+/// 系统给 BGRA，Metal 转成 NV12 全范围：4:4:4 中途开不了编码器时退到这里
+const MODE_PACKED_NV12: u8 = 2;
 
 /// 抓到的一帧，CF 对象在线程间传递是安全的（只读）
 #[derive(Clone)]
@@ -169,7 +182,18 @@ pub struct MacCapture {
     _sink: Retained<Sink>,
     _queue: DispatchRetained<DispatchQueue>,
     shared: Arc<Shared>,
+    pipe: Pipe,
+}
+
+/// 抓到的画面怎么送进编码器。next_frame 每次拿一份（里面都是共享的），同一时间只有一个在用
+#[derive(Clone)]
+struct Pipe {
     encoder: Arc<Mutex<Option<Encoder>>>,
+    /// 4:4:4 时在 GPU 上排画面
+    packer: Option<Arc<Mutex<Packer>>>,
+    /// 现在送进编码器的是哪种画面（MODE_*）。从 4:4:4 退回 4:2:0 时，
+    /// 在编出那个关键帧之前改好，取解码配置时 color() 和关键帧对得上
+    mode: Arc<AtomicU8>,
     fps: u32,
     /// 想用的编码格式（编不了 H.265 时编码器自己退回 H.264）
     codec: VideoCodec,
@@ -178,6 +202,14 @@ pub struct MacCapture {
     want_key: Arc<AtomicBool>,
     /// 时间戳从这里算：同一帧重新编码时时间戳也要往前走
     started: std::time::Instant,
+}
+
+/// 送进编码器的一帧，等它的结果
+struct Submitted {
+    rx: oneshot::Receiver<Result<Option<EncodedFrame>>>,
+    key: bool,
+    /// 按 4:4:4 编的：编坏了就退回 4:2:0 重来，不让画面断掉
+    stacked: bool,
 }
 
 /// 要关键帧时最多等新画面这么久，等不到就拿上一帧重新编
@@ -193,12 +225,35 @@ impl MacCapture {
         let display = find_display(id)?;
         let (pw, ph) = pixel_size(id);
         let (width, height) = fit(pw, ph, opts.max_long_edge);
+        let p3 = opts.wide_gamut;
+
+        // 4:4:4：先把 Metal 和三倍高的硬件编码器开起来，开不了就照旧抓 NV12
+        let mut packer = None;
+        let mut encoder = None;
+        if opts.yuv444 && opts.full_range {
+            let ready = Packer::new(p3).and_then(|p| {
+                let enc = Encoder::new(width as usize, height as usize * 3, opts.fps, opts.bitrate, opts.codec, p3, true)?;
+                Ok((p, enc))
+            });
+            match ready {
+                Ok((p, enc)) => {
+                    packer = Some(Arc::new(Mutex::new(p)));
+                    encoder = Some(enc);
+                }
+                Err(e) => warn!("4:4:4 开不起来，用 4:2:0：{e:#}"),
+            }
+        }
+        let mode = if packer.is_some() { MODE_STACKED } else { MODE_NV12 };
 
         let config = unsafe { SCStreamConfiguration::new() };
         unsafe {
             config.setWidth(width as usize);
             config.setHeight(height as usize);
-            config.setPixelFormat(if opts.full_range { PIXEL_FORMAT_NV12_FULL } else { PIXEL_FORMAT_NV12 });
+            config.setPixelFormat(match mode {
+                MODE_NV12 if opts.full_range => PIXEL_FORMAT_NV12_FULL,
+                MODE_NV12 => PIXEL_FORMAT_NV12,
+                _ => PIXEL_FORMAT_BGRA,
+            });
             config.setColorMatrix(kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
             // Mac 屏幕多是广色域（Display P3）。观看方也是广色域屏幕就按 P3 抓，鲜艳的颜色不被压掉；
             // 不然让系统抓屏时就转成 sRGB，免得 P3 的数值被当成 sRGB 显示，颜色发灰发淡
@@ -237,19 +292,23 @@ impl MacCapture {
         if let Err(e) = started {
             bail!("抓屏开不起来：{e}");
         }
-        info!(display = id, width, height, fps = opts.fps, "开始抓屏");
+        info!(display = id, width, height, fps = opts.fps, yuv444 = mode == MODE_STACKED, "开始抓屏");
         Ok(MacCapture {
             stream,
             _sink: sink,
             _queue: queue,
             shared,
-            encoder: Arc::new(Mutex::new(None)),
-            fps: opts.fps,
-            codec: opts.codec,
-            color: ColorFormat { full_range: opts.full_range, primaries: if opts.wide_gamut { Primaries::P3 } else { Primaries::Bt709 }, ..Default::default() },
-            bitrate: Arc::new(AtomicU32::new(opts.bitrate)),
-            want_key: Arc::new(AtomicBool::new(true)),
-            started: std::time::Instant::now(),
+            pipe: Pipe {
+                encoder: Arc::new(Mutex::new(encoder)),
+                packer,
+                mode: Arc::new(AtomicU8::new(mode)),
+                fps: opts.fps,
+                codec: opts.codec,
+                color: ColorFormat { full_range: opts.full_range, primaries: if p3 { Primaries::P3 } else { Primaries::Bt709 }, ..Default::default() },
+                bitrate: Arc::new(AtomicU32::new(opts.bitrate)),
+                want_key: Arc::new(AtomicBool::new(true)),
+                started: std::time::Instant::now(),
+            },
         })
     }
 }
@@ -264,13 +323,7 @@ impl Drop for MacCapture {
 impl ScreenCapture for MacCapture {
     fn next_frame(&self) -> BoxFuture<Result<EncodedFrame>> {
         let shared = self.shared.clone();
-        let encoder = self.encoder.clone();
-        let bitrate = self.bitrate.clone();
-        let want_key = self.want_key.clone();
-        let fps = self.fps;
-        let codec = self.codec;
-        let p3 = self.color.primaries == Primaries::P3;
-        let started = self.started;
+        let pipe = self.pipe.clone();
         Box::pin(async move {
             loop {
                 let sample = loop {
@@ -281,7 +334,7 @@ impl ScreenCapture for MacCapture {
                         *shared.last.lock().unwrap() = Some(s.clone());
                         break s;
                     }
-                    let reuse = want_key.load(Ordering::Relaxed).then(|| shared.last.lock().unwrap().clone()).flatten();
+                    let reuse = pipe.want_key.load(Ordering::Relaxed).then(|| shared.last.lock().unwrap().clone()).flatten();
                     match reuse {
                         // 要关键帧但屏幕没动：等一小会儿新画面，等不到就重编上一帧
                         Some(last) => {
@@ -292,51 +345,196 @@ impl ScreenCapture for MacCapture {
                         None => shared.notify.notified().await,
                     }
                 };
-                let key = want_key.swap(false, Ordering::Relaxed);
-                let rx = {
-                    let mut guard = encoder.lock().unwrap();
+                let submitted = {
                     let Some(image) = (unsafe { sample.0.image_buffer() }) else { continue };
-                    let pts = unsafe { CMTime::new(started.elapsed().as_micros() as i64, 1_000_000) };
-                    match Encoder::encode(&mut guard, &image, pts, fps, bitrate.load(Ordering::Relaxed), key, codec, p3) {
-                        Ok(rx) => rx,
-                        Err(e) => {
-                            want_key.store(true, Ordering::Relaxed);
-                            return Err(e);
-                        }
-                    }
+                    pipe.submit(&image)?
                 };
-                match tokio::time::timeout(Duration::from_secs(3), rx).await {
-                    Ok(Ok(Ok(Some(frame)))) => return Ok(frame),
-                    // 编码器丢了这帧：接着等下一帧；丢的是要求的关键帧就再要一次
-                    Ok(Ok(Ok(None))) => {
-                        if key {
-                            want_key.store(true, Ordering::Relaxed);
-                        }
-                        continue;
-                    }
-                    Ok(Ok(Err(e))) => return Err(e),
-                    Ok(Err(_)) => bail!("编码器没有回应"),
-                    Err(_) => bail!("硬件编码超时"),
+                // 刚退回 4:2:0：要关键帧，拿新画面（或者上一帧）重来
+                let Some(submitted) = submitted else { continue };
+                if let Some(frame) = pipe.finish(submitted).await? {
+                    return Ok(frame);
                 }
             }
         })
     }
 
     fn request_keyframe(&self) {
-        self.want_key.store(true, Ordering::Relaxed);
+        self.pipe.want_key.store(true, Ordering::Relaxed);
     }
 
     fn set_bitrate(&self, bps: u32) {
-        self.bitrate.store(bps, Ordering::Relaxed);
+        self.pipe.bitrate.store(bps, Ordering::Relaxed);
     }
+
     fn color(&self) -> ColorFormat {
-        self.color
+        self.pipe.color()
+    }
+}
+
+impl Pipe {
+    fn p3(&self) -> bool {
+        self.color.primaries == Primaries::P3
+    }
+
+    fn color(&self) -> ColorFormat {
+        match self.mode.load(Ordering::Relaxed) {
+            MODE_NV12 => self.color,
+            // Metal 出的都是全范围
+            MODE_STACKED => ColorFormat { full_range: true, layout: Layout::Yuv444Stacked, ..self.color },
+            _ => ColorFormat { full_range: true, layout: Layout::Yuv420, ..self.color },
+        }
+    }
+
+    /// 把一帧送进编码器（4:4:4 时先在 GPU 上排好）。返回空：4:4:4 刚编不了、退回了 4:2:0，要重来
+    fn submit(&self, image: &CVImageBuffer) -> Result<Option<Submitted>> {
+        let mut key = self.want_key.swap(false, Ordering::Relaxed);
+        let bitrate = self.bitrate.load(Ordering::Relaxed);
+        let mut guard = self.encoder.lock().unwrap();
+        let pts = unsafe { CMTime::new(self.started.elapsed().as_micros() as i64, 1_000_000) };
+        let mut stacked = false;
+        let packed = match &self.packer {
+            Some(packer) => {
+                key |= self.prepare_stacked(&mut guard, image, bitrate);
+                stacked = self.mode.load(Ordering::Relaxed) == MODE_STACKED;
+                match packer.lock().unwrap().pack(image, stacked) {
+                    Ok(b) => Some(b),
+                    Err(e) => {
+                        self.want_key.store(true, Ordering::Relaxed);
+                        return Err(e);
+                    }
+                }
+            }
+            None => None,
+        };
+        let image = packed.as_deref().unwrap_or(image);
+        match Encoder::encode(&mut guard, image, pts, self.fps, bitrate, key, self.codec, self.p3()) {
+            Ok(rx) => Ok(Some(Submitted { rx, key, stacked })),
+            Err(e) if stacked => {
+                *guard = None;
+                self.fall_back(&e);
+                Ok(None)
+            }
+            Err(e) => {
+                self.want_key.store(true, Ordering::Relaxed);
+                Err(e)
+            }
+        }
+    }
+
+    /// 等编码结果。返回空：这帧没编出来（编码器丢了，或者 4:4:4 编坏了刚退回 4:2:0），接着要下一帧
+    async fn finish(&self, s: Submitted) -> Result<Option<EncodedFrame>> {
+        match tokio::time::timeout(Duration::from_secs(3), s.rx).await {
+            Ok(Ok(Ok(Some(frame)))) => Ok(Some(frame)),
+            // 编码器丢了这帧：接着等下一帧；丢的是要求的关键帧就再要一次
+            Ok(Ok(Ok(None))) => {
+                if s.key {
+                    self.want_key.store(true, Ordering::Relaxed);
+                }
+                Ok(None)
+            }
+            // 有的尺寸编码器开得起来、一编就失败（比如 H.264 的 3840×6480）
+            Ok(Ok(Err(e))) if s.stacked => {
+                *self.encoder.lock().unwrap() = None;
+                self.fall_back(&e);
+                Ok(None)
+            }
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(_)) => bail!("编码器没有回应"),
+            Err(_) => bail!("硬件编码超时"),
+        }
+    }
+
+    /// 4:4:4 时编码器要按 W×3H 开（只要硬件编码器）。没开或者尺寸不对就重开，开不了就退回 4:2:0。
+    /// 返回是不是新开了编码器（要出关键帧）
+    fn prepare_stacked(&self, slot: &mut Option<Encoder>, image: &CVImageBuffer, bitrate: u32) -> bool {
+        if self.mode.load(Ordering::Relaxed) != MODE_STACKED {
+            return false;
+        }
+        let (w, h) = (CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image));
+        if slot.as_ref().is_some_and(|e| e.size() == (w, h * 3)) {
+            return false;
+        }
+        *slot = None;
+        match Encoder::new(w, h * 3, self.fps, bitrate, self.codec, self.p3(), true) {
+            Ok(enc) => {
+                *slot = Some(enc);
+                true
+            }
+            Err(e) => {
+                self.fall_back(&e);
+                false
+            }
+        }
+    }
+
+    /// 4:4:4 编不了：之后一直用 Metal 转普通的 NV12。编码器随后按 W×H 重开（Encoder::encode 里看尺寸），
+    /// 它出第一个关键帧之前 mode 已经改好，color() 报的和这个关键帧对得上。只退一次，警告也只记一次
+    fn fall_back(&self, e: &anyhow::Error) {
+        self.want_key.store(true, Ordering::Relaxed);
+        if self.mode.swap(MODE_PACKED_NV12, Ordering::Relaxed) == MODE_STACKED {
+            warn!("编码器编不了 4:4:4 的三倍高画面，退回 4:2:0：{e:#}");
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fit;
+    use super::super::pack::tests::{bgra_buffer, pattern};
+    use super::*;
+
+    /// 不抓屏，直接拿合成的 BGRA 画面走 4:4:4 的那条路
+    fn stacked_pipe(codec: VideoCodec, p3: bool) -> Pipe {
+        Pipe {
+            encoder: Arc::new(Mutex::new(None)),
+            packer: Some(Arc::new(Mutex::new(Packer::new(p3).unwrap()))),
+            mode: Arc::new(AtomicU8::new(MODE_STACKED)),
+            fps: 60,
+            codec,
+            color: ColorFormat { full_range: true, primaries: if p3 { Primaries::P3 } else { Primaries::Bt709 }, ..Default::default() },
+            bitrate: Arc::new(AtomicU32::new(20_000_000)),
+            want_key: Arc::new(AtomicBool::new(true)),
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// 一直送同一帧，直到编出一帧来（中途退回 4:2:0 也算）
+    fn encode_one(pipe: &Pipe, image: &CVImageBuffer) -> EncodedFrame {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        for _ in 0..4 {
+            let Some(s) = pipe.submit(image).unwrap() else { continue };
+            if let Some(frame) = rt.block_on(pipe.finish(s)).unwrap() {
+                return frame;
+            }
+        }
+        panic!("编不出帧");
+    }
+
+    /// 能编 4:4:4 时出 W×3H 的关键帧、报叠图；编不了（H.264 的 3840×6480）时退回 W×H 的 4:2:0，报的也跟着变
+    #[test]
+    #[ignore = "要 GPU 和硬件编码器：cargo test -p p2pcli-screen -- --ignored stacked_pipe --nocapture"]
+    fn stacked_pipe_reports_layout() {
+        let (w, h) = (1920, 1080);
+        let src = bgra_buffer(&pattern(w, h), w, h);
+        let pipe = stacked_pipe(VideoCodec::H265, true);
+        let frame = encode_one(&pipe, &src);
+        let config = frame.config.expect("第一帧要带解码配置");
+        assert!(frame.key);
+        assert_eq!((config.width, config.height), (1920, 3240));
+        assert_eq!(pipe.color(), ColorFormat { full_range: true, primaries: Primaries::P3, layout: Layout::Yuv444Stacked });
+        // 接着编的帧不用关键帧
+        let next = encode_one(&pipe, &src);
+        assert!(!next.key);
+
+        let (w, h) = (3840, 2160);
+        let src = bgra_buffer(&pattern(w, h), w, h);
+        let pipe = stacked_pipe(VideoCodec::H264, false);
+        let frame = encode_one(&pipe, &src);
+        let config = frame.config.expect("退回以后第一帧要带解码配置");
+        assert!(frame.key);
+        println!("H.264 {w}×{h} 的 4:4:4：{} {}×{}，{:?}", config.codec, config.width, config.height, pipe.color());
+        assert_eq!((config.width, config.height), (3840, 2160));
+        assert_eq!(pipe.color(), ColorFormat { full_range: true, primaries: Primaries::Bt709, layout: Layout::Yuv420 });
+    }
 
     #[test]
     fn fit_keeps_aspect_and_even() {

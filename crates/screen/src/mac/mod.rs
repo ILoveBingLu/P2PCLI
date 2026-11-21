@@ -11,6 +11,7 @@ mod capture;
 mod cursor;
 pub mod encode;
 mod input;
+mod pack;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
