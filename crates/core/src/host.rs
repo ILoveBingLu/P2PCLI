@@ -494,6 +494,9 @@ impl Host {
     /// 处理一条进来的连接，直到对面走
     pub async fn handle(self: Arc<Self>, conn: Connection) {
         let remote = conn.remote_id();
+        if std::env::var_os("P2PCLI_PATHLOG").is_some() {
+            tokio::spawn(crate::path::log_paths(conn.clone()));
+        }
         if let Err(e) = self.handle_inner(&conn, remote).await {
             debug!(remote = %remote.fmt_short(), "连接结束：{e:#}");
         }

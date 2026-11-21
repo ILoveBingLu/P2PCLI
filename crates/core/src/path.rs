@@ -266,6 +266,42 @@ pub fn stats(conn: &Connection, endpoint: &Endpoint) -> ConnStats {
     }
 }
 
+/// 排查用（环境变量 P2PCLI_PATHLOG）：每秒把这条连接上每一条路的收发、丢包、拥塞窗口记一行，
+/// 只在这一秒发了不少东西时记。看数据实际走的是哪条路、慢的时候是丢包还是发送端自己没发
+pub async fn log_paths(conn: Connection) {
+    use std::collections::HashMap;
+    let mut last: HashMap<String, (u64, u64, u64)> = HashMap::new();
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {}
+            _ = conn.closed() => return,
+        }
+        let mut lines = Vec::new();
+        let mut busy = false;
+        for p in conn.paths().iter() {
+            let s = p.stats();
+            let key = format!("{:?}/{:?}", p.id(), p.remote_addr());
+            let now = (s.sent_packets, s.lost_packets, s.udp_tx.bytes);
+            let prev = last.insert(key.clone(), now).unwrap_or(now);
+            let (sent, lost, bytes) = (now.0.saturating_sub(prev.0), now.1.saturating_sub(prev.1), now.2.saturating_sub(prev.2));
+            busy |= bytes > 50_000;
+            lines.push(format!(
+                "{key}{} 发包={sent} 丢包={lost} 发={}KB 延时={}ms 窗口={}KB 带宽估计={} 拥塞事件累计={}",
+                if p.is_selected() { "[选中]" } else { "" },
+                bytes / 1024,
+                s.rtt.as_millis(),
+                s.cwnd / 1024,
+                s.bandwidth_estimate.map_or("-".into(), |b| format!("{:.2}Mbps", b as f64 / 1e6)),
+                s.congestion_events,
+            ));
+        }
+        if busy {
+            tracing::info!(remote = %conn.remote_id().fmt_short(), "线路统计 {}", lines.join(" | "));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
