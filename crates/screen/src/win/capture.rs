@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureOptions, EncodedFrame, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config, hvcc_config};
+use p2pcli_core::screen::{CaptureOptions, ColorFormat, EncodedFrame, Primaries, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config, hvcc_config};
 use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
 use windows::Foundation::TypedEventHandler;
@@ -22,7 +22,8 @@ use windows::Win32::Foundation::{HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+    DXGI_FORMAT_B8G8R8A8_UNORM,
     DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
@@ -33,6 +34,18 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::core::{IInspectable, Interface};
 
 use super::encode::Encoder;
+
+/// 老接口的颜色空间（位域）：第 1 位 RGB 范围（0 是全范围 0~255），第 2 位 YCbCr 矩阵（1 是 BT.709），
+/// 第 4、5 位 YCbCr 的范围（1 是 16~235，2 是 0~255）。None 是输入的 RGB，Some(全范围) 是输出的 YCbCr
+fn legacy_color_space(ycbcr_full_range: Option<bool>) -> D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
+    const BT709: u32 = 1 << 2;
+    let nominal = match ycbcr_full_range {
+        None => 0,
+        Some(false) => D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235.0 as u32,
+        Some(true) => D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255.0 as u32,
+    };
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: BT709 | (nominal << 4) }
+}
 
 /// 转好的 NV12 纹理轮着用几块：编码器可能还在读上一块
 const NV12_POOL: usize = 3;
@@ -46,6 +59,7 @@ enum Cmd {
 
 pub struct WinCapture {
     tx: Sender<Cmd>,
+    full_range: bool,
     want_key: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
 }
@@ -57,12 +71,13 @@ impl WinCapture {
         let want_key = Arc::new(AtomicBool::new(true));
         let bitrate = Arc::new(AtomicU32::new(opts.bitrate));
         let (k, b) = (want_key.clone(), bitrate.clone());
+        let full_range = opts.full_range;
         std::thread::Builder::new()
             .name("p2pcli-screen".into())
             .spawn(move || worker(opts, init_tx, rx, k, b))
             .context("开不了抓屏线程")?;
         init_rx.recv_timeout(Duration::from_secs(10)).map_err(|_| anyhow!("抓屏没有及时开起来"))??;
-        Ok(WinCapture { tx, want_key, bitrate })
+        Ok(WinCapture { tx, full_range, want_key, bitrate })
     }
 }
 
@@ -88,6 +103,11 @@ impl ScreenCapture for WinCapture {
 
     fn set_bitrate(&self, bps: u32) {
         self.bitrate.store(bps, Ordering::Relaxed);
+    }
+
+    fn color(&self) -> ColorFormat {
+        // Windows 抓到的画面已经是 sRGB，只有范围跟着观看方
+        ColorFormat { full_range: self.full_range, primaries: Primaries::Bt709 }
     }
 }
 
@@ -304,7 +324,7 @@ impl State {
                     let src = (content.Width as u32, content.Height as u32);
                     let dst = fit(src.0, src.1, opts.max_long_edge);
                     if self.converter.as_ref().is_none_or(|c| c.src != src || c.dst != dst) {
-                        self.converter = Some(self.build_converter(src, dst, opts.fps)?);
+                        self.converter = Some(self.build_converter(src, dst, opts.fps, opts.full_range)?);
                         self.encoder = None;
                     }
                     self.copy_in(&texture);
@@ -319,7 +339,7 @@ impl State {
 
             let mut key = want_key.swap(false, Ordering::Relaxed);
             if self.encoder.is_none() {
-                let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate.load(Ordering::Relaxed), opts.codec)?;
+                let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate.load(Ordering::Relaxed), opts.codec, opts.full_range)?;
                 debug!(hardware = enc.hardware, "编码器已换新");
                 self.encoder = Some(enc);
                 self.sps_pps = None;
@@ -373,7 +393,8 @@ impl State {
         }
     }
 
-    fn build_converter(&self, src: (u32, u32), dst: (u32, u32), fps: u32) -> Result<Converter> {
+    /// full_range：转成全范围（0~255）的 NV12，不然是视频范围（16~235）
+    fn build_converter(&self, src: (u32, u32), dst: (u32, u32), fps: u32, full_range: bool) -> Result<Converter> {
         let rate = DXGI_RATIONAL { Numerator: fps.max(1), Denominator: 1 };
         let content = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
             InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
@@ -397,7 +418,12 @@ impl State {
             self.video_ctx.VideoProcessorSetOutputTargetRect(&processor, true, Some(&dst_rect));
             if let Ok(ctx1) = self.video_ctx.cast::<ID3D11VideoContext1>() {
                 ctx1.VideoProcessorSetStreamColorSpace1(&processor, 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
-                ctx1.VideoProcessorSetOutputColorSpace1(&processor, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+                let out = if full_range { DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709 } else { DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709 };
+                ctx1.VideoProcessorSetOutputColorSpace1(&processor, out);
+            } else {
+                // 老驱动没有新接口：用老的设法，不设的话默认按 BT.601 转，和标的 BT.709 对不上，整体偏色
+                self.video_ctx.VideoProcessorSetStreamColorSpace(&processor, 0, &legacy_color_space(None));
+                self.video_ctx.VideoProcessorSetOutputColorSpace(&processor, &legacy_color_space(Some(full_range)));
             }
         }
 

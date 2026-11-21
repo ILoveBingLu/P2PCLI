@@ -45,6 +45,8 @@ struct Fake {
     show_cursor: Mutex<Option<bool>>,
     /// 被要求用哪种编码格式
     codec: Mutex<Option<p2pcli_core::screen::VideoCodec>>,
+    /// 被要求的颜色：全范围、广色域
+    color: Mutex<Option<(bool, bool)>>,
     cursor_reads: AtomicUsize,
     produced: AtomicUsize,
     keyframes: AtomicUsize,
@@ -75,6 +77,7 @@ impl ScreenBackend for FakeBackend {
         self.0.bitrate.store(opts.bitrate, Ordering::Relaxed);
         *self.0.show_cursor.lock().unwrap() = Some(opts.show_cursor);
         *self.0.codec.lock().unwrap() = Some(opts.codec);
+        *self.0.color.lock().unwrap() = Some((opts.full_range, opts.wide_gamut));
         Ok(Arc::new(FakeCapture { fake: self.0.clone(), key: Arc::new(true.into()) }))
     }
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
@@ -113,7 +116,7 @@ impl ScreenCapture for FakeCapture {
                 key,
                 ts_us: 0,
                 data: vec![if key { 0x65 } else { 0x41 }; if key { 60_000 } else { 8_000 }],
-                config: key.then(|| VideoConfig { codec: "avc1.640028".into(), width: 1920, height: 1080, description: "AQ==".into() }),
+                config: key.then(|| VideoConfig { codec: "avc1.640028".into(), width: 1920, height: 1080, description: "AQ==".into(), full_range: false, primaries: Default::default() }),
             })
         })
     }
@@ -122,6 +125,12 @@ impl ScreenCapture for FakeCapture {
     }
     fn set_bitrate(&self, bps: u32) {
         self.fake.bitrate.store(bps, Ordering::Relaxed);
+    }
+    fn color(&self) -> p2pcli_core::screen::ColorFormat {
+        // 像 Mac：要什么给什么
+        let (full_range, wide) = self.fake.color.lock().unwrap().unwrap_or_default();
+        let primaries = if wide { p2pcli_core::screen::Primaries::P3 } else { Default::default() };
+        p2pcli_core::screen::ColorFormat { full_range, primaries }
     }
 }
 
@@ -177,7 +186,7 @@ async fn view_and_control_over_direct_link() {
     assert!(n.remote.supports_screen());
 
     let (started, mut input, mut output) =
-        n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![] }).await.unwrap();
+        n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     assert_eq!(started.display, "1");
     assert_eq!(started.displays.len(), 2);
     assert!(started.control);
@@ -265,7 +274,7 @@ async fn stops_sending_without_acks() {
     let fake = Arc::new(Fake::default());
     let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
     let (started, _input, mut output) =
-        n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![] }).await.unwrap();
+        n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     // 对方不给操作
     assert!(!started.control);
     assert!(started.control_note.is_some());
@@ -287,7 +296,7 @@ async fn denied_or_unsupported() {
     // 被连方拒绝
     let fake = Arc::new(Fake::default());
     let (n, _) = pair(ScreenDecision { allow: false, control: false }, Some(fake.clone())).await;
-    let err = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Smooth, control: false, codecs: vec![] }).await.err().unwrap();
+    let err = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Smooth, control: false, codecs: vec![], ..Default::default() }).await.err().unwrap();
     assert!(format!("{err:#}").contains("denied"), "{err:#}");
     assert_eq!(fake.produced.load(Ordering::Relaxed), 0);
     n.shutdown().await;
@@ -295,7 +304,7 @@ async fn denied_or_unsupported() {
     // 被连方没有抓屏实现：不报能力，观看方不开
     let (n, _) = pair(ScreenDecision { allow: true, control: true }, None).await;
     assert!(!n.remote.supports_screen());
-    assert!(n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Smooth, control: false, codecs: vec![] }).await.is_err());
+    assert!(n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Smooth, control: false, codecs: vec![], ..Default::default() }).await.is_err());
     n.shutdown().await;
 }
 
@@ -305,7 +314,7 @@ async fn cursor_is_sent_separately() {
     let fake = Arc::new(Fake { cursor: true, ..Default::default() });
     let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
     let (_, mut input, mut output) =
-        n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![] }).await.unwrap();
+        n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     let (mut shapes, mut moves) = (0, 0);
     let deadline = tokio::time::Instant::now() + Duration::from_millis(800);
     while let Ok(ev) = tokio::time::timeout_at(deadline, output.next()).await {
@@ -330,7 +339,7 @@ async fn cursor_is_sent_separately() {
     // 读不了指针的被连方：指针照旧画进画面
     let fake = Arc::new(Fake::default());
     let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
-    let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![] }).await.unwrap();
+    let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     assert_eq!(*fake.show_cursor.lock().unwrap(), Some(true));
     n.shutdown().await;
 }
@@ -342,8 +351,38 @@ async fn codec_is_negotiated() {
     for (codecs, want) in [(vec![], VideoCodec::H264), (vec![VideoCodec::H264], VideoCodec::H264), (vec![VideoCodec::H265, VideoCodec::H264], VideoCodec::H265)] {
         let fake = Arc::new(Fake::default());
         let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
-        let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: false, codecs }).await.unwrap();
+        let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: false, codecs, ..Default::default() }).await.unwrap();
         assert_eq!(*fake.codec.lock().unwrap(), Some(want));
+        n.shutdown().await;
+    }
+}
+
+/// 颜色协商：观看方认得颜色标记才用全范围、广色域，解码配置里带上实际的格式；老观看方照旧是视频范围、sRGB
+#[tokio::test(flavor = "multi_thread")]
+async fn color_is_negotiated() {
+    use p2pcli_core::screen::{Primaries, ScreenEvent};
+    for (color_tags, wide_gamut, want) in [
+        (false, false, (false, Primaries::Bt709)),
+        // 老观看方不会说自己认得标记，就算屏幕是广色域也不用
+        (false, true, (false, Primaries::Bt709)),
+        (true, false, (true, Primaries::Bt709)),
+        (true, true, (true, Primaries::P3)),
+    ] {
+        let fake = Arc::new(Fake::default());
+        let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+        let (_, _input, mut output) = n
+            .remote
+            .open_screen(ScreenOpen { quality: Quality::Balanced, color_tags, wide_gamut, ..Default::default() })
+            .await
+            .unwrap();
+        let config = loop {
+            match tokio::time::timeout(Duration::from_secs(5), output.next()).await.unwrap().unwrap() {
+                Some(ScreenEvent::Config(c)) => break c,
+                Some(_) => continue,
+                None => panic!("画面没给解码配置就结束了"),
+            }
+        };
+        assert_eq!((config.full_range, config.primaries), want, "color_tags={color_tags} wide_gamut={wide_gamut}");
         n.shutdown().await;
     }
 }

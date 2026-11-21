@@ -34,6 +34,9 @@ impl ScreenCapture for KeepAwake {
     fn set_bitrate(&self, bps: u32) {
         self.inner.set_bitrate(bps)
     }
+    fn color(&self) -> p2pcli_core::screen::ColorFormat {
+        self.inner.color()
+    }
 }
 
 #[cfg(target_os = "macos")]

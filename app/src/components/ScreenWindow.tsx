@@ -26,6 +26,9 @@ import { Button } from "@/components/ui/button";
 import { ConnectionCard, Row, Section } from "./ConnectionCard";
 import { t } from "@/i18n";
 
+/** 这台电脑的屏幕是广色域（Display P3） */
+const WIDE_GAMUT = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches;
+
 /** 隔这么久问一次这台设备现在用哪条连接（断开、重连都能跟上） */
 const CONNECTION_POLL_MS = 2000;
 
@@ -272,7 +275,8 @@ export default function ScreenWindow() {
         canvas.width = frame.displayWidth;
         canvas.height = frame.displayHeight;
       }
-      canvas.getContext("2d")?.drawImage(frame, 0, 0);
+      // 画布按屏幕的色域开：广色域屏幕上 P3 的画面不会被压回 sRGB；sRGB 的画面浏览器自己换算
+      canvas.getContext("2d", { colorSpace: WIDE_GAMUT ? "display-p3" : "srgb" })?.drawImage(frame, 0, 0);
     }
     frame.close();
   }, []);
@@ -289,9 +293,14 @@ export default function ScreenWindow() {
       codedHeight: config.height,
       description: b64(config.description),
       optimizeForLatency: true,
-      // 两边编码器出的都是电脑屏幕的颜色：sRGB 色域和曲线、BT.709 矩阵、视频范围。
+      // 电脑屏幕的颜色：sRGB 曲线、BT.709 矩阵；范围和色域按对方解码配置里标的（老版本不标，是视频范围、sRGB）。
       // 明确告诉解码器，不让它按电视的 BT.709 曲线去猜，颜色和对方屏幕上一致
-      colorSpace: { primaries: "bt709", transfer: "iec61966-2-1", matrix: "bt709", fullRange: false },
+      colorSpace: {
+        primaries: (config.primaries === "p3" ? "smpte432" : "bt709") as VideoColorPrimaries,
+        transfer: "iec61966-2-1",
+        matrix: "bt709",
+        fullRange: config.full_range === true,
+      },
     };
     // 先要显卡解码，不行再让系统自己挑
     let chosen: VideoDecoderConfig = { ...base, hardwareAcceleration: "prefer-hardware" };

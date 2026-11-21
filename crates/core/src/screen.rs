@@ -117,6 +117,36 @@ pub struct VideoConfig {
     pub height: u32,
     /// avcC（AVCDecoderConfigurationRecord），base64
     pub description: String,
+    /// 全范围（0~255）；假是视频范围（16~235）。老版本不带，就是视频范围
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full_range: bool,
+    /// 色域；老版本不带，就是 sRGB（BT.709 原色）
+    #[serde(default, skip_serializing_if = "Primaries::is_default")]
+    pub primaries: Primaries,
+}
+
+/// 画面的色域
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Primaries {
+    /// sRGB、BT.709 的原色：一般的屏幕
+    #[default]
+    Bt709,
+    /// Display P3：Mac 这类广色域屏幕
+    P3,
+}
+
+impl Primaries {
+    fn is_default(&self) -> bool {
+        *self == Primaries::Bt709
+    }
+}
+
+/// 编码器实际出的颜色格式，被连方按它给解码配置打标记
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ColorFormat {
+    pub full_range: bool,
+    pub primaries: Primaries,
 }
 
 /// 编码好的一帧
@@ -142,6 +172,10 @@ pub struct CaptureOptions {
     pub show_cursor: bool,
     /// 想用的编码格式；这台电脑编不了 H.265 时实现自己退回 H.264，观看方按解码配置里的格式解
     pub codec: VideoCodec,
+    /// 用全范围（0~255）：观看方认得解码配置里的范围标记时才开，色阶多一成多，渐变不容易出色带
+    pub full_range: bool,
+    /// 观看方的屏幕是广色域：本机屏幕也是的话按 Display P3 传，不压成 sRGB
+    pub wide_gamut: bool,
 }
 
 /// 鼠标指针的样子：RGBA（不预乘透明度），观看方拿它当本机指针的图案
@@ -193,6 +227,10 @@ pub trait ScreenCapture: Send + Sync {
     fn next_frame(&self) -> crate::host::BoxFuture<Result<EncodedFrame>>;
     fn request_keyframe(&self);
     fn set_bitrate(&self, bps: u32);
+    /// 实际出的颜色格式（范围、色域）；老实现不管这个，就是视频范围、sRGB
+    fn color(&self) -> ColorFormat {
+        ColorFormat::default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,7 +257,7 @@ pub enum InputEvent {
 }
 
 /// 开始看画面的请求
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ScreenOpen {
     /// 不写就是主屏
     #[serde(default)]
@@ -233,6 +271,12 @@ pub struct ScreenOpen {
     /// 老版本不带这项，就是 H.264
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codecs: Vec<VideoCodec>,
+    /// 观看方认得解码配置里的范围、色域标记：被连方这时才用全范围、广色域
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub color_tags: bool,
+    /// 观看方的屏幕是广色域（Display P3），画布也能画出来
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wide_gamut: bool,
 }
 
 /// 视频编码格式。H.265 同样画质码率省三到五成，同样码率更清楚；H.264 哪儿都能用，兜底
@@ -634,6 +678,14 @@ fn spawn_capture(capture: Arc<dyn ScreenCapture>, frames: mpsc::Sender<Result<En
     (demand_tx, task)
 }
 
+/// 观看方要的编码格式和颜色
+#[derive(Debug, Clone, Copy)]
+struct Format {
+    codec: VideoCodec,
+    full_range: bool,
+    wide_gamut: bool,
+}
+
 struct Running {
     capture: Arc<dyn ScreenCapture>,
     demand: mpsc::Sender<()>,
@@ -645,14 +697,16 @@ struct Running {
 
 impl Running {
     /// 开抓屏要等系统回应（最多几秒），放到阻塞线程上，不占异步运行时
-    async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32, show_cursor: bool, codec: VideoCodec) -> Result<Self> {
+    async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32, show_cursor: bool, format: Format) -> Result<Self> {
         let opts = CaptureOptions {
             display: display.to_string(),
             max_long_edge: quality.max_long_edge(),
             fps: quality.fps(),
             bitrate,
             show_cursor,
-            codec,
+            codec: format.codec,
+            full_range: format.full_range,
+            wide_gamut: format.wide_gamut,
         };
         let backend = backend.clone();
         let capture = tokio::task::spawn_blocking(move || backend.start(opts)).await.map_err(|e| anyhow!("抓屏线程出错：{e}"))??;
@@ -701,12 +755,14 @@ where
     let mut rate = RateControl::new(quality, rtt);
     // 观看方能硬件解码 H.265 就请编码器用 H.265（这台编不了时实现自己退回 H.264）
     let codec = if open.codecs.contains(&VideoCodec::H265) { VideoCodec::H265 } else { VideoCodec::H264 };
+    // 观看方认得颜色标记才用全范围、广色域；老观看方一律按视频范围、sRGB 解
+    let format = Format { codec, full_range: open.color_tags, wide_gamut: open.color_tags && open.wide_gamut };
     // 能单独读指针就不把指针画进画面：观看方用本机的系统指针画，跟手
     let separate_cursor = {
         let (backend, display) = (backend.clone(), display.clone());
         tokio::task::spawn_blocking(move || backend.cursor(&display).is_some()).await.unwrap_or(false)
     };
-    let mut running = match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, codec).await {
+    let mut running = match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, format).await {
         Ok(r) => r,
         Err(e) => {
             let _ = crate::proto::write_msg(&mut send, &crate::proto::Msg::Error { message: format!("{e:#}") }).await;
@@ -859,7 +915,13 @@ where
                     need_key = true;
                     continue;
                 }
-                if let Some(config) = &frame.config
+                let config = frame.config.map(|mut c| {
+                    let color = running.capture.color();
+                    c.full_range = color.full_range;
+                    c.primaries = color.primaries;
+                    c
+                });
+                if let Some(config) = &config
                     && last_config.as_ref() != Some(config)
                 {
                     last_config = Some(config.clone());
@@ -903,7 +965,7 @@ where
                         let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Switched { display: display.clone() } })).await;
                         continue;
                     }
-                    drop(std::mem::replace(&mut running, match Running::start(&backend, &want, quality, rate.bitrate, !separate_cursor, codec).await {
+                    drop(std::mem::replace(&mut running, match Running::start(&backend, &want, quality, rate.bitrate, !separate_cursor, format).await {
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
@@ -918,7 +980,7 @@ where
                     if q == quality { continue; }
                     quality = q;
                     rate.set_quality(q);
-                    drop(std::mem::replace(&mut running, match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, codec).await {
+                    drop(std::mem::replace(&mut running, match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, format).await {
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
@@ -1078,6 +1140,8 @@ pub fn avcc_config(sps: &[u8], pps: &[u8], width: u32, height: u32) -> Result<Vi
         width,
         height,
         description: base64::engine::general_purpose::STANDARD.encode(rec),
+        full_range: false,
+        primaries: Primaries::Bt709,
     })
 }
 
@@ -1188,7 +1252,7 @@ pub fn hevc_config(hvcc: &[u8], width: u32, height: u32) -> Result<VideoConfig> 
     for c in constraints {
         codec.push_str(&format!(".{c:X}"));
     }
-    Ok(VideoConfig { codec, width, height, description: base64::engine::general_purpose::STANDARD.encode(hvcc) })
+    Ok(VideoConfig { codec, width, height, description: base64::engine::general_purpose::STANDARD.encode(hvcc), full_range: false, primaries: Primaries::Bt709 })
 }
 
 fn split_annexb(data: &[u8]) -> Vec<&[u8]> {

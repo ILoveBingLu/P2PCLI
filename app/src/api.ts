@@ -342,6 +342,10 @@ export interface ScreenVideoConfig {
   height: number;
   /** avcC，base64 */
   description: string;
+  /** 全范围（0~255）；没有就是视频范围（16~235） */
+  full_range?: boolean;
+  /** 色域；没有就是 sRGB */
+  primaries?: "bt709" | "p3";
 }
 
 export type ScreenMouseButton = "left" | "right" | "middle" | "back" | "forward";
@@ -546,6 +550,15 @@ export interface Diagnosis {
   notes: string[];
 }
 
+/** 解码器认不认 P3 原色（smpte432）：不认的话配置解码器会直接报错，就别请对方按 P3 传 */
+function supportsP3Video(): boolean {
+  try {
+    return typeof VideoColorSpace !== "undefined" && (new VideoColorSpace({ primaries: "smpte432" as VideoColorPrimaries }).primaries as string | null) === "smpte432";
+  } catch {
+    return false;
+  }
+}
+
 export const api = {
   collabDeliveries: () => invoke<CollaborationDelivery[]>("collab_deliveries"),
   collabRequest: async (target: string | null, projectId: string | null, action: CollaborationAction, requestId = crypto.randomUUID().replaceAll("-", "")) =>
@@ -695,7 +708,9 @@ export const api = {
         onEvent(JSON.parse(decoder.decode(buf.subarray(1))) as ScreenStreamEvent);
       }
     };
-    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, events });
+    // 认得解码配置里的范围、色域标记；屏幕是广色域就请对方按 P3 传
+    const wideGamut = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches && supportsP3Video();
+    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, events });
   },
   screenSend: (screenId: number, msgs: ScreenViewerMsg[]) => invoke<void>("screen_send", { screenId, msgs }),
   screenClose: (screenId: number) => invoke<void>("screen_close", { screenId }),

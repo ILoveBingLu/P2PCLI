@@ -13,7 +13,7 @@ use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2_core_foundation::{CFRetained, Type};
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayCopyDisplayMode, CGDisplayIsBuiltin, CGDisplayMode, CGGetActiveDisplayList, CGMainDisplayID,
-    kCGColorSpaceSRGB, kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
+    kCGColorSpaceDisplayP3, kCGColorSpaceSRGB, kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
 };
 use objc2_core_media::{CMSampleBuffer, CMTime};
 
@@ -23,13 +23,15 @@ use objc2_screen_capture_kit::{
     SCStreamOutputType,
 };
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureOptions, DisplayInfo, EncodedFrame, ScreenCapture, VideoCodec};
+use p2pcli_core::screen::{CaptureOptions, ColorFormat, DisplayInfo, EncodedFrame, Primaries, ScreenCapture, VideoCodec};
 use tracing::{debug, info, warn};
 
 use super::encode::Encoder;
 
 /// kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange（'420v'）：硬件编码器最喜欢的格式
 const PIXEL_FORMAT_NV12: u32 = 0x3432_3076;
+/// kCVPixelFormatType_420YpCbCr8BiPlanarFullRange（'420f'）：同样的排法，用满 0~255
+const PIXEL_FORMAT_NV12_FULL: u32 = 0x3432_3066;
 
 /// 抓到的一帧，CF 对象在线程间传递是安全的（只读）
 #[derive(Clone)]
@@ -171,6 +173,7 @@ pub struct MacCapture {
     fps: u32,
     /// 想用的编码格式（编不了 H.265 时编码器自己退回 H.264）
     codec: VideoCodec,
+    color: ColorFormat,
     bitrate: Arc<AtomicU32>,
     want_key: Arc<AtomicBool>,
     /// 时间戳从这里算：同一帧重新编码时时间戳也要往前走
@@ -195,11 +198,11 @@ impl MacCapture {
         unsafe {
             config.setWidth(width as usize);
             config.setHeight(height as usize);
-            config.setPixelFormat(PIXEL_FORMAT_NV12);
+            config.setPixelFormat(if opts.full_range { PIXEL_FORMAT_NV12_FULL } else { PIXEL_FORMAT_NV12 });
             config.setColorMatrix(kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
-            // Mac 屏幕多是广色域（Display P3）：让系统抓屏时就转成 sRGB，
-            // 不然 P3 的数值被当成 sRGB 显示，颜色发灰发淡
-            config.setColorSpaceName(kCGColorSpaceSRGB);
+            // Mac 屏幕多是广色域（Display P3）。观看方也是广色域屏幕就按 P3 抓，鲜艳的颜色不被压掉；
+            // 不然让系统抓屏时就转成 sRGB，免得 P3 的数值被当成 sRGB 显示，颜色发灰发淡
+            config.setColorSpaceName(if opts.wide_gamut { kCGColorSpaceDisplayP3 } else { kCGColorSpaceSRGB });
             config.setMinimumFrameInterval(CMTime::new(1, opts.fps.max(1) as i32));
             // 能单独读指针时不画进画面：观看方用本机的系统指针画，跟手
             config.setShowsCursor(opts.show_cursor);
@@ -243,6 +246,7 @@ impl MacCapture {
             encoder: Arc::new(Mutex::new(None)),
             fps: opts.fps,
             codec: opts.codec,
+            color: ColorFormat { full_range: opts.full_range, primaries: if opts.wide_gamut { Primaries::P3 } else { Primaries::Bt709 } },
             bitrate: Arc::new(AtomicU32::new(opts.bitrate)),
             want_key: Arc::new(AtomicBool::new(true)),
             started: std::time::Instant::now(),
@@ -265,6 +269,7 @@ impl ScreenCapture for MacCapture {
         let want_key = self.want_key.clone();
         let fps = self.fps;
         let codec = self.codec;
+        let p3 = self.color.primaries == Primaries::P3;
         let started = self.started;
         Box::pin(async move {
             loop {
@@ -292,7 +297,7 @@ impl ScreenCapture for MacCapture {
                     let mut guard = encoder.lock().unwrap();
                     let Some(image) = (unsafe { sample.0.image_buffer() }) else { continue };
                     let pts = unsafe { CMTime::new(started.elapsed().as_micros() as i64, 1_000_000) };
-                    match Encoder::encode(&mut guard, &image, pts, fps, bitrate.load(Ordering::Relaxed), key, codec) {
+                    match Encoder::encode(&mut guard, &image, pts, fps, bitrate.load(Ordering::Relaxed), key, codec, p3) {
                         Ok(rx) => rx,
                         Err(e) => {
                             want_key.store(true, Ordering::Relaxed);
@@ -323,6 +328,9 @@ impl ScreenCapture for MacCapture {
 
     fn set_bitrate(&self, bps: u32) {
         self.bitrate.store(bps, Ordering::Relaxed);
+    }
+    fn color(&self) -> ColorFormat {
+        self.color
     }
 }
 

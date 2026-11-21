@@ -97,12 +97,13 @@ fn candidates(hardware: bool, codec: VideoCodec) -> Result<Vec<IMFActivate>> {
 impl Encoder {
     /// 要 H.265 时先找显卡的 H.265 编码器（只用硬件的），没有就退回 H.264；
     /// H.264 先试硬件编码器，都不行再用软件的
-    pub fn new(device: &ID3D11Device, manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32, codec: VideoCodec) -> Result<Self> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(device: &ID3D11Device, manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32, codec: VideoCodec, full_range: bool) -> Result<Self> {
         unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
         if codec == VideoCodec::H265 {
             for activate in candidates(true, VideoCodec::H265).unwrap_or_default() {
                 let name = friendly_name(&activate);
-                match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H265) {
+                match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H265, full_range) {
                     Ok(enc) => {
                         info!(encoder = %name, width, height, fps, bitrate, "H.265 硬件编码器已就绪");
                         return Ok(enc);
@@ -115,7 +116,7 @@ impl Encoder {
         let mut last_err = None;
         for activate in candidates(true, VideoCodec::H264).unwrap_or_default() {
             let name = friendly_name(&activate);
-            match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H264) {
+            match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H264, full_range) {
                 Ok(enc) => {
                     info!(encoder = %name, width, height, fps, bitrate, "H.264 硬件编码器已就绪");
                     return Ok(enc);
@@ -127,7 +128,7 @@ impl Encoder {
             }
         }
         for activate in candidates(false, VideoCodec::H264)? {
-            match Self::open(&activate, None, width, height, fps, bitrate, VideoCodec::H264) {
+            match Self::open(&activate, None, width, height, fps, bitrate, VideoCodec::H264, full_range) {
                 Ok(mut enc) => {
                     warn!(width, height, "没有可用的硬件编码器，改用系统的软件编码器");
                     enc.staging = Some(staging_texture(device, width, height)?);
@@ -139,7 +140,9 @@ impl Encoder {
         Err(last_err.unwrap_or_else(|| anyhow!("这台电脑上没有 H.264 编码器")))
     }
 
-    fn open(activate: &IMFActivate, manager: Option<&IMFDXGIDeviceManager>, width: u32, height: u32, fps: u32, bitrate: u32, format: VideoCodec) -> Result<Self> {
+    #[allow(clippy::too_many_arguments)]
+    fn open(activate: &IMFActivate, manager: Option<&IMFDXGIDeviceManager>, width: u32, height: u32, fps: u32, bitrate: u32, format: VideoCodec, full_range: bool) -> Result<Self> {
+        let range = if full_range { MFNominalRange_0_255 } else { MFNominalRange_16_235 };
         let transform: IMFTransform = unsafe { activate.ActivateObject()? };
         let hardware = manager.is_some();
         if hardware {
@@ -183,7 +186,7 @@ impl Encoder {
             out.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
             // 电脑屏幕用的是 sRGB 曲线，不是电视的 BT.709 曲线：标错了解码端的明暗会不一样
             out.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_sRGB.0 as u32)?;
-            out.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
+            out.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, range.0 as u32)?;
             transform.SetOutputType(out_id, &out, 0).context("编码器不支持这个输出格式")?;
         }
         let input = unsafe { MFCreateMediaType()? };
@@ -197,7 +200,7 @@ impl Encoder {
             input.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
             input.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
             input.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_sRGB.0 as u32)?;
-            input.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
+            input.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, range.0 as u32)?;
             transform.SetInputType(in_id, &input, 0).context("编码器不支持这个输入格式")?;
         }
 

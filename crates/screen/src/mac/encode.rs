@@ -15,6 +15,7 @@ use objc2_core_media::{
 };
 use objc2_core_video::{
     CVImageBuffer, CVPixelBufferGetHeight, CVPixelBufferGetWidth, kCVImageBufferColorPrimaries_ITU_R_709_2,
+    kCVImageBufferColorPrimaries_P3_D65,
     kCVImageBufferTransferFunction_sRGB, kCVImageBufferYCbCrMatrix_ITU_R_709_2,
 };
 use objc2_video_toolbox::{
@@ -69,17 +70,18 @@ fn num(v: i32) -> CFRetained<CFNumber> {
 
 impl Encoder {
     /// 要 H.265 时先开 HEVC 硬件编码器（Apple 芯片、带 T2 的 Mac 才有），开不了就退回 H.264
-    fn new(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec) -> Result<Self> {
+    fn new(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec, p3: bool) -> Result<Self> {
         if codec == VideoCodec::H265 {
-            match Self::open(width, height, fps, bitrate, VideoCodec::H265) {
+            match Self::open(width, height, fps, bitrate, VideoCodec::H265, p3) {
                 Ok(enc) => return Ok(enc),
                 Err(e) => warn!("开不了 H.265 硬件编码器，改用 H.264：{e:#}"),
             }
         }
-        Self::open(width, height, fps, bitrate, VideoCodec::H264)
+        Self::open(width, height, fps, bitrate, VideoCodec::H264, p3)
     }
 
-    fn open(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec) -> Result<Self> {
+    /// p3：画面是按 Display P3 抓的，码流里标 P3 原色
+    fn open(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec, p3: bool) -> Result<Self> {
         let hevc = codec == VideoCodec::H265;
         let ctx = Box::into_raw(Box::new(Context { pending: Mutex::new(None), codec }));
         let t = CFBoolean::new(true);
@@ -150,7 +152,7 @@ impl Encoder {
             set(&session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, &num(24 * 3600));
             set(&session, kVTCompressionPropertyKey_ExpectedFrameRate, &num(fps as i32));
             set(&session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, CFBoolean::new(true));
-            set(&session, kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2);
+            set(&session, kVTCompressionPropertyKey_ColorPrimaries, if p3 { kCVImageBufferColorPrimaries_P3_D65 } else { kCVImageBufferColorPrimaries_ITU_R_709_2 });
             // 电脑屏幕用的是 sRGB 曲线，不是电视的 BT.709 曲线：标错了解码端的明暗会不一样
             set(&session, kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_sRGB);
             set(&session, kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2);
@@ -178,12 +180,13 @@ impl Encoder {
     }
 
     /// 把一帧送进编码器（尺寸变了就重建），返回等结果的接收端。只在一个线程上调
-    pub fn encode(slot: &mut Option<Encoder>, image: &CVImageBuffer, pts: CMTime, fps: u32, bitrate: u32, key: bool, codec: VideoCodec) -> Result<oneshot::Receiver<Result<Option<EncodedFrame>>>> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode(slot: &mut Option<Encoder>, image: &CVImageBuffer, pts: CMTime, fps: u32, bitrate: u32, key: bool, codec: VideoCodec, p3: bool) -> Result<oneshot::Receiver<Result<Option<EncodedFrame>>>> {
         let (w, h) = (CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image));
         let mut key = key;
         if slot.as_ref().is_none_or(|e| e.width != w || e.height != h) {
             *slot = None;
-            *slot = Some(Encoder::new(w, h, fps, bitrate, codec)?);
+            *slot = Some(Encoder::new(w, h, fps, bitrate, codec, p3)?);
             key = true;
         }
         let enc = slot.as_mut().unwrap();
