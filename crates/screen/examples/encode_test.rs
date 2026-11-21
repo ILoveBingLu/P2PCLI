@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
         }
         let key = i == 0 || i == 45;
         let t = std::time::Instant::now();
-        let rx = Encoder::encode(&mut enc, &pb, unsafe { CMTime::new(i as i64, 60) }, 60, if i < 45 { 8_000_000 } else { 1_000_000 }, key, codec)?;
+        let rx = Encoder::encode(&mut enc, &pb, unsafe { CMTime::new(i as i64, 60) }, 60, if i < 45 { 8_000_000 } else { 1_000_000 }, key, codec, false)?;
         let Some(f) = rx.await?? else { println!("帧 {i}: 编码器丢帧"); continue };
         total += f.data.len();
         println!("帧 {i}: key={} {} 字节 编码 {:?}", f.key, f.data.len(), t.elapsed());

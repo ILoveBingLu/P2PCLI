@@ -17,6 +17,7 @@ mod capture;
 mod cursor;
 mod encode;
 mod input;
+mod yuv444;
 
 pub fn backend() -> Option<Arc<dyn ScreenBackend>> {
     Some(Arc::new(WinBackend { input: Mutex::new(input::Injector::default()), cursor: cursor::CursorReader::default() }))

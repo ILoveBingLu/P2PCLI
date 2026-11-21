@@ -164,6 +164,9 @@ impl Primaries {
     }
 }
 
+/// 4:4:4 时画面长边最多这么大
+const YUV444_MAX_LONG_EDGE: u32 = 2560;
+
 /// 编码器实际出的颜色格式，被连方按它给解码配置打标记
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ColorFormat {
@@ -784,17 +787,20 @@ struct Running {
 impl Running {
     /// 开抓屏要等系统回应（最多几秒），放到阻塞线程上，不占异步运行时
     async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32, show_cursor: bool, format: Format) -> Result<Self> {
+        // 流畅档是给网差的时候用的，4:4:4 要多花码率，不用
+        let yuv444 = format.yuv444 && quality != Quality::Smooth;
         let opts = CaptureOptions {
             display: display.to_string(),
-            max_long_edge: quality.max_long_edge(),
+            // 4:4:4 要编三倍高的画面：长边最多 2560，4K 屏整屏在变时也能稳在 60 帧上下
+            // （3840×6480 每帧要编 27 ms 左右，只有三十多帧）
+            max_long_edge: if yuv444 { quality.max_long_edge().min(YUV444_MAX_LONG_EDGE) } else { quality.max_long_edge() },
             fps: quality.fps(),
             bitrate,
             show_cursor,
             codec: format.codec,
             full_range: format.full_range,
             wide_gamut: format.wide_gamut,
-            // 流畅档是给网差的时候用的，4:4:4 要多花码率，不用
-            yuv444: format.yuv444 && quality != Quality::Smooth,
+            yuv444,
         };
         let backend = backend.clone();
         let capture = tokio::task::spawn_blocking(move || backend.start(opts)).await.map_err(|e| anyhow!("抓屏线程出错：{e}"))??;

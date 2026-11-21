@@ -34,6 +34,8 @@ pub struct Encoder {
     provides_samples: bool,
     out_size: u32,
     pub hardware: bool,
+    /// 编码器的名字，日志里用
+    pub name: String,
     /// 实际在用的格式
     pub format: VideoCodec,
     pub width: u32,
@@ -67,7 +69,6 @@ fn pack(hi: u32, lo: u32) -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// 能用的 H.264 编码器，硬件的在前
 fn subtype(codec: VideoCodec) -> GUID {
     match codec {
         VideoCodec::H264 => MFVideoFormat_H264,
@@ -75,6 +76,7 @@ fn subtype(codec: VideoCodec) -> GUID {
     }
 }
 
+/// 能用的编码器，硬件的在前
 fn candidates(hardware: bool, codec: VideoCodec) -> Result<Vec<IMFActivate>> {
     let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_NV12 };
     let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: subtype(codec) };
@@ -96,48 +98,70 @@ fn candidates(hardware: bool, codec: VideoCodec) -> Result<Vec<IMFActivate>> {
 
 impl Encoder {
     /// 要 H.265 时先找显卡的 H.265 编码器（只用硬件的），没有就退回 H.264；
-    /// H.264 先试硬件编码器，都不行再用软件的
+    /// H.264 先试硬件编码器，都不行再用软件的。hardware_only 时不用软件编码器
     #[allow(clippy::too_many_arguments)]
-    pub fn new(device: &ID3D11Device, manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32, codec: VideoCodec, full_range: bool) -> Result<Self> {
+    pub fn new(
+        device: &ID3D11Device,
+        manager: &IMFDXGIDeviceManager,
+        width: u32,
+        height: u32,
+        fps: u32,
+        bitrate: u32,
+        codec: VideoCodec,
+        full_range: bool,
+        hardware_only: bool,
+    ) -> Result<Self> {
         unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
         if codec == VideoCodec::H265 {
-            for activate in candidates(true, VideoCodec::H265).unwrap_or_default() {
-                let name = friendly_name(&activate);
-                match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H265, full_range) {
-                    Ok(enc) => {
-                        info!(encoder = %name, width, height, fps, bitrate, "H.265 硬件编码器已就绪");
-                        return Ok(enc);
-                    }
-                    Err(e) => warn!(encoder = %name, "这个 H.265 硬件编码器用不了：{e:#}"),
-                }
+            match Self::hardware(manager, width, height, fps, bitrate, VideoCodec::H265, full_range) {
+                Ok(enc) => return Ok(enc),
+                Err(e) => warn!(width, height, "没有可用的 H.265 硬件编码器，改用 H.264：{e:#}"),
             }
-            warn!("没有可用的 H.265 硬件编码器，改用 H.264");
         }
-        let mut last_err = None;
-        for activate in candidates(true, VideoCodec::H264).unwrap_or_default() {
-            let name = friendly_name(&activate);
-            match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H264, full_range) {
-                Ok(enc) => {
-                    info!(encoder = %name, width, height, fps, bitrate, "H.264 硬件编码器已就绪");
-                    return Ok(enc);
-                }
-                Err(e) => {
-                    warn!(encoder = %name, "这个硬件编码器用不了：{e:#}");
-                    last_err = Some(e);
-                }
-            }
+        let mut last_err = match Self::hardware(manager, width, height, fps, bitrate, VideoCodec::H264, full_range) {
+            Ok(enc) => return Ok(enc),
+            Err(e) => e,
+        };
+        if hardware_only {
+            return Err(last_err);
         }
         for activate in candidates(false, VideoCodec::H264)? {
             match Self::open(&activate, None, width, height, fps, bitrate, VideoCodec::H264, full_range) {
                 Ok(mut enc) => {
                     warn!(width, height, "没有可用的硬件编码器，改用系统的软件编码器");
+                    enc.name = friendly_name(&activate);
                     enc.staging = Some(staging_texture(device, width, height)?);
                     return Ok(enc);
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => last_err = e,
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow!("这台电脑上没有 H.264 编码器")))
+        Err(last_err)
+    }
+
+    /// 只找这一种格式的硬件编码器，一个个试
+    pub fn hardware(manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32, codec: VideoCodec, full_range: bool) -> Result<Self> {
+        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
+        let label = match codec {
+            VideoCodec::H264 => "H.264",
+            VideoCodec::H265 => "H.265",
+        };
+        let mut last_err = None;
+        for activate in candidates(true, codec).unwrap_or_default() {
+            let name = friendly_name(&activate);
+            match Self::open(&activate, Some(manager), width, height, fps, bitrate, codec, full_range) {
+                Ok(mut enc) => {
+                    info!(encoder = %name, width, height, fps, bitrate, "{label} 硬件编码器已就绪");
+                    enc.name = name;
+                    return Ok(enc);
+                }
+                Err(e) => {
+                    warn!(encoder = %name, width, height, "这个 {label} 硬件编码器用不了：{e:#}");
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow!("这台电脑上没有 {label} 硬件编码器")))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -246,6 +270,7 @@ impl Encoder {
             provides_samples,
             out_size,
             hardware,
+            name: String::new(),
             format,
             width,
             height,
