@@ -14,6 +14,7 @@ use bytes::Bytes;
 use iroh::endpoint::transports::{CustomEndpoint, CustomSender, CustomTransport, RecvInfo, Transmit};
 use p2pcli_core::host::{BoxFuture, Decision, FileRequest, HostDelegate, HostEvent, IncomingRequest};
 use p2pcli_core::node::{Node, NodeConfig};
+use p2pcli_core::quic::Mode;
 use iroh::endpoint::{PathId, QuicTransportConfig, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr};
 use iroh_base::CustomAddr;
@@ -35,14 +36,44 @@ struct Link {
     rate_bps: u64,
     /// 队列里最多排多久，再多就丢尾（像路由器的缓冲）
     queue_limit: Duration,
+    /// 偶尔成串丢包：不随机丢，隔一阵子连着丢几个
+    burst: Option<Burst>,
+}
+
+/// 成串丢包：每隔 every_min 到 every_max 之间的随机时长，连着丢 1 到 max_len 个数据包
+/// （只丢大包，确认包这种小包不丢，像真实链路上拥塞的那个方向）
+#[derive(Clone, Copy, Debug)]
+struct Burst {
+    every_min: Duration,
+    every_max: Duration,
+    max_len: u32,
+}
+
+/// 一个方向上成串丢包的进度
+#[derive(Debug)]
+struct BurstState {
+    /// 下一串什么时候开始
+    next_at: Instant,
+    /// 这一串还要丢几个
+    left: u32,
+}
+
+impl Burst {
+    fn gap(&self) -> Duration {
+        self.every_min + (self.every_max - self.every_min).mul_f64(rand::random::<f64>())
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Cc {
+    /// noq 原版的 Cubic，不经过产品里那层包装
     Cubic,
+    /// noq 原版的 BBR3
     Bbr3,
-    /// 产品里实际用的：按链路延迟自动选 Cubic 或 BBR3
-    Adaptive,
+    /// 产品里实际用的默认做法（现在固定 Cubic，不看环境变量 P2PCLI_CC）
+    Default,
+    /// 以前的做法：按链路延迟选，往返 20 ms 以上用 BBR3，留着对比
+    Auto,
 }
 
 fn addr_of(id: EndpointId) -> CustomAddr {
@@ -69,6 +100,7 @@ struct Direction {
     /// 链路下一次空出来的时间：包要按带宽一个接一个发
     link_free: Mutex<Instant>,
     delay: mpsc::UnboundedSender<Due>,
+    burst: Mutex<BurstState>,
 }
 
 /// 内存里的网络：谁发给谁，都经过同一条带损伤的链路
@@ -78,11 +110,13 @@ struct Net {
     /// (发件人, 收件人) 各自一个方向
     directions: Arc<Mutex<BTreeMap<(EndpointId, EndpointId), Arc<Direction>>>>,
     link: Link,
+    /// 成串丢包一共丢了几个（所有方向加起来）
+    burst_dropped: Arc<AtomicU64>,
 }
 
 impl Net {
     fn new(link: Link) -> Self {
-        Net { inboxes: Default::default(), directions: Default::default(), link }
+        Net { inboxes: Default::default(), directions: Default::default(), link, burst_dropped: Default::default() }
     }
 
     /// 取这个方向的链路；第一次用到时建，并起一个按序投递的任务
@@ -101,7 +135,9 @@ impl Net {
                         let _ = inbox.try_send(packet);
                     }
                 });
-                Arc::new(Direction { link_free: Mutex::new(Instant::now()), delay })
+                let first = self.link.burst.map_or(Duration::ZERO, |b| b.gap());
+                let burst = Mutex::new(BurstState { next_at: Instant::now() + first, left: 0 });
+                Arc::new(Direction { link_free: Mutex::new(Instant::now()), delay, burst })
             })
             .clone()
     }
@@ -205,6 +241,18 @@ impl CustomSender for LinkSender {
                 continue;
             }
             let now = Instant::now();
+            if let Some(b) = link.burst.filter(|_| chunk.len() >= 1000) {
+                let mut state = direction.burst.lock().unwrap();
+                if state.left == 0 && now >= state.next_at {
+                    state.left = 1 + rand::random::<u32>() % b.max_len;
+                    state.next_at = now + b.gap();
+                }
+                if state.left > 0 {
+                    state.left -= 1;
+                    self.net.burst_dropped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+            }
             let (start, tx_time) = {
                 let mut free = direction.link_free.lock().unwrap();
                 let start = (*free).max(now);
@@ -227,7 +275,8 @@ fn transport_config(cc: Cc) -> QuicTransportConfig {
     match cc {
         Cc::Cubic => QuicTransportConfig::builder().congestion_controller_factory(Arc::new(CubicConfig::default())).build(),
         Cc::Bbr3 => QuicTransportConfig::builder().congestion_controller_factory(Arc::new(Bbr3Config::default())).build(),
-        Cc::Adaptive => p2pcli_core::quic::transport_config(),
+        Cc::Default => p2pcli_core::quic::transport_config_with(Mode::default()),
+        Cc::Auto => p2pcli_core::quic::transport_config_with(Mode::Auto),
     }
 }
 
@@ -294,44 +343,49 @@ fn mbps(b: f64) -> String {
     format!("{:.1} Mbps", b * 8.0 / 1e6)
 }
 
-/// 丢包率从 0 扫到 3%：同一条跨境链路上三种做法的速度
+/// 丢包率从 0 扫到 3%：同一条跨境链路上现在的默认（Cubic）、BBR3、以前按延迟选的做法各自的速度。
+/// 均匀随机丢包下 BBR3 远比 Cubic 快，但真实跨境链路上 noq 的 BBR3 会越跑越慢，所以默认没用它，
+/// 见 src/quic.rs 和下面的 bbr3_collapse_after_sparse_loss
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "几分钟的对比实验，手动跑，加 --test-threads=1"]
 async fn congestion_control_on_a_lossy_long_link() {
-    let base = Link { one_way: Duration::from_millis(53), loss: 0.0, rate_bps: 100_000_000, queue_limit: Duration::from_millis(100) };
+    let base = Link { one_way: Duration::from_millis(53), loss: 0.0, rate_bps: 100_000_000, queue_limit: Duration::from_millis(100), burst: None };
     println!("\n链路：往返 {} ms，瓶颈带宽 {} Mbps，队列最多 {} ms；每组跑 {} 秒，去掉前 {} 秒慢启动",
         base.one_way.as_millis() * 2, base.rate_bps / 1_000_000, base.queue_limit.as_millis(), RUN.as_secs(), WARMUP.as_secs());
-    println!("{:>8}  {:>14}  {:>14}  {:>20}", "丢包率", "Cubic（以前）", "BBR3", "自适应（现在）");
+    println!("{:>8}  {:>20}  {:>14}  {:>22}", "丢包率", "默认（现在）", "BBR3", "按延迟选（以前）");
     for loss in [0.0, 0.005, 0.013, 0.03] {
         let link = Link { loss, ..base };
-        let (cubic, _) = measure(Cc::Cubic, link).await;
+        let (default, now) = measure(Cc::Default, link).await;
         let (bbr, _) = measure(Cc::Bbr3, link).await;
-        let (adaptive, chose) = measure(Cc::Adaptive, link).await;
-        println!("{:>7.1}%  {:>14}  {:>14}  {:>14}（{chose}）", loss * 100.0, mbps(cubic), mbps(bbr), mbps(adaptive));
-        assert_eq!(chose, "bbr3", "往返 106 ms 的链路应该选 BBR3");
+        let (auto, before) = measure(Cc::Auto, link).await;
+        println!("{:>7.1}%  {:>14}（{now}）  {:>14}  {:>14}（{before}）", loss * 100.0, mbps(default), mbps(bbr), mbps(auto));
+        assert_eq!(now, "cubic", "默认应该一直是 Cubic");
+        assert_eq!(before, "bbr3", "以前的做法在往返 106 ms 的链路上会选 BBR3");
     }
 }
 
-/// 常见的几种链路：自适应不能比 Cubic 差，该用 BBR3 的链路上要接近 BBR3
+/// 常见的几种链路：现在的默认（一直 Cubic）、BBR3、以前按延迟选的做法各自的速度；
+/// 默认不管什么链路都该是 Cubic，以前的做法在往返 20 ms 以上会换成 BBR3
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "几分钟的对比实验，手动跑，加 --test-threads=1"]
 async fn congestion_control_on_typical_links() {
     let q = Duration::from_millis(100);
     let cases = [
-        ("局域网 2ms 300M 无丢包", Link { one_way: Duration::from_millis(1), loss: 0.0, rate_bps: 300_000_000, queue_limit: q }, "cubic"),
-        ("局域网 2ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(1), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }, "cubic"),
-        ("同城 10ms 300M 无丢包", Link { one_way: Duration::from_millis(5), loss: 0.0, rate_bps: 300_000_000, queue_limit: q }, "cubic"),
-        ("国内宽带 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q }, "bbr3"),
-        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }, "bbr3"),
-        ("跨境 106ms 50M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 50_000_000, queue_limit: q }, "bbr3"),
+        ("局域网 2ms 300M 无丢包", Link { one_way: Duration::from_millis(1), loss: 0.0, rate_bps: 300_000_000, queue_limit: q, burst: None }, "cubic"),
+        ("局域网 2ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(1), loss: 0.001, rate_bps: 300_000_000, queue_limit: q, burst: None }, "cubic"),
+        ("同城 10ms 300M 无丢包", Link { one_way: Duration::from_millis(5), loss: 0.0, rate_bps: 300_000_000, queue_limit: q, burst: None }, "cubic"),
+        ("国内宽带 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q, burst: None }, "bbr3"),
+        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q, burst: None }, "bbr3"),
+        ("跨境 106ms 50M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 50_000_000, queue_limit: q, burst: None }, "bbr3"),
     ];
-    println!("\n{:<28}{:>14}{:>14}{:>20}", "链路", "Cubic（以前）", "BBR3", "自适应（现在）");
+    println!("\n{:<28}{:>20}{:>14}{:>22}", "链路", "默认（现在）", "BBR3", "按延迟选（以前）");
     for (name, link, expect) in cases {
-        let (a, _) = measure(Cc::Cubic, link).await;
+        let (a, now) = measure(Cc::Default, link).await;
         let (b, _) = measure(Cc::Bbr3, link).await;
-        let (c, chose) = measure(Cc::Adaptive, link).await;
-        println!("{name:<28}{:>14}{:>14}{:>14}（{chose}）", mbps(a), mbps(b), mbps(c));
-        assert_eq!(chose, expect, "{name} 选错了算法");
+        let (c, before) = measure(Cc::Auto, link).await;
+        println!("{name:<28}{:>14}（{now}）{:>14}{:>14}（{before}）", mbps(a), mbps(b), mbps(c));
+        assert_eq!(now, "cubic", "{name}：默认应该一直是 Cubic");
+        assert_eq!(before, expect, "{name}：以前的做法选错了算法");
     }
 }
 
@@ -418,13 +472,13 @@ async fn measure_parallel(cc: Cc, link: Link, connections: usize, streams: usize
 async fn parallel_streams_and_connections() {
     let q = Duration::from_millis(100);
     let cases = [
-        ("跨境 106ms 100M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 100_000_000, queue_limit: q }),
-        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }),
-        ("国内 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q }),
+        ("跨境 106ms 100M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 100_000_000, queue_limit: q, burst: None }),
+        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q, burst: None }),
+        ("国内 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q, burst: None }),
     ];
     println!("\n{:<26}{:>6}  {:>12}{:>12}{:>12}{:>12}", "链路", "算法", "1连接1流", "1连接4流", "4连接各1流", "4连接各2流");
     for (name, link) in cases {
-        for (cc, label) in [(Cc::Cubic, "Cubic"), (Cc::Adaptive, "自适应")] {
+        for (cc, label) in [(Cc::Default, "默认"), (Cc::Bbr3, "BBR3")] {
             let a = measure_parallel(cc, link, 1, 1).await;
             let b = measure_parallel(cc, link, 1, 4).await;
             let c = measure_parallel(cc, link, 4, 1).await;
@@ -508,10 +562,10 @@ async fn transfer_over(link: Link, lanes: Option<u32>, megabytes: usize) -> (f64
 async fn file_transfer_over_lossy_links() {
     let q = Duration::from_millis(100);
     let cases = [
-        ("跨境 106ms 100M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 100_000_000, queue_limit: q }, 64),
-        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q }, 160),
-        ("国内 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q }, 64),
-        ("局域网 2ms 300M 无丢包", Link { one_way: Duration::from_millis(1), loss: 0.0, rate_bps: 300_000_000, queue_limit: q }, 160),
+        ("跨境 106ms 100M 丢包1.3%", Link { one_way: Duration::from_millis(53), loss: 0.013, rate_bps: 100_000_000, queue_limit: q, burst: None }, 64),
+        ("跨境 106ms 300M 丢包0.1%", Link { one_way: Duration::from_millis(53), loss: 0.001, rate_bps: 300_000_000, queue_limit: q, burst: None }, 160),
+        ("国内 30ms 100M 丢包0.1%", Link { one_way: Duration::from_millis(15), loss: 0.001, rate_bps: 100_000_000, queue_limit: q, burst: None }, 64),
+        ("局域网 2ms 300M 无丢包", Link { one_way: Duration::from_millis(1), loss: 0.0, rate_bps: 300_000_000, queue_limit: q, burst: None }, 160),
     ];
     println!("\n{:<28}{:>6}  {:>16}{:>22}", "链路", "大小", "一条流", "并发分段");
     for (name, link, mb) in cases {
@@ -584,7 +638,7 @@ async fn transfer_timeline(link: Link, lanes: Option<u32>, megabytes: usize) -> 
 async fn transfer_timeline_on_a_clean_domestic_link() {
     let q = Duration::from_millis(100);
     // 往返 40 ms、几乎不丢包、20 Mbps 带宽：和一次国内家宽之间的传输差不多
-    let link = Link { one_way: Duration::from_millis(20), loss: 0.0, rate_bps: 20_000_000, queue_limit: q };
+    let link = Link { one_way: Duration::from_millis(20), loss: 0.0, rate_bps: 20_000_000, queue_limit: q, burst: None };
     for (label, lanes) in [("并发分段", None), ("一条流", Some(0))] {
         let tl = transfer_timeline(link, lanes, 56).await;
         println!("\n{label}：56 MiB，往返 40 ms，20 Mbps，无丢包；总用时 {:.1} 秒", tl.last().unwrap().0);
@@ -599,4 +653,217 @@ async fn transfer_timeline_on_a_clean_domestic_link() {
             println!("{t:>5.1}s  {:>13.1} MiB  {:>13.1} MiB  {:>7.1} MiB", *sent as f64 / 1048576.0, *got as f64 / 1048576.0, (*sent as f64 - *got as f64) / 1048576.0);
         }
     }
+}
+
+/// 时间线上的一秒（看发送方那一头）
+#[derive(Clone, Copy, Debug, Default)]
+struct Tick {
+    /// 这一秒接收方收到多少字节
+    got: u64,
+    cwnd: u64,
+    /// 带宽估计（bit/s），只有 BBR3 有
+    bw: Option<u64>,
+    rtt: Duration,
+    /// 这一秒发送方判定丢了几个包
+    lost: u64,
+    /// 这一秒在传大文件（否则在发远程画面那样的小帧）
+    bulk: bool,
+}
+
+/// 发送方式
+#[derive(Clone, Copy, Debug)]
+enum Pattern {
+    /// 一直灌数据，灌这么久
+    Bulk(Duration),
+    /// 像远程画面那样每秒 60 个小帧（每帧 frame_kb.0~frame_kb.1 KB）发 app 这么久，再传一个 bulk_mb MB 的大文件，
+    /// 重复 rounds 次；file_first 就每轮先传文件再发画面
+    ScreenThenFile { app: Duration, frame_kb: (usize, usize), bulk_mb: usize, rounds: usize, file_first: bool },
+}
+
+/// 按 pattern 发一遍，返回每秒的时间线、每次传大文件的耗时（秒）、链路成串丢了几个包
+async fn timeline(cc: Cc, link: Link, pattern: Pattern) -> (Vec<Tick>, Vec<f64>, u64) {
+    let net = Net::new(link);
+    let (server, client) = (endpoint(&net, cc).await, endpoint(&net, cc).await);
+    let received = Arc::new(AtomicU64::new(0));
+    // 每条流收完了报一声（远程画面那条流不会收完）
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<u64>();
+    let sink = {
+        let (server, received) = (server.clone(), received.clone());
+        tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().accept().unwrap().await.unwrap();
+            while let Ok(mut recv) = conn.accept_uni().await {
+                let (received, done_tx) = (received.clone(), done_tx.clone());
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 256 * 1024];
+                    let mut total = 0u64;
+                    while let Ok(Some(n)) = recv.read(&mut buf).await {
+                        received.fetch_add(n as u64, Ordering::Relaxed);
+                        total += n as u64;
+                    }
+                    let _ = done_tx.send(total);
+                });
+            }
+        })
+    };
+    let addr = EndpointAddr::from_parts(server.id(), [TransportAddr::Custom(addr_of(server.id()))]);
+    let conn = client.connect(addr, ALPN).await.unwrap();
+
+    // 每秒记一行
+    let bulk = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let monitor = {
+        let (conn, received, bulk) = (conn.clone(), received.clone(), bulk.clone());
+        tokio::spawn(async move {
+            let mut ticks = Vec::new();
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            tick.tick().await;
+            let (mut last_got, mut last_lost) = (0u64, 0u64);
+            loop {
+                tick.tick().await;
+                let Some(s) = conn.paths().iter().next().map(|p| p.stats()) else { break };
+                let got = received.load(Ordering::Relaxed);
+                ticks.push(Tick {
+                    got: got - last_got,
+                    cwnd: s.cwnd,
+                    bw: s.bandwidth_estimate,
+                    rtt: s.rtt,
+                    lost: s.lost_packets - last_lost,
+                    bulk: bulk.load(Ordering::Relaxed),
+                });
+                (last_got, last_lost) = (got, s.lost_packets);
+                if conn.close_reason().is_some() {
+                    break;
+                }
+            }
+            ticks
+        })
+    };
+
+    let chunk = vec![7u8; 256 * 1024];
+    let mut bulk_secs = Vec::new();
+    match pattern {
+        Pattern::Bulk(run) => {
+            bulk.store(true, Ordering::Relaxed);
+            let mut send = conn.open_uni().await.unwrap();
+            let started = Instant::now();
+            while started.elapsed() < run {
+                send.write_all(&chunk).await.unwrap();
+            }
+        }
+        Pattern::ScreenThenFile { app, frame_kb: (min_kb, max_kb), bulk_mb, rounds, file_first } => {
+            let mut frames = conn.open_uni().await.unwrap();
+            let frame = vec![3u8; max_kb * 1024];
+            // 每一步：真是传文件，假是发画面
+            let steps = (0..rounds).flat_map(|_| if file_first { [true, false] } else { [false, true] });
+            for file in steps {
+                if !file {
+                    let mut every = tokio::time::interval(Duration::from_micros(16_667));
+                    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    let started = Instant::now();
+                    while started.elapsed() < app {
+                        every.tick().await;
+                        let size = min_kb * 1024 + rand::random::<u32>() as usize % ((max_kb - min_kb) * 1024 + 1);
+                        frames.write_all(&frame[..size]).await.unwrap();
+                    }
+                    continue;
+                }
+                bulk.store(true, Ordering::Relaxed);
+                let started = Instant::now();
+                let mut send = conn.open_uni().await.unwrap();
+                for _ in 0..bulk_mb * 4 {
+                    send.write_all(&chunk).await.unwrap();
+                }
+                send.finish().unwrap();
+                let got = done_rx.recv().await.unwrap();
+                assert_eq!(got as usize, bulk_mb << 20, "大文件收到的大小不对");
+                bulk_secs.push(started.elapsed().as_secs_f64());
+                bulk.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+    // 让监视再记最后一秒
+    sleep(Duration::from_millis(1100)).await;
+    conn.close(0u32.into(), b"done");
+    let ticks = monitor.await.unwrap();
+    sink.abort();
+    sleep(Duration::from_millis(100)).await;
+    server.close().await;
+    client.close().await;
+    (ticks, bulk_secs, net.burst_dropped.load(Ordering::Relaxed))
+}
+
+/// 一行里一种算法的那几列：速率、窗口、带宽估计、延迟、丢包，画面阶段在前面标“画”
+fn tick_cols(t: Option<&Tick>) -> String {
+    let Some(t) = t else { return format!("{:>46}", "") };
+    format!(
+        "{}{:>6.1}M {:>6}K {:>7} {:>4}ms {:>3}",
+        if t.bulk { "传" } else { "画" },
+        t.got as f64 * 8.0 / 1e6,
+        t.cwnd / 1024,
+        t.bw.map_or("-".into(), |b| format!("{:.1}M", b as f64 / 1e6)),
+        t.rtt.as_millis(),
+        t.lost,
+    )
+}
+
+/// 同一条链路、同一种发法，Cubic 和 BBR3 的时间线并排打出来
+async fn compare_timelines(name: &str, link: Link, pattern: Pattern) {
+    let (cubic, cubic_bulk, cubic_drops) = timeline(Cc::Cubic, link, pattern).await;
+    let (bbr, bbr_bulk, bbr_drops) = timeline(Cc::Bbr3, link, pattern).await;
+    println!("\n{name}：往返 {} ms，{} Mbps，队列最多 {} ms，{:?}，{:?}",
+        link.one_way.as_millis() * 2, link.rate_bps / 1_000_000, link.queue_limit.as_millis(), link.burst, pattern);
+    println!("每秒一行：传/画 = 在传大文件/在发画面小帧；速率 窗口 带宽估计 延迟 这一秒丢包数");
+    println!("{:>4}  {:<46}  {:<46}", "秒", "Cubic", "BBR3");
+    for i in 0..cubic.len().max(bbr.len()) {
+        println!("{:>4}  {}  {}", i + 1, tick_cols(cubic.get(i)), tick_cols(bbr.get(i)));
+    }
+    let secs = |v: &[f64]| v.iter().map(|s| format!("{s:.1}s")).collect::<Vec<_>>().join(" ");
+    if !cubic_bulk.is_empty() {
+        println!("每次传大文件的耗时：Cubic {}；BBR3 {}", secs(&cubic_bulk), secs(&bbr_bulk));
+    }
+    println!("链路成串丢的包：Cubic 那次 {cubic_drops} 个，BBR3 那次 {bbr_drops} 个");
+}
+
+/// 想复现真实跨境链路上 BBR3 越跑越慢：往返 80 ms、100 Mbps，不随机丢包，只是隔 5~10 秒连着丢 1~6 个包。
+/// 一种一直灌数据，一种像先看远程画面（小帧，app 受限）、再拉一个大文件，来回几次。
+/// 实测这两种都没复现：BBR3 一直 100 Mbps 上下，反倒是 Cubic 在画面和文件交替时窗口被零星丢包一路压小。
+/// 复现出来的是下面 bbr3_collapse_variations 的第二种
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "几分钟的对比实验，手动跑，加 --release --test-threads=1"]
+async fn bbr3_collapse_after_sparse_loss() {
+    let link = Link {
+        one_way: Duration::from_millis(40),
+        loss: 0.0,
+        rate_bps: 100_000_000,
+        queue_limit: Duration::from_millis(50),
+        burst: Some(Burst { every_min: Duration::from_secs(5), every_max: Duration::from_secs(10), max_len: 6 }),
+    };
+    compare_timelines("一直灌数据", link, Pattern::Bulk(Duration::from_secs(60))).await;
+    compare_timelines("画面和大文件交替", link, Pattern::ScreenThenFile { app: Duration::from_secs(20), frame_kb: (2, 20), bulk_mb: 20, rounds: 3, file_first: false }).await;
+}
+
+/// 上面那个没复现时试的几种变化：浅队列（零星丢包多半是队列溢出）；先传文件把带宽估计拉满，
+/// 再发一分钟大一些的画面帧（1~50 KB），期间成串丢包更频繁；然后再传文件。
+///
+/// 浅队列：BBR3 一开始的慢启动撞上丢尾以后只有 30~45 Mbps，慢慢往上爬，Cubic 60~90 Mbps；不算“越跑越慢”。
+/// 第二种复现了，但不是每次：没改的 noq 1.4.0 跑 7 次有 3 次在发画面时带宽估计从 101 Mbps 一下掉到 10~16 Mbps，
+/// 之后丢包不多、延迟不变也一路滑到 2~4 Mbps，接着传 20 MB 用了 40 秒（正常 2.5 秒），画面也跟不上。
+/// 怀疑的原因（还没向 noq 报）：bbr3/mod.rs 的 adapt_long_term_model 在 ack_phase 是 ProbeStopping 时
+/// 每一轮都推进一次 max_bw 过滤器，而 ack_phase 要到下一次 Refill 才改，于是 DOWN/CRUISE 期间每轮都推进，
+/// 本该是“两个探测周期”的窗口缩成了两三轮，画面这种 app 受限的小样本一混进来就把带宽估计冲掉。
+/// Linux 的 BBR 推进一次以后就把 ack_phase 改回 ACKS_INIT；本地照这样改一份 noq 再跑 6 次，一次都没掉
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "几分钟的对比实验，手动跑，加 --release --test-threads=1"]
+async fn bbr3_collapse_variations() {
+    let base = Link {
+        one_way: Duration::from_millis(40),
+        loss: 0.0,
+        rate_bps: 100_000_000,
+        queue_limit: Duration::from_millis(50),
+        burst: Some(Burst { every_min: Duration::from_secs(5), every_max: Duration::from_secs(10), max_len: 6 }),
+    };
+    let shallow = Link { queue_limit: Duration::from_millis(8), ..base };
+    compare_timelines("浅队列 8 ms，一直灌数据", shallow, Pattern::Bulk(Duration::from_secs(45))).await;
+    let frequent = Link { burst: Some(Burst { every_min: Duration::from_secs(2), every_max: Duration::from_secs(5), max_len: 6 }), ..base };
+    let pattern = Pattern::ScreenThenFile { app: Duration::from_secs(60), frame_kb: (1, 50), bulk_mb: 20, rounds: 2, file_first: true };
+    compare_timelines("先传文件，再发一分钟画面，丢得更勤", frequent, pattern).await;
 }
