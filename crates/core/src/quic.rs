@@ -23,9 +23,19 @@ const WAN_RTT: Duration = Duration::from_millis(20);
 const DECIDE_AFTER_ACKS: u32 = 16;
 
 pub fn transport_config() -> QuicTransportConfig {
+    let config = AdaptiveConfig { force: forced(), ..Default::default() };
     QuicTransportConfig::builder()
-        .congestion_controller_factory(Arc::new(AdaptiveConfig::default()))
+        .congestion_controller_factory(Arc::new(config))
         .build()
+}
+
+/// 排查用：环境变量 P2PCLI_CC=cubic 或 bbr3 固定用一种算法，不按延迟选
+fn forced() -> Option<bool> {
+    match std::env::var("P2PCLI_CC").ok()?.as_str() {
+        "cubic" => Some(false),
+        "bbr3" => Some(true),
+        _ => None,
+    }
 }
 
 /// 这条连接现在用的拥塞控制算法，调试和测试用
@@ -38,6 +48,8 @@ pub fn algorithm(controller: Box<dyn Controller>) -> Option<&'static str> {
 struct AdaptiveConfig {
     cubic: Arc<CubicConfig>,
     bbr: Arc<Bbr3Config>,
+    /// 固定用哪种：真是 BBR3，假是 Cubic
+    force: Option<bool>,
 }
 
 impl ControllerFactory for AdaptiveConfig {
@@ -45,8 +57,8 @@ impl ControllerFactory for AdaptiveConfig {
         Box::new(Adaptive {
             cubic: self.cubic.clone().build(now, current_mtu),
             bbr: self.bbr.clone().build(now, current_mtu),
-            acks: 0,
-            wan: false,
+            acks: if self.force.is_some() { DECIDE_AFTER_ACKS } else { 0 },
+            wan: self.force.unwrap_or(false),
         })
     }
 }

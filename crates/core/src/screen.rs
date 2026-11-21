@@ -535,9 +535,9 @@ impl HostDiag {
         let secs = self.since.elapsed().as_secs_f64().max(0.001);
         let info = path::current(conn);
         let selected = conn.paths().iter().find(|p| p.is_selected()).map(|p| p.stats());
-        let (sent, lost, lost_bytes, congestion, cwnd, mtu) = selected
+        let (sent, lost, lost_bytes, congestion, cwnd, mtu, bw) = selected
             .as_ref()
-            .map(|s| (s.sent_packets, s.lost_packets, s.lost_bytes, s.congestion_events, s.cwnd, s.current_mtu))
+            .map(|s| (s.sent_packets, s.lost_packets, s.lost_bytes, s.congestion_events, s.cwnd, s.current_mtu, s.bandwidth_estimate))
             .unwrap_or_default();
         if info.remote != self.remote {
             // 换了路：计数是按路算的，从新路的累计值重新起算
@@ -557,6 +557,7 @@ impl HostDiag {
             拥塞事件 = congestion.saturating_sub(self.congestion),
             拥塞窗口 = format!("{}KB", cwnd / 1024),
             mtu,
+            带宽估计 = bw.map(|b| format!("{:.2}Mbps", b as f64 / 1e6)),
             发帧率 = format!("{:.0}", self.frames as f64 / secs),
             发码率 = format!("{:.2}Mbps", self.bytes as f64 * 8.0 / secs / 1e6),
             目标码率 = format!("{:.2}Mbps", bitrate as f64 / 1e6),
