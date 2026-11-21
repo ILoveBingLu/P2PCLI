@@ -330,7 +330,7 @@ pub(crate) async fn screen_open(
             };
             match ev {
                 Ok(Some(ScreenEvent::Frame { seq, key, data, .. })) => {
-                    diag.frame(key, data.len());
+                    diag.frame(screen_id, seq, key, data.len());
                     match ack.upgrade() {
                         Some(tx) => { let _ = tx.send(ViewerMsg::Ack { seq }); }
                         None => break None,
@@ -371,6 +371,9 @@ pub(crate) async fn screen_open(
     Ok(ScreenOpened { screen_id, started })
 }
 
+/// 两帧之间隔这么久就单独记一行停顿
+const STALL_LOG: std::time::Duration = std::time::Duration::from_millis(150);
+
 /// 诊断日志隔多久记一次
 const DIAG_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -393,10 +396,15 @@ impl Default for Diag {
 }
 
 impl Diag {
-    fn frame(&mut self, key: bool, bytes: usize) {
+    fn frame(&mut self, screen_id: u64, seq: u64, key: bool, bytes: usize) {
         let now = std::time::Instant::now();
         if let Some(last) = self.last_frame {
-            self.max_gap = self.max_gap.max(now - last);
+            let gap = now - last;
+            self.max_gap = self.max_gap.max(gap);
+            // 单独记每一次明显的停顿，和对方每秒的诊断（丢包、线路切换）按时间对
+            if gap >= STALL_LOG {
+                info!(screen_id, seq, 间隔 = format!("{}ms", gap.as_millis()), 关键帧 = key, 大小 = format!("{}KB", bytes / 1024), "画面停顿");
+            }
         }
         self.last_frame = Some(now);
         self.frames += 1;

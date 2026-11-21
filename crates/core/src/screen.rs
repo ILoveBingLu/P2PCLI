@@ -479,6 +479,107 @@ struct Inflight {
     bytes: usize,
 }
 
+/// 被连方的诊断：每秒记一行线路、丢包、拥塞窗口和确认延迟，和观看方记的停顿对着看，
+/// 判断卡顿是丢包重传、路径切换还是码率控制造成的
+struct HostDiag {
+    since: Instant,
+    /// 上一次记录时选中路径的累计计数
+    sent: u64,
+    lost: u64,
+    lost_bytes: u64,
+    congestion: u64,
+    remote: Option<String>,
+    frames: u32,
+    keys: u32,
+    bytes: usize,
+    max_frame: usize,
+    max_ack: Duration,
+    max_oldest: Duration,
+    /// 想要新帧但因为排队太久没要的次数（按 250 毫秒一次的检查算）
+    blocked: u32,
+}
+
+impl HostDiag {
+    fn new(conn: &iroh::endpoint::Connection) -> Self {
+        let mut d = HostDiag {
+            since: Instant::now(),
+            sent: 0,
+            lost: 0,
+            lost_bytes: 0,
+            congestion: 0,
+            remote: None,
+            frames: 0,
+            keys: 0,
+            bytes: 0,
+            max_frame: 0,
+            max_ack: Duration::ZERO,
+            max_oldest: Duration::ZERO,
+            blocked: 0,
+        };
+        if let Some(p) = conn.paths().iter().find(|p| p.is_selected()) {
+            let s = p.stats();
+            (d.sent, d.lost, d.lost_bytes, d.congestion) = (s.sent_packets, s.lost_packets, s.lost_bytes, s.congestion_events);
+        }
+        d.remote = path::current(conn).remote;
+        d
+    }
+
+    fn frame(&mut self, key: bool, bytes: usize) {
+        self.frames += 1;
+        self.keys += u32::from(key);
+        self.bytes += bytes;
+        self.max_frame = self.max_frame.max(bytes);
+    }
+
+    fn log(&mut self, conn: &iroh::endpoint::Connection, bitrate: u32, inflight: usize) {
+        let secs = self.since.elapsed().as_secs_f64().max(0.001);
+        let info = path::current(conn);
+        let selected = conn.paths().iter().find(|p| p.is_selected()).map(|p| p.stats());
+        let (sent, lost, lost_bytes, congestion, cwnd, mtu) = selected
+            .as_ref()
+            .map(|s| (s.sent_packets, s.lost_packets, s.lost_bytes, s.congestion_events, s.cwnd, s.current_mtu))
+            .unwrap_or_default();
+        if info.remote != self.remote {
+            // 换了路：计数是按路算的，从新路的累计值重新起算
+            info!(from = ?self.remote, to = ?info.remote, kind = ?info.kind, "远程画面诊断：线路切换");
+            self.remote = info.remote.clone();
+            (self.sent, self.lost, self.lost_bytes, self.congestion) = (sent, lost, lost_bytes, congestion);
+        }
+        let d_sent = sent.saturating_sub(self.sent);
+        let d_lost = lost.saturating_sub(self.lost);
+        info!(
+            线路 = ?info.kind,
+            延时 = ?info.rtt_ms,
+            发包 = d_sent,
+            丢包 = d_lost,
+            丢包率 = format!("{:.2}%", if d_sent > 0 { d_lost as f64 * 100.0 / d_sent as f64 } else { 0.0 }),
+            丢字节 = lost_bytes.saturating_sub(self.lost_bytes),
+            拥塞事件 = congestion.saturating_sub(self.congestion),
+            拥塞窗口 = format!("{}KB", cwnd / 1024),
+            mtu,
+            发帧率 = format!("{:.0}", self.frames as f64 / secs),
+            发码率 = format!("{:.2}Mbps", self.bytes as f64 * 8.0 / secs / 1e6),
+            目标码率 = format!("{:.2}Mbps", bitrate as f64 / 1e6),
+            关键帧 = self.keys,
+            最大帧 = format!("{}KB", self.max_frame / 1024),
+            最慢确认 = format!("{}ms", self.max_ack.as_millis()),
+            最久未确认 = format!("{}ms", self.max_oldest.as_millis()),
+            在途帧 = inflight,
+            排队没要帧 = self.blocked,
+            "远程画面诊断"
+        );
+        (self.sent, self.lost, self.lost_bytes, self.congestion) = (sent, lost, lost_bytes, congestion);
+        self.since = Instant::now();
+        self.frames = 0;
+        self.keys = 0;
+        self.bytes = 0;
+        self.max_frame = 0;
+        self.max_ack = Duration::ZERO;
+        self.max_oldest = Duration::ZERO;
+        self.blocked = 0;
+    }
+}
+
 /// 抓屏任务：主循环要一帧就给它发个信号，它取一帧编码好送回来。
 /// 单独跑是因为编码时不能被打断（打断了丢的是编码好的帧，后面的帧就解不出来了）
 fn spawn_capture(capture: Arc<dyn ScreenCapture>, frames: mpsc::Sender<Result<EncodedFrame>>) -> (mpsc::Sender<()>, tokio::task::JoinHandle<()>) {
@@ -673,6 +774,7 @@ where
     let mut last_config: Option<VideoConfig> = None;
     let mut frames_this_second = 0u32;
     let mut last_stats = Instant::now();
+    let mut diag = HostDiag::new(&conn);
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -737,6 +839,7 @@ where
                 let buf = encode(KIND_VIDEO, &[&head_seq, &ts, &flags, &frame.data]);
                 let bytes = buf.len();
                 if out_tx.send(buf).await.is_err() { break Ok(()); }
+                diag.frame(frame.key, bytes);
                 inflight.push_back(Inflight { seq, sent: Instant::now(), bytes });
                 frames_this_second += 1;
             }
@@ -745,7 +848,9 @@ where
                     while let Some(front) = inflight.front() {
                         if front.seq > acked { break; }
                         let f = inflight.pop_front().unwrap();
-                        rate.on_ack(f.sent.elapsed(), f.bytes);
+                        let delay = f.sent.elapsed();
+                        diag.max_ack = diag.max_ack.max(delay);
+                        rate.on_ack(delay, f.bytes);
                     }
                 }
                 // 观看方解码出错或刚重建解码器：关键帧前面带上解码配置，让它重新配一遍
@@ -804,7 +909,17 @@ where
                     }
                     paused = now_path;
                 }
-                if let Some(b) = rate.tick(inflight.front().map(|f| f.sent.elapsed())) {
+                let oldest = inflight.front().map(|f| f.sent.elapsed());
+                if let Some(age) = oldest {
+                    diag.max_oldest = diag.max_oldest.max(age);
+                }
+                if paused.is_none() && !rate.may_send(oldest) {
+                    diag.blocked += 1;
+                }
+                if diag.since.elapsed() >= Duration::from_secs(1) {
+                    diag.log(&conn, rate.bitrate, inflight.len());
+                }
+                if let Some(b) = rate.tick(oldest) {
                     debug!(bitrate = b, "远程画面调码率");
                     running.capture.set_bitrate(b);
                 }
