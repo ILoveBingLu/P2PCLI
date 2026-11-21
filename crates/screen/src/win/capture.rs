@@ -107,7 +107,7 @@ impl ScreenCapture for WinCapture {
 
     fn color(&self) -> ColorFormat {
         // Windows 抓到的画面已经是 sRGB，只有范围跟着观看方
-        ColorFormat { full_range: self.full_range, primaries: Primaries::Bt709 }
+        ColorFormat { full_range: self.full_range, primaries: Primaries::Bt709, ..Default::default() }
     }
 }
 

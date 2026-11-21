@@ -246,7 +246,7 @@ impl MacCapture {
             encoder: Arc::new(Mutex::new(None)),
             fps: opts.fps,
             codec: opts.codec,
-            color: ColorFormat { full_range: opts.full_range, primaries: if opts.wide_gamut { Primaries::P3 } else { Primaries::Bt709 } },
+            color: ColorFormat { full_range: opts.full_range, primaries: if opts.wide_gamut { Primaries::P3 } else { Primaries::Bt709 }, ..Default::default() },
             bitrate: Arc::new(AtomicU32::new(opts.bitrate)),
             want_key: Arc::new(AtomicBool::new(true)),
             started: std::time::Instant::now(),

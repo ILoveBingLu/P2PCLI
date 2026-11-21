@@ -45,8 +45,8 @@ struct Fake {
     show_cursor: Mutex<Option<bool>>,
     /// 被要求用哪种编码格式
     codec: Mutex<Option<p2pcli_core::screen::VideoCodec>>,
-    /// 被要求的颜色：全范围、广色域
-    color: Mutex<Option<(bool, bool)>>,
+    /// 被要求的颜色：全范围、广色域、4:4:4
+    color: Mutex<Option<(bool, bool, bool)>>,
     cursor_reads: AtomicUsize,
     produced: AtomicUsize,
     keyframes: AtomicUsize,
@@ -77,7 +77,7 @@ impl ScreenBackend for FakeBackend {
         self.0.bitrate.store(opts.bitrate, Ordering::Relaxed);
         *self.0.show_cursor.lock().unwrap() = Some(opts.show_cursor);
         *self.0.codec.lock().unwrap() = Some(opts.codec);
-        *self.0.color.lock().unwrap() = Some((opts.full_range, opts.wide_gamut));
+        *self.0.color.lock().unwrap() = Some((opts.full_range, opts.wide_gamut, opts.yuv444));
         Ok(Arc::new(FakeCapture { fake: self.0.clone(), key: Arc::new(true.into()) }))
     }
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
@@ -116,7 +116,7 @@ impl ScreenCapture for FakeCapture {
                 key,
                 ts_us: 0,
                 data: vec![if key { 0x65 } else { 0x41 }; if key { 60_000 } else { 8_000 }],
-                config: key.then(|| VideoConfig { codec: "avc1.640028".into(), width: 1920, height: 1080, description: "AQ==".into(), full_range: false, primaries: Default::default() }),
+                config: key.then(|| VideoConfig { codec: "avc1.640028".into(), width: 1920, height: 1080, description: "AQ==".into(), full_range: false, primaries: Default::default(), layout: Default::default() }),
             })
         })
     }
@@ -128,9 +128,10 @@ impl ScreenCapture for FakeCapture {
     }
     fn color(&self) -> p2pcli_core::screen::ColorFormat {
         // 像 Mac：要什么给什么
-        let (full_range, wide) = self.fake.color.lock().unwrap().unwrap_or_default();
+        let (full_range, wide, yuv444) = self.fake.color.lock().unwrap().unwrap_or_default();
         let primaries = if wide { p2pcli_core::screen::Primaries::P3 } else { Default::default() };
-        p2pcli_core::screen::ColorFormat { full_range, primaries }
+        let layout = if yuv444 { p2pcli_core::screen::Layout::Yuv444Stacked } else { Default::default() };
+        p2pcli_core::screen::ColorFormat { full_range, primaries, layout }
     }
 }
 
@@ -383,6 +384,33 @@ async fn color_is_negotiated() {
             }
         };
         assert_eq!((config.full_range, config.primaries), want, "color_tags={color_tags} wide_gamut={wide_gamut}");
+        n.shutdown().await;
+    }
+}
+
+/// 4:4:4 协商：观看方能还原、又不是流畅档才请被连方用；老观看方（不认颜色标记）一律 4:2:0
+#[tokio::test(flavor = "multi_thread")]
+async fn yuv444_is_negotiated() {
+    use p2pcli_core::screen::{Layout, ScreenEvent};
+    for (color_tags, yuv444, quality, want) in [
+        (true, true, Quality::Balanced, Layout::Yuv444Stacked),
+        (true, true, Quality::Sharp, Layout::Yuv444Stacked),
+        (true, true, Quality::Smooth, Layout::Yuv420),
+        (true, false, Quality::Sharp, Layout::Yuv420),
+        (false, true, Quality::Sharp, Layout::Yuv420),
+    ] {
+        let fake = Arc::new(Fake::default());
+        let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+        let (_, _input, mut output) =
+            n.remote.open_screen(ScreenOpen { quality, color_tags, yuv444, ..Default::default() }).await.unwrap();
+        let config = loop {
+            match tokio::time::timeout(Duration::from_secs(5), output.next()).await.unwrap().unwrap() {
+                Some(ScreenEvent::Config(c)) => break c,
+                Some(_) => continue,
+                None => panic!("画面没给解码配置就结束了"),
+            }
+        };
+        assert_eq!(config.layout, want, "color_tags={color_tags} yuv444={yuv444} quality={quality:?}");
         n.shutdown().await;
     }
 }
