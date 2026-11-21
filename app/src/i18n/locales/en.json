@@ -1257,6 +1257,8 @@
   "对方编码器最多用到的码率，网络差时会自动往下降；画面变化少时实际用不到这么多": "The most the other side's encoder will use; it drops automatically on a poor network, and less is used when the screen changes little",
   "每秒收到的帧数 · 画面实际传输速率": "Frames received per second · actual transfer rate",
   "编码": "Encoding",
+  "色彩": "Color",
+  "4:4:4 原色": "4:4:4 full color",
   "解码": "Decoding",
   "显卡硬件解码": "GPU hardware decoding",
   "系统解码": "System decoding"

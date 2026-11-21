@@ -25,6 +25,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ConnectionCard, Row, Section } from "./ConnectionCard";
 import { t } from "@/i18n";
+import { Yuv444Renderer, canRender444 } from "./yuv444";
 
 /** 这台电脑的屏幕是广色域（Display P3） */
 const WIDE_GAMUT = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches;
@@ -66,6 +67,24 @@ function supportedCodecs(): Promise<ScreenCodec[]> {
     }
   })();
   return codecsProbe;
+}
+
+/** 能不能看 4:4:4 的画面：要 WebGL2，解码器还要解得了三倍高的画面（1080p 的屏幕就是 1920×3240） */
+let yuv444Probe: Promise<boolean> | null = null;
+function supports444(): Promise<boolean> {
+  yuv444Probe ??= (async () => {
+    if (typeof VideoDecoder === "undefined" || !canRender444()) return false;
+    const codecs = await supportedCodecs();
+    const tries = codecs.includes("h265") ? ["hvc1.1.6.L183.B0", "avc1.640033"] : ["avc1.640033"];
+    for (const codec of tries) {
+      try {
+        const s = await VideoDecoder.isConfigSupported({ codec, codedWidth: 1920, codedHeight: 3240, hardwareAcceleration: "prefer-hardware" });
+        if (s.supported) return true;
+      } catch { /* 下一个 */ }
+    }
+    return false;
+  })();
+  return yuv444Probe;
 }
 
 /** 解码配置里的 codec 字符串是哪种格式 */
@@ -127,7 +146,14 @@ export default function ScreenWindow() {
   // 连接详情：对方信息、线路，解码器在用的格式
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [path, setPath] = useState<PathInfo | null>(null);
-  const [decode, setDecode] = useState<{ codec: string; width: number; height: number; hardware: boolean } | null>(null);
+  const [decode, setDecode] = useState<{ codec: string; width: number; height: number; hardware: boolean; yuv444: boolean } | null>(null);
+  /** 画布怎么画：普通画面用 2D；4:4:4 用 WebGL2 还原。一块画布只能开一种，换的时候整块换掉 */
+  const [renderMode, setRenderMode] = useState<"2d" | "gl">("2d");
+  const renderModeRef = useRef<"2d" | "gl">("2d");
+  const p3Ref = useRef(false);
+  const glRef = useRef<Yuv444Renderer | null>(null);
+  /** 画布刚换、还没画上的那帧：换好以后补画，屏幕不动时也不会一直黑着 */
+  const pendingFrame = useRef<VideoFrame | null>(null);
   // 对方单独报来的指针：样子和位置。对方是老版本时收不到，那时指针画在画面里
   const [look, setLook] = useState<CursorLook | null>(null);
   const [remoteCursor, setRemoteCursor] = useState<{ x: number; y: number; visible: boolean } | null>(null);
@@ -270,6 +296,21 @@ export default function ScreenWindow() {
   const draw = useCallback((frame: VideoFrame) => {
     decodedCount.current += 1;
     const canvas = canvasRef.current;
+    if (renderModeRef.current === "gl") {
+      let gl = glRef.current;
+      if (canvas && gl?.canvas !== canvas) {
+        try { gl = glRef.current = Yuv444Renderer.create(canvas); } catch { gl = glRef.current = null; }
+      }
+      if (canvas && gl) {
+        gl.draw(frame, p3Ref.current);
+        frame.close();
+      } else {
+        // 画布还是 2D 的那块（换画布的渲染还没轮到）：先留着，换好再画
+        pendingFrame.current?.close();
+        pendingFrame.current = frame;
+      }
+      return;
+    }
     if (canvas) {
       if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
         canvas.width = frame.displayWidth;
@@ -281,12 +322,25 @@ export default function ScreenWindow() {
     frame.close();
   }, []);
 
+  // 画布换过（2D 和 WebGL 之间）：补画换的时候留着的那帧，焦点也挪到新画布上
+  useEffect(() => {
+    const frame = pendingFrame.current;
+    pendingFrame.current = null;
+    if (frame) draw(frame);
+    if (document.activeElement === document.body) canvasRef.current?.focus();
+  }, [renderMode, draw]);
+  useEffect(() => () => { pendingFrame.current?.close(); pendingFrame.current = null; }, []);
+
   const configure = useCallback(async (config: ScreenVideoConfig) => {
     resetDecoder();
     if (typeof VideoDecoder === "undefined") {
       setPhase({ kind: "error", message: t("这台电脑的系统版本太旧，不支持硬件解码画面，请更新系统") });
       return;
     }
+    const yuv444 = config.layout === "yuv444_stacked";
+    renderModeRef.current = yuv444 ? "gl" : "2d";
+    p3Ref.current = config.primaries === "p3";
+    setRenderMode(renderModeRef.current);
     const base: VideoDecoderConfig = {
       codec: config.codec,
       codedWidth: config.width,
@@ -295,11 +349,12 @@ export default function ScreenWindow() {
       optimizeForLatency: true,
       // 电脑屏幕的颜色：sRGB 曲线、BT.709 矩阵；范围和色域按对方解码配置里标的（老版本不标，是视频范围、sRGB）。
       // 明确告诉解码器，不让它按电视的 BT.709 曲线去猜，颜色和对方屏幕上一致
+      // 4:4:4 的画面是数据（灰度图里装着 Y、Cb、Cr），解码器按 sRGB 原样给出，不做色域换算；色域在 WebGL 画布上体现
       colorSpace: {
-        primaries: (config.primaries === "p3" ? "smpte432" : "bt709") as VideoColorPrimaries,
+        primaries: (config.primaries === "p3" && !yuv444 ? "smpte432" : "bt709") as VideoColorPrimaries,
         transfer: "iec61966-2-1",
         matrix: "bt709",
-        fullRange: config.full_range === true,
+        fullRange: config.full_range === true || yuv444,
       },
     };
     // 先要显卡解码，不行再让系统自己挑
@@ -315,7 +370,7 @@ export default function ScreenWindow() {
     } catch {
       chosen = base;
     }
-    setDecode({ codec: config.codec, width: config.width, height: config.height, hardware: chosen.hardwareAcceleration === "prefer-hardware" });
+    setDecode({ codec: config.codec, width: config.width, height: yuv444 ? Math.floor(config.height / 3) : config.height, hardware: chosen.hardwareAcceleration === "prefer-hardware", yuv444 });
     hardwareRef.current = chosen.hardwareAcceleration === "prefer-hardware";
     const d = new VideoDecoder({
       output: draw,
@@ -420,9 +475,9 @@ export default function ScreenWindow() {
       }
       setPhase({ kind: "asking" });
       try {
-        const codecs = await supportedCodecs();
+        const [codecs, yuv444] = await Promise.all([supportedCodecs(), supports444()]);
         if (cancelled) return;
-        const opened = await api.screenOpen(connId, quality, true, display, codecs, onEvent);
+        const opened = await api.screenOpen(connId, quality, true, display, codecs, yuv444, onEvent);
         if (cancelled) { void api.screenClose(opened.screen_id); return; }
         screenId.current = opened.screen_id;
         setStarted(opened.started);
@@ -692,6 +747,7 @@ export default function ScreenWindow() {
                 <Row label={t("传输速率")} value={recv && !paused ? formatMbps(recv.mbps) : "—"} hint={t("画面每秒实际传过来的数据量")} />
                 <Row label={t("码率上限")} value={stats && !paused ? `${(stats.bitrate / 1e6).toFixed(1)} Mbps` : "—"} hint={t("对方编码器最多用到的码率，网络差时会自动往下降；画面变化少时实际用不到这么多")} />
                 <Row label={t("编码")} value={decode ? `${codecName(decode.codec)} · ${decode.codec}` : "—"} mono />
+                <Row label={t("色彩")} value={decode ? (decode.yuv444 ? t("4:4:4 原色") : "4:2:0") : "—"} />
                 <Row label={t("解码")} value={decode ? (decode.hardware && !hwNote ? t("显卡硬件解码") : t("系统解码")) : "—"} />
               </Section>
             ) : undefined} />
@@ -733,7 +789,7 @@ export default function ScreenWindow() {
         </Button>
       </div>
       <div className="screen-stage">
-        <canvas ref={canvasRef} className="screen-canvas" tabIndex={0}
+        <canvas key={renderMode} ref={canvasRef} className="screen-canvas" tabIndex={0}
           data-control={live && control && canControl ? "" : undefined}
           onPointerMove={onPointerMove}
           onPointerDown={(e) => onPointerButton(e, true)}

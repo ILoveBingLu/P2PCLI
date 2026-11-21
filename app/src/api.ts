@@ -346,6 +346,8 @@ export interface ScreenVideoConfig {
   full_range?: boolean;
   /** 色域；没有就是 sRGB */
   primaries?: "bt709" | "p3";
+  /** 画面怎么排的；没有就是普通的 4:2:0。yuv444_stacked 是 Y、Cb、Cr 叠成三倍高的灰度图 */
+  layout?: "yuv420" | "yuv444_stacked";
 }
 
 export type ScreenMouseButton = "left" | "right" | "middle" | "back" | "forward";
@@ -696,7 +698,7 @@ export const api = {
   screenSetFullscreen: (on: boolean) => invoke<boolean>("screen_set_fullscreen", { on }),
   screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
   /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
-  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], onEvent: (ev: ScreenStreamEvent) => void) => {
+  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], yuv444: boolean, onEvent: (ev: ScreenStreamEvent) => void) => {
     const events = new Channel<ArrayBuffer>();
     const decoder = new TextDecoder();
     events.onmessage = (raw) => {
@@ -710,7 +712,7 @@ export const api = {
     };
     // 认得解码配置里的范围、色域标记；屏幕是广色域就请对方按 P3 传
     const wideGamut = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches && supportsP3Video();
-    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, events });
+    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, events });
   },
   screenSend: (screenId: number, msgs: ScreenViewerMsg[]) => invoke<void>("screen_send", { screenId, msgs }),
   screenClose: (screenId: number) => invoke<void>("screen_close", { screenId }),
