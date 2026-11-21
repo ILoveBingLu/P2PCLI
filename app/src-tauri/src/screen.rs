@@ -294,6 +294,7 @@ pub(crate) async fn screen_open(
     codecs: Option<Vec<p2pcli_core::screen::VideoCodec>>,
     color_tags: Option<bool>,
     wide_gamut: Option<bool>,
+    yuv444: Option<bool>,
     events: Channel<InvokeResponseBody>,
 ) -> Result<ScreenOpened, String> {
     let remote = state.remote(conn_id)?;
@@ -304,6 +305,7 @@ pub(crate) async fn screen_open(
         codecs: codecs.unwrap_or_default(),
         color_tags: color_tags.unwrap_or(false),
         wide_gamut: wide_gamut.unwrap_or(false),
+        yuv444: yuv444.unwrap_or(false),
     };
     let (started, mut input, mut output) = remote.open_screen(open).await.map_err(|e| format!("{e:#}"))?;
     let screen_id = state.next();
