@@ -278,7 +278,7 @@ async fn main() -> Result<()> {
                 "smooth" => p2pcli_core::screen::Quality::Smooth,
                 _ => p2pcli_core::screen::Quality::Balanced,
             };
-            watch_screen(&remote, quality, seconds, save, h265, yuv444).await?;
+            watch_screen(&remote, &node.endpoint, quality, seconds, save, h265, yuv444).await?;
             remote.close();
             node.shutdown().await;
             Ok(())
@@ -413,7 +413,8 @@ async fn connect_target(node: &Node, target: &str, password: Option<String>) -> 
 }
 
 /// 只看不操作：收画面、马上回确认，每秒打印一行
-async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool, yuv444: bool) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool, yuv444: bool) -> Result<()> {
     use p2pcli_core::screen::{HostMsg, ScreenEvent, ScreenOpen, ViewerMsg};
     let started = Instant::now();
     let (info, mut input, mut output) = remote.open_screen(ScreenOpen {
@@ -430,6 +431,19 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
     let mut gaps: Vec<f64> = Vec::new();
     let (mut sec_max, mut sec_slow) = (0f64, 0u32);
     let mut host_stats: Option<(u32, u32)> = None;
+    // 本机发出去的（确认）丢了多少：反方向丢包会让对方以为网络堵了
+    let mut sent_lost = { let s = remote.stats(endpoint); (s.sent_packets, s.lost_packets) };
+    // 单独的任务读画面：读一帧不能被超时打断，不然读了一半的字节就丢了，后面全错位
+    let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+    let reader = tokio::spawn(async move {
+        loop {
+            let ev = output.next().await;
+            let end = !matches!(ev, Ok(Some(_)));
+            if ev_tx.send(ev).is_err() || end {
+                break;
+            }
+        }
+    });
     eprintln!("开始看画面，用时 {} 毫秒：屏幕 {:?}，当前 {}", started.elapsed().as_millis(), info.displays, info.display);
     let mut file = match &save { Some(p) => Some(std::fs::File::create(p)?), None => None };
     let deadline = Instant::now() + Duration::from_secs(seconds);
@@ -444,8 +458,9 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
             eprintln!("要一个关键帧");
             input.send(&ViewerMsg::KeyFrame).await?;
         }
-        let ev = match tokio::time::timeout(Duration::from_millis(500), output.next()).await {
-            Ok(r) => r?,
+        let ev = match tokio::time::timeout(Duration::from_millis(500), ev_rx.recv()).await {
+            Ok(Some(r)) => r?,
+            Ok(None) => break,
             Err(_) => None,
         };
         match ev {
@@ -516,6 +531,10 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
         if tick.elapsed() >= Duration::from_secs(1) {
             let secs = tick.elapsed().as_secs_f64();
             let path = remote.path();
+            let now_stats = remote.stats(endpoint);
+            let (sent, lost) = (now_stats.sent_packets - sent_lost.0, now_stats.lost_packets - sent_lost.1);
+            sent_lost = (now_stats.sent_packets, now_stats.lost_packets);
+            eprintln!("      本机发出 {sent} 包、丢 {lost} 包");
             eprintln!(
                 "{:>4.0}s  {:>3} 帧/秒  {:>6.2} Mbps  关键帧 {}  最长间隔 {:>4.0} ms  超 25 ms {:>2} 次  对方 {:?}  线路 {:?} {}ms",
                 started.elapsed().as_secs_f64(), (frames as f64 / secs).round(), bytes as f64 * 8.0 / secs / 1e6, keys,
@@ -542,6 +561,7 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
         );
     }
     input.close().await;
+    reader.abort();
     Ok(())
 }
 
