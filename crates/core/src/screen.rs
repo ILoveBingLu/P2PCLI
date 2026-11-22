@@ -310,6 +310,26 @@ pub trait ScreenCapture: Send + Sync {
     fn color(&self) -> ColorFormat {
         ColorFormat::default()
     }
+    /// 抓屏和编码的累计计数，诊断用：屏幕出了多少帧、编了多少、没来得及编被跳过多少、处理用了多久。
+    /// 老实现不报，就是空
+    fn stats(&self) -> Option<CaptureStats> {
+        None
+    }
+}
+
+/// 抓屏和编码的累计计数（从开始抓起算）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CaptureStats {
+    /// 系统送来的新画面
+    pub source_frames: u64,
+    /// 编好交出去的
+    pub encoded_frames: u64,
+    /// 还没来得及编就被更新的画面盖掉的
+    pub skipped_frames: u64,
+    /// 从画面到手到编好，累计多少微秒（除以编好的帧数是平均）
+    pub busy_us: u64,
+    /// 这一段里最慢的一帧，微秒；每次读走以后清零
+    pub max_us: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -666,6 +686,8 @@ struct HostDiag {
     max_oldest: Duration,
     /// 想要新帧但因为排队太久没要的次数（按 250 毫秒一次的检查算）
     blocked: u32,
+    /// 上一次记录时抓屏的累计计数
+    capture: Option<CaptureStats>,
 }
 
 impl HostDiag {
@@ -684,6 +706,7 @@ impl HostDiag {
             max_ack: Duration::ZERO,
             max_oldest: Duration::ZERO,
             blocked: 0,
+            capture: None,
         };
         if let Some(p) = conn.paths().iter().find(|p| p.is_selected()) {
             let s = p.stats();
@@ -700,7 +723,21 @@ impl HostDiag {
         self.max_frame = self.max_frame.max(bytes);
     }
 
-    fn log(&mut self, conn: &iroh::endpoint::Connection, bitrate: u32, inflight: usize) {
+    fn log(&mut self, conn: &iroh::endpoint::Connection, bitrate: u32, inflight: usize, capture: Option<CaptureStats>) {
+        // 抓屏这一段：屏幕出了多少、编了多少、跳过多少、平均和最慢处理多久
+        let cap = capture.map(|now| {
+            let prev = self.capture.unwrap_or_default();
+            let encoded = now.encoded_frames.saturating_sub(prev.encoded_frames);
+            let busy = now.busy_us.saturating_sub(prev.busy_us);
+            format!(
+                "屏幕出 {} 帧、编 {encoded} 帧、跳过 {}，处理平均 {:.1} ms、最慢 {:.1} ms",
+                now.source_frames.saturating_sub(prev.source_frames),
+                now.skipped_frames.saturating_sub(prev.skipped_frames),
+                if encoded > 0 { busy as f64 / encoded as f64 / 1000.0 } else { 0.0 },
+                now.max_us as f64 / 1000.0,
+            )
+        });
+        self.capture = capture;
         let secs = self.since.elapsed().as_secs_f64().max(0.001);
         let info = path::current(conn);
         let selected = conn.paths().iter().find(|p| p.is_selected()).map(|p| p.stats());
@@ -736,6 +773,7 @@ impl HostDiag {
             最久未确认 = format!("{}ms", self.max_oldest.as_millis()),
             在途帧 = inflight,
             排队没要帧 = self.blocked,
+            抓屏 = cap.as_deref().unwrap_or("-"),
             "远程画面诊断"
         );
         (self.sent, self.lost, self.lost_bytes, self.congestion) = (sent, lost, lost_bytes, congestion);
@@ -1124,7 +1162,7 @@ where
                     diag.blocked += 1;
                 }
                 if diag.since.elapsed() >= HOST_DIAG_EVERY {
-                    diag.log(&conn, rate.bitrate, inflight.len());
+                    diag.log(&conn, rate.bitrate, inflight.len(), running.capture.stats());
                 }
                 if let Some(b) = rate.tick(oldest) {
                     debug!(bitrate = b, "远程画面调码率");

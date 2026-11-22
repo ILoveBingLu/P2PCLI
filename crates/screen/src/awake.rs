@@ -37,6 +37,9 @@ impl ScreenCapture for KeepAwake {
     fn color(&self) -> p2pcli_core::screen::ColorFormat {
         self.inner.color()
     }
+    fn stats(&self) -> Option<p2pcli_core::screen::CaptureStats> {
+        self.inner.stats()
+    }
 }
 
 #[cfg(target_os = "macos")]
