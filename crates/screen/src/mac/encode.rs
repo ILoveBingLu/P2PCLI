@@ -3,7 +3,9 @@
 
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
+use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Result, anyhow, bail};
 use objc2_core_foundation::{
@@ -41,11 +43,14 @@ const CODEC_H264: u32 = 0x6176_6331;
 /// 'hvc1'
 const CODEC_HEVC: u32 = 0x6876_6331;
 
-type Reply = oneshot::Sender<Result<Option<EncodedFrame>>>;
+/// 一帧的编码结果（编好、编码器丢了这帧、出错）交给它，正好一次，多半在 VideoToolbox 自己的线程上
+pub type Reply = Box<dyn FnOnce(Result<Option<EncodedFrame>>) + Send>;
 
 /// 编码回调要用的东西；回调在 VideoToolbox 自己的线程上跑
 struct Context {
-    pending: Mutex<Option<Reply>>,
+    /// 还在编码器里的帧：编号（当作 sourceFrameRefcon 传进去）和它的回调。可以同时有好几帧
+    pending: Mutex<VecDeque<(usize, Reply)>>,
+    next_id: AtomicUsize,
     /// 实际在用的格式：取解码配置时 H.264 和 H.265 不一样
     codec: VideoCodec,
 }
@@ -89,7 +94,7 @@ impl Encoder {
     /// p3：画面是按 Display P3 抓的，码流里标 P3 原色
     fn open(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec, p3: bool, hw_only: bool) -> Result<Self> {
         let hevc = codec == VideoCodec::H265;
-        let ctx = Box::into_raw(Box::new(Context { pending: Mutex::new(None), codec }));
+        let ctx = Box::into_raw(Box::new(Context { pending: Mutex::new(VecDeque::new()), next_id: AtomicUsize::new(1), codec }));
         let t = CFBoolean::new(true);
         // 先要硬件编码器 + 低延迟码率控制；老机器不支持时退到“能用硬件就用”
         let specs: [Vec<(&CFString, &CFBoolean)>; 3] = unsafe {
@@ -106,7 +111,9 @@ impl Encoder {
         let mut last = 0;
         // H.265 只用硬件编码器（前两种）：软件编 H.265 太慢，不如退回 H.264
         let tries = if hevc || hw_only { &specs[..2] } else { &specs[..] };
-        for (n, spec) in tries.iter().enumerate() {
+        // 测试里比较用：P2PCLI_TEST_VT=nolowlat 不开低延迟码率控制
+        let skip = usize::from(cfg!(test) && std::env::var("P2PCLI_TEST_VT").is_ok_and(|v| v.contains("nolowlat")));
+        for (n, spec) in tries.iter().enumerate().skip(skip) {
             let keys: Vec<&CFString> = spec.iter().map(|(k, _)| *k).collect();
             let values: Vec<&CFBoolean> = spec.iter().map(|(_, v)| *v).collect();
             let dict = CFDictionary::from_slices(&keys, &values);
@@ -188,6 +195,18 @@ impl Encoder {
     /// 把一帧送进编码器（尺寸变了就重建），返回等结果的接收端。只在一个线程上调
     #[allow(clippy::too_many_arguments)]
     pub fn encode(slot: &mut Option<Encoder>, image: &CVImageBuffer, pts: CMTime, fps: u32, bitrate: u32, key: bool, codec: VideoCodec, p3: bool) -> Result<oneshot::Receiver<Result<Option<EncodedFrame>>>> {
+        let (tx, rx) = oneshot::channel();
+        Self::submit(slot, image, pts, fps, bitrate, key, codec, p3, Box::new(move |r| {
+            let _ = tx.send(r);
+        }))?;
+        Ok(rx)
+    }
+
+    /// 把一帧送进编码器（尺寸变了就重建），不等结果：上一帧还在编时就能送下一帧，结果按送进去的顺序回来。
+    /// 返回错误（编码器开不起来）时 reply 不会被调；返回成功时 reply 正好被调一次，
+    /// 送不进去也算（这时编码器坏了，已经扔掉，下次重建）。只在一个线程上调
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit(slot: &mut Option<Encoder>, image: &CVImageBuffer, pts: CMTime, fps: u32, bitrate: u32, key: bool, codec: VideoCodec, p3: bool, reply: Reply) -> Result<()> {
         let (w, h) = (CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image));
         let mut key = key;
         if slot.as_ref().is_none_or(|e| e.width != w || e.height != h) {
@@ -197,23 +216,34 @@ impl Encoder {
         }
         let enc = slot.as_mut().unwrap();
         enc.set_bitrate(bitrate);
-        let (tx, rx) = oneshot::channel();
         let ctx = unsafe { &*enc.ctx };
-        *ctx.pending.lock().unwrap() = Some(tx);
+        let id = ctx.next_id.fetch_add(1, Ordering::Relaxed);
+        ctx.pending.lock().unwrap().push_back((id, reply));
         let props = key.then(|| unsafe {
             CFDictionary::<CFString, CFBoolean>::from_slices(&[kVTEncodeFrameOptionKey_ForceKeyFrame], &[CFBoolean::new(true)])
         });
         let mut flags = VTEncodeInfoFlags(0);
         let status = unsafe {
-            enc.session.encode_frame(image, pts, kCMTimeInvalid, props.as_deref().map(|d| d.as_opaque()), ptr::null_mut(), &mut flags)
+            enc.session.encode_frame(image, pts, kCMTimeInvalid, props.as_deref().map(|d| d.as_opaque()), id as *mut c_void, &mut flags)
         };
         if status != 0 {
-            ctx.pending.lock().unwrap().take();
-            // 编码器坏了就重建
+            // 回调可能已经带着错误来过了；没来过就在这里回
+            let reply = ctx.take(id);
+            // 编码器坏了就重建（扔掉时会等别的在编的帧都回调完）
             *slot = None;
-            bail!("硬件编码失败（{status}）");
+            if let Some(reply) = reply {
+                reply(Err(anyhow!("硬件编码失败（{status}）")));
+            }
         }
-        Ok(rx)
+        Ok(())
+    }
+}
+
+impl Context {
+    fn take(&self, id: usize) -> Option<Reply> {
+        let mut pending = self.pending.lock().unwrap();
+        let at = pending.iter().position(|(i, _)| *i == id)?;
+        pending.remove(at).map(|(_, r)| r)
     }
 }
 
@@ -224,12 +254,16 @@ impl Drop for Encoder {
             self.session.complete_frames(kCMTimeInvalid);
             self.session.invalidate();
         }
-        // 作废以后不会再有回调，可以放掉
-        drop(unsafe { Box::from_raw(self.ctx) });
+        // 作废以后不会再有回调，可以放掉；万一还有没回的，按丢帧回掉
+        let ctx = unsafe { Box::from_raw(self.ctx) };
+        let left: Vec<_> = ctx.pending.lock().unwrap().drain(..).collect();
+        for (_, reply) in left {
+            reply(Ok(None));
+        }
     }
 }
 
-unsafe extern "C-unwind" fn on_encoded(refcon: *mut c_void, _frame: *mut c_void, status: i32, _flags: VTEncodeInfoFlags, sample: *mut CMSampleBuffer) {
+unsafe extern "C-unwind" fn on_encoded(refcon: *mut c_void, frame: *mut c_void, status: i32, _flags: VTEncodeInfoFlags, sample: *mut CMSampleBuffer) {
     let ctx = unsafe { &*(refcon as *const Context) };
     let result = if status != 0 {
         Err(anyhow!("硬件编码失败（{status}）"))
@@ -238,8 +272,9 @@ unsafe extern "C-unwind" fn on_encoded(refcon: *mut c_void, _frame: *mut c_void,
     } else {
         Ok(None)
     };
-    if let Some(tx) = ctx.pending.lock().unwrap().take() {
-        let _ = tx.send(result);
+    // 锁只在取回调时拿着：回调里可能还会碰别的锁
+    if let Some(reply) = ctx.take(frame as usize) {
+        reply(result);
     }
 }
 

@@ -10,6 +10,7 @@ use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend
 mod capture;
 mod cursor;
 pub mod encode;
+mod flow;
 mod input;
 mod pack;
 

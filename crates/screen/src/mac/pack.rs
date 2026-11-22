@@ -107,6 +107,38 @@ struct Pool {
     pool: CFRetained<CVPixelBufferPool>,
 }
 
+/// 从池子里拿一块缓冲（IOSurface，Metal 能直接读写），尺寸变了就换个池子
+fn pool_buffer(slot: &mut Option<Pool>, format: u32, width: usize, height: usize) -> Result<CFRetained<CVPixelBuffer>> {
+    if slot.as_ref().is_none_or(|p| p.width != width || p.height != height) {
+        *slot = None;
+        let format = CFNumber::new_i32(format as i32);
+        let w = CFNumber::new_i32(width as i32);
+        let h = CFNumber::new_i32(height as i32);
+        let surface = CFDictionary::<CFString, CFType>::from_slices(&[], &[]);
+        let attrs = unsafe {
+            CFDictionary::<CFString, CFType>::from_slices(
+                &[
+                    kCVPixelBufferPixelFormatTypeKey,
+                    kCVPixelBufferWidthKey,
+                    kCVPixelBufferHeightKey,
+                    kCVPixelBufferIOSurfacePropertiesKey,
+                    kCVPixelBufferMetalCompatibilityKey,
+                ],
+                &[format.as_ref(), w.as_ref(), h.as_ref(), surface.as_ref(), CFBoolean::new(true).as_ref()],
+            )
+        };
+        let mut pool: *mut CVPixelBufferPool = ptr::null_mut();
+        let status = unsafe { CVPixelBufferPool::create(None, None, Some(attrs.as_opaque()), NonNull::from(&mut pool)) };
+        let pool = NonNull::new(pool).filter(|_| status == 0).ok_or_else(|| anyhow!("建不了 {width}×{height} 的缓冲池（{status}）"))?;
+        *slot = Some(Pool { width, height, pool: unsafe { CFRetained::from_raw(pool) } });
+    }
+    let pool = &slot.as_ref().unwrap().pool;
+    let mut out: *mut CVPixelBuffer = ptr::null_mut();
+    let status = unsafe { CVPixelBufferPool::create_pixel_buffer(None, pool, NonNull::from(&mut out)) };
+    let out = NonNull::new(out).filter(|_| status == 0).ok_or_else(|| anyhow!("缓冲池给不出缓冲（{status}）"))?;
+    Ok(unsafe { CFRetained::from_raw(out) })
+}
+
 pub(super) struct Packer {
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     stacked: Pipeline,
@@ -146,34 +178,7 @@ impl Packer {
 
     /// 从池子里拿一块 '420f' 的输出缓冲（IOSurface，Metal 能直接写）
     fn buffer(&mut self, width: usize, height: usize) -> Result<CFRetained<CVPixelBuffer>> {
-        if self.pool.as_ref().is_none_or(|p| p.width != width || p.height != height) {
-            self.pool = None;
-            let format = CFNumber::new_i32(PIXEL_FORMAT_NV12_FULL as i32);
-            let w = CFNumber::new_i32(width as i32);
-            let h = CFNumber::new_i32(height as i32);
-            let surface = CFDictionary::<CFString, CFType>::from_slices(&[], &[]);
-            let attrs = unsafe {
-                CFDictionary::<CFString, CFType>::from_slices(
-                    &[
-                        kCVPixelBufferPixelFormatTypeKey,
-                        kCVPixelBufferWidthKey,
-                        kCVPixelBufferHeightKey,
-                        kCVPixelBufferIOSurfacePropertiesKey,
-                        kCVPixelBufferMetalCompatibilityKey,
-                    ],
-                    &[format.as_ref(), w.as_ref(), h.as_ref(), surface.as_ref(), CFBoolean::new(true).as_ref()],
-                )
-            };
-            let mut pool: *mut CVPixelBufferPool = ptr::null_mut();
-            let status = unsafe { CVPixelBufferPool::create(None, None, Some(attrs.as_opaque()), NonNull::from(&mut pool)) };
-            let pool = NonNull::new(pool).filter(|_| status == 0).ok_or_else(|| anyhow!("建不了 {width}×{height} 的缓冲池（{status}）"))?;
-            self.pool = Some(Pool { width, height, pool: unsafe { CFRetained::from_raw(pool) } });
-        }
-        let pool = &self.pool.as_ref().unwrap().pool;
-        let mut out: *mut CVPixelBuffer = ptr::null_mut();
-        let status = unsafe { CVPixelBufferPool::create_pixel_buffer(None, pool, NonNull::from(&mut out)) };
-        let out = NonNull::new(out).filter(|_| status == 0).ok_or_else(|| anyhow!("缓冲池给不出缓冲（{status}）"))?;
-        Ok(unsafe { CFRetained::from_raw(out) })
+        pool_buffer(&mut self.pool, PIXEL_FORMAT_NV12_FULL, width, height)
     }
 
     /// 把像素缓冲的一个平面当成 Metal 纹理
@@ -269,6 +274,111 @@ pub(super) mod tests {
         CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
     };
     use p2pcli_core::screen::{pack_yuv444_stacked, rgb_to_yuv444};
+
+    /// 合成的“屏幕”：慢慢变的背景上一大块往上滚的彩色“文字”（像在滚动网页），几个来回跑的方块和圆。
+    /// 每帧的内容都不一样，编码器得真的编
+    const SCENE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+static uint hash2(uint x, uint y) {
+    uint v = x * 374761393u + y * 668265263u;
+    v = (v ^ (v >> 13)) * 1274126177u;
+    return v ^ (v >> 16);
+}
+
+static float3 palette(uint i) {
+    switch (i % 6) {
+        case 0: return float3(0.95, 0.95, 0.95);
+        case 1: return float3(1.0, 0.35, 0.3);
+        case 2: return float3(0.3, 0.85, 0.4);
+        case 3: return float3(0.35, 0.6, 1.0);
+        case 4: return float3(1.0, 0.85, 0.2);
+        default: return float3(0.85, 0.4, 1.0);
+    }
+}
+
+kernel void scene(texture2d<float, access::write> out [[texture(0)]],
+                  constant uint &frame [[buffer(0)]],
+                  uint2 p [[thread_position_in_grid]]) {
+    uint w = out.get_width();
+    uint h = out.get_height();
+    if (p.x >= w || p.y >= h) return;
+    float t = float(frame);
+    float3 c = float3(0.12 + 0.08 * sin((float(p.x) + t * 3.0) / 211.0), 0.14, 0.18 + 0.08 * cos((float(p.y) + t * 2.0) / 173.0));
+    // 文字区：9×18 的字格，每帧往上滚 4 行像素
+    if (p.x > w / 24 && p.x < w * 15 / 24) {
+        uint sy = p.y + frame * 4u;
+        uint cx = (p.x - w / 24) / 9u, cy = sy / 18u, gx = (p.x - w / 24) % 9u, gy = sy % 18u;
+        uint line = hash2(7u, cy);
+        bool text = (line & 7u) != 0u && cx < 30u + (line >> 8) % 120u;
+        uint glyph = hash2(cx, cy);
+        if (text && (glyph & 7u) != 0u && gx < 7u && gy >= 3u && gy < 15u) {
+            if ((hash2(glyph + gx / 2u, gy / 3u) & 1u) != 0u) c = palette(line >> 4);
+        }
+    }
+    // 来回跑的方块和圆
+    for (uint k = 0; k < 4; k++) {
+        float fk = float(k);
+        float2 center = float2(float(w) * (0.5 + 0.4 * sin(t * 0.031 * (fk + 1.0) + fk)), float(h) * (0.5 + 0.4 * cos(t * 0.023 * (fk + 1.0) + fk * 2.0)));
+        float2 d = abs(float2(p) - center);
+        float r = float(h) * (0.05 + 0.02 * fk);
+        bool hit = (k % 2 == 0) ? (d.x < r && d.y < r) : (length(d) < r);
+        if (hit) c = palette(k + 1) * 0.8 + 0.2 * float3(float(p.x % 7) / 7.0);
+    }
+    out.write(float4(c, 1.0), p);
+}
+"#;
+
+    /// 在 GPU 上画合成的画面，出 BGRA 像素缓冲
+    pub(in super::super) struct Scene {
+        gpu: Packer,
+        pipeline: Pipeline,
+        pool: Option<Pool>,
+        frame: u32,
+    }
+
+    impl Scene {
+        pub(in super::super) fn new() -> Self {
+            let gpu = Packer::new(false).unwrap();
+            let device = gpu.queue.device();
+            let library = device.newLibraryWithSource_options_error(&NSString::from_str(SCENE), None).unwrap();
+            let f = library.newFunctionWithName(&NSString::from_str("scene")).unwrap();
+            let pipeline = device.newComputePipelineStateWithFunction_error(&f).unwrap();
+            Scene { gpu, pipeline, pool: None, frame: 0 }
+        }
+
+        /// 下一帧画面（每次都往前动一点）
+        pub(in super::super) fn render(&mut self, w: usize, h: usize) -> CFRetained<CVPixelBuffer> {
+            let out = pool_buffer(&mut self.pool, PIXEL_FORMAT_BGRA, w, h).unwrap();
+            let (_cv, tex) = self.gpu.texture(&out, MTLPixelFormat::BGRA8Unorm, w, h, 0, true).unwrap();
+            let cmd = self.gpu.queue.commandBuffer().unwrap();
+            let enc = cmd.computeCommandEncoder().unwrap();
+            enc.setComputePipelineState(&self.pipeline);
+            let frame = self.frame;
+            self.frame += 1;
+            unsafe {
+                enc.setTexture_atIndex(Some(&tex), 0);
+                enc.setBytes_length_atIndex(NonNull::from(&frame).cast(), 4, 0);
+            }
+            let tw = self.pipeline.threadExecutionWidth().max(1);
+            let th = (self.pipeline.maxTotalThreadsPerThreadgroup() / tw).clamp(1, 16);
+            enc.dispatchThreads_threadsPerThreadgroup(MTLSize { width: w, height: h, depth: 1 }, MTLSize { width: tw, height: th, depth: 1 });
+            enc.endEncoding();
+            cmd.commit();
+            cmd.waitUntilCompleted();
+            assert_eq!(cmd.status(), MTLCommandBufferStatus::Completed);
+            drop(_cv);
+            self.gpu.cache.flush(0);
+            out
+        }
+
+        /// 同样的画面转成 NV12 全范围：当作系统直接给的 4:2:0 画面
+        pub(in super::super) fn render_nv12(&mut self, w: usize, h: usize) -> CFRetained<CVPixelBuffer> {
+            let bgra = self.render(w, h);
+            self.gpu.pack(&bgra, false).unwrap()
+        }
+    }
 
     /// 测试用的 RGBA 图案：第一行每个像素一种饱和色，下面是横竖两个方向的渐变，再撒些伪随机像素
     pub(in super::super) fn pattern(w: usize, h: usize) -> Vec<u8> {
