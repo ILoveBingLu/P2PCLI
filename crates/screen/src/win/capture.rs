@@ -2,17 +2,22 @@
 //! 缩放并转成 NV12（BT.709），再交给硬件编码器。整个过程画面都不离开显存。
 //! 观看方要 4:4:4 时改用着色器把 Y、Cb、Cr 叠成三倍高的画面（见 [`super::yuv444`]），开不起来就退回 4:2:0。
 //! 抓屏、转换、编码都放在一个专门的线程里，COM 和 D3D 对象只在这个线程上用。
+//!
+//! 抓屏到编码是一条流水线：上一帧还在编码器里的时候，下一帧就能抓、转好送进去，
+//! 帧率看编码器的吞吐，不看一帧要编多久。编码器里最多同时两帧；没人要帧的时候只先备一帧，
+//! 不多编（编好的 P 帧不能扔，扔了后面的就解不出来）。
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use p2pcli_core::host::BoxFuture;
 use p2pcli_core::screen::{
-    CaptureOptions, ColorFormat, EncodedFrame, Layout, Primaries, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config, hvcc_config,
+    CaptureOptions, CaptureStats, ColorFormat, EncodedFrame, Layout, Primaries, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config,
+    hvcc_config,
 };
 use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
@@ -50,53 +55,110 @@ fn legacy_color_space(ycbcr_full_range: Option<bool>) -> D3D11_VIDEO_PROCESSOR_C
     D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: BT709 | (nominal << 4) }
 }
 
-/// 转好的 NV12 纹理轮着用几块：编码器可能还在读上一块
-const NV12_POOL: usize = 3;
+/// 转好的 NV12 纹理轮着用几块：编码器里最多两帧在读，一块正在转，再留一块余量
+pub(super) const NV12_POOL: usize = 4;
 /// 要关键帧时最多等新画面这么久，等不到就拿上一帧重新编
 const REUSE_AFTER: Duration = Duration::from_millis(100);
+/// 最早送进编码器的那帧这么久还没出来，就当编码器卡住了，重建
+const STALL: Duration = Duration::from_secs(2);
 
-enum Cmd {
+/// 流水线有多深
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Depth {
+    /// 编码器里最多同时几帧
+    pub in_flight: usize,
+    /// 没人要帧的时候最多先编好几帧等着
+    pub prefetch: usize,
+}
+
+/// 平时用的：编码器里最多两帧，没人要时先备一帧
+pub(super) const PIPELINED: Depth = Depth { in_flight: 2, prefetch: 1 };
+/// 老的一路：有人要才抓一帧、编一帧、等它出来，测试里拿来比
+#[cfg(test)]
+pub(super) const SERIAL: Depth = Depth { in_flight: 1, prefetch: 0 };
+
+/// 抓屏线程等的东西
+pub(super) enum Ev {
+    /// 要下一帧
     Next(oneshot::Sender<Result<EncodedFrame>>),
     Stop,
+    /// 有新画面、编码器有事件、要关键帧了：醒过来看一眼
+    Wake,
+}
+
+/// 抓屏线程和外面共用的状态
+#[derive(Default)]
+pub(super) struct Shared {
+    pub want_key: AtomicBool,
+    pub bitrate: AtomicU32,
+    /// 最近交出去的那帧是不是 4:4:4。编码器建的时候才定下来，开不起来就退回 4:2:0；
+    /// 按交出去的帧记，不按正在编的记：被连方收到关键帧时读的颜色格式一定和这帧对得上
+    pub stacked: AtomicBool,
+    pub source_frames: AtomicU64,
+    pub encoded_frames: AtomicU64,
+    pub skipped_frames: AtomicU64,
+    pub busy_us: AtomicU64,
+    pub max_us: AtomicU64,
+    /// 送进编码器多少帧，测试里查有没有多编
+    pub submitted: AtomicU64,
+}
+
+impl Shared {
+    pub fn new(bitrate: u32) -> Arc<Self> {
+        Arc::new(Shared { want_key: AtomicBool::new(true), bitrate: AtomicU32::new(bitrate), ..Default::default() })
+    }
+
+    /// 来了一帧新画面；replaced：原来那帧还没被取走就被它盖掉了
+    pub fn arrived(&self, replaced: bool) {
+        self.source_frames.fetch_add(1, Ordering::Relaxed);
+        if replaced {
+            self.skipped_frames.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn stats(&self) -> CaptureStats {
+        CaptureStats {
+            source_frames: self.source_frames.load(Ordering::Relaxed),
+            encoded_frames: self.encoded_frames.load(Ordering::Relaxed),
+            skipped_frames: self.skipped_frames.load(Ordering::Relaxed),
+            busy_us: self.busy_us.load(Ordering::Relaxed),
+            max_us: self.max_us.swap(0, Ordering::Relaxed),
+        }
+    }
 }
 
 pub struct WinCapture {
-    tx: Sender<Cmd>,
+    tx: Sender<Ev>,
     full_range: bool,
-    want_key: Arc<AtomicBool>,
-    bitrate: Arc<AtomicU32>,
-    /// 现在出的是不是 4:4:4。抓屏线程建编码器时才定下来，开不起来就退回 4:2:0
-    stacked: Arc<AtomicBool>,
+    shared: Arc<Shared>,
 }
 
 impl WinCapture {
     pub fn start(opts: CaptureOptions) -> Result<Self> {
         let (tx, rx) = channel();
         let (init_tx, init_rx) = channel();
-        let want_key = Arc::new(AtomicBool::new(true));
-        let bitrate = Arc::new(AtomicU32::new(opts.bitrate));
-        let stacked = Arc::new(AtomicBool::new(false));
-        let (k, b, st) = (want_key.clone(), bitrate.clone(), stacked.clone());
+        let shared = Shared::new(opts.bitrate);
+        let (sh, wake) = (shared.clone(), tx.clone());
         let full_range = opts.full_range;
         std::thread::Builder::new()
             .name("p2pcli-screen".into())
-            .spawn(move || worker(opts, init_tx, rx, k, b, st))
+            .spawn(move || worker(opts, init_tx, wake, rx, sh))
             .context("开不了抓屏线程")?;
         init_rx.recv_timeout(Duration::from_secs(10)).map_err(|_| anyhow!("抓屏没有及时开起来"))??;
-        Ok(WinCapture { tx, full_range, want_key, bitrate, stacked })
+        Ok(WinCapture { tx, full_range, shared })
     }
 }
 
 impl Drop for WinCapture {
     fn drop(&mut self) {
-        let _ = self.tx.send(Cmd::Stop);
+        let _ = self.tx.send(Ev::Stop);
     }
 }
 
 impl ScreenCapture for WinCapture {
     fn next_frame(&self) -> BoxFuture<Result<EncodedFrame>> {
         let (reply, rx) = oneshot::channel();
-        let sent = self.tx.send(Cmd::Next(reply));
+        let sent = self.tx.send(Ev::Next(reply));
         Box::pin(async move {
             sent.map_err(|_| anyhow!("抓屏线程已经结束"))?;
             rx.await.map_err(|_| anyhow!("抓屏线程已经结束"))?
@@ -104,26 +166,31 @@ impl ScreenCapture for WinCapture {
     }
 
     fn request_keyframe(&self) {
-        self.want_key.store(true, Ordering::Relaxed);
+        self.shared.want_key.store(true, Ordering::Relaxed);
+        let _ = self.tx.send(Ev::Wake);
     }
 
     fn set_bitrate(&self, bps: u32) {
-        self.bitrate.store(bps, Ordering::Relaxed);
+        self.shared.bitrate.store(bps, Ordering::Relaxed);
     }
 
     fn color(&self) -> ColorFormat {
         // 4:4:4 一定是全范围
-        if self.stacked.load(Ordering::Relaxed) {
+        if self.shared.stacked.load(Ordering::Relaxed) {
             return ColorFormat { full_range: true, primaries: Primaries::Bt709, layout: Layout::Yuv444Stacked };
         }
         // Windows 抓到的画面已经是 sRGB，只有范围跟着观看方
         ColorFormat { full_range: self.full_range, primaries: Primaries::Bt709, ..Default::default() }
     }
+
+    fn stats(&self) -> Option<CaptureStats> {
+        Some(self.shared.stats())
+    }
 }
 
-fn worker(opts: CaptureOptions, init: Sender<Result<()>>, rx: Receiver<Cmd>, want_key: Arc<AtomicBool>, bitrate: Arc<AtomicU32>, stacked: Arc<AtomicBool>) {
+fn worker(opts: CaptureOptions, init: Sender<Result<()>>, tx: Sender<Ev>, rx: Receiver<Ev>, shared: Arc<Shared>) {
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-    let mut state = match State::new(&opts, stacked) {
+    let mut state = match State::new(&opts, shared, tx) {
         Ok(s) => {
             let _ = init.send(Ok(()));
             s
@@ -133,25 +200,7 @@ fn worker(opts: CaptureOptions, init: Sender<Result<()>>, rx: Receiver<Cmd>, wan
             return;
         }
     };
-    while let Ok(cmd) = rx.recv() {
-        match cmd {
-            Cmd::Stop => break,
-            Cmd::Next(reply) => {
-                let result = state.next(&reply, &want_key, &bitrate, &opts);
-                match result {
-                    Ok(Some(frame)) => {
-                        let _ = reply.send(Ok(frame));
-                    }
-                    // 对面已经不要了（停了、换屏了）
-                    Ok(None) => {}
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    state.run(&rx, &opts);
     state.stop();
     debug!("停止抓屏");
 }
@@ -176,20 +225,63 @@ enum Converter {
     Stacked(Stacker),
 }
 
-struct State {
+/// 画面从哪来
+enum Source {
+    /// 抓屏：新画面一到就把帧池取空、只留最新一帧放在 latest 里
+    Wgc {
+        winrt_device: IDirect3DDevice,
+        pool: Direct3D11CaptureFramePool,
+        session: GraphicsCaptureSession,
+        latest: Arc<Mutex<Option<Direct3D11CaptureFrame>>>,
+        size: SizeInt32,
+    },
+    /// 测试用：定时往 latest 里放 (时刻, 第几帧)，取的时候把 frames 里对应的那张拷进输入纹理
+    #[cfg(test)]
+    Synthetic(Synthetic),
+}
+
+#[cfg(test)]
+pub(super) struct Synthetic {
+    pub frames: Vec<ID3D11Texture2D>,
+    pub size: (u32, u32),
+    pub latest: Arc<Mutex<Option<(Instant, usize)>>>,
+}
+
+/// 已经拷进输入纹理、还没送进编码器的一帧
+#[derive(Clone, Copy)]
+struct Staged {
+    /// 时间戳，100 纳秒
+    ts: i64,
+    /// 从帧池取到它的时候
+    taken: Instant,
+}
+
+/// 送进了编码器、还没出来的一帧
+struct InFlight {
+    ts: i64,
+    taken: Instant,
+    /// 后来要了关键帧：它编出来也不交出去
+    discard: bool,
+}
+
+/// 最近一次见到的参数集：(VPS（只有 H.265 有）, SPS, PPS)
+pub(super) type ParamSets = (Option<Vec<u8>>, Vec<u8>, Vec<u8>);
+
+type Reply = oneshot::Sender<Result<EncodedFrame>>;
+
+pub(super) struct State {
     device: ID3D11Device,
     ctx: ID3D11DeviceContext,
     video_device: ID3D11VideoDevice,
     video_ctx: ID3D11VideoContext,
     manager: IMFDXGIDeviceManager,
-    winrt_device: IDirect3DDevice,
-    pool: Direct3D11CaptureFramePool,
-    session: GraphicsCaptureSession,
-    frames: Receiver<()>,
-    latest: Arc<Mutex<Option<Direct3D11CaptureFrame>>>,
+    source: Source,
+    /// 编码器有事件时往这里叫醒自己
+    tx: Sender<Ev>,
+    shared: Arc<Shared>,
+    depth: Depth,
     /// 时间戳从这里算：同一帧重新编码时时间戳也要往前走
-    started: Instant,
-    size: SizeInt32,
+    pub started: Instant,
     /// WGC 的纹理先拷到这里和它的尺寸：视频处理器、着色器只读自己建的纹理，不挑驱动；
     /// 屏幕不动时也拿它重新转、重新编关键帧
     input: Option<(ID3D11Texture2D, (u32, u32))>,
@@ -198,15 +290,25 @@ struct State {
     sps_pps: Option<ParamSets>,
     /// 还试不试 4:4:4：开不起来、编不出来以后这一路一直用 4:2:0
     try_yuv444: bool,
-    /// 现在出的是不是 4:4:4，和 WinCapture 共用
-    stacked: Arc<AtomicBool>,
+    staged: Option<Staged>,
+    in_flight: VecDeque<InFlight>,
+    /// 编好了还没交出去的（最多一帧）和它是不是 4:4:4
+    ready: VecDeque<(EncodedFrame, bool)>,
+    /// 从什么时候开始要关键帧（还没送出去）
+    key_since: Option<Instant>,
 }
 
-/// 最近一次见到的参数集：(VPS（只有 H.265 有）, SPS, PPS)
-pub(super) type ParamSets = (Option<Vec<u8>>, Vec<u8>, Vec<u8>);
+fn encoder_manager(device: &ID3D11Device) -> Result<IMFDXGIDeviceManager> {
+    let mut token = 0u32;
+    let mut manager = None;
+    unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager)? };
+    let manager = manager.ok_or_else(|| anyhow!("建不了编码器用的显卡管理器"))?;
+    unsafe { manager.ResetDevice(device, token)? };
+    Ok(manager)
+}
 
 impl State {
-    fn new(opts: &CaptureOptions, stacked: Arc<AtomicBool>) -> Result<Self> {
+    fn new(opts: &CaptureOptions, shared: Arc<Shared>, tx: Sender<Ev>) -> Result<Self> {
         let monitor = super::find_monitor(&opts.display)?;
         let mut device = None;
         let mut ctx = None;
@@ -226,18 +328,6 @@ impl State {
         }
         let device = device.ok_or_else(|| anyhow!("开不了显卡"))?;
         let ctx = ctx.ok_or_else(|| anyhow!("开不了显卡"))?;
-        // 编码器在它自己的线程上也会用这块显卡
-        if let Ok(mt) = device.cast::<ID3D11Multithread>() {
-            let _ = unsafe { mt.SetMultithreadProtected(true) };
-        }
-        let video_device: ID3D11VideoDevice = device.cast().context("显卡不支持视频处理")?;
-        let video_ctx: ID3D11VideoContext = ctx.cast().context("显卡不支持视频处理")?;
-
-        let mut token = 0u32;
-        let mut manager = None;
-        unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager)? };
-        let manager = manager.ok_or_else(|| anyhow!("建不了编码器用的显卡管理器"))?;
-        unsafe { manager.ResetDevice(&device, token)? };
 
         let dxgi: IDXGIDevice = device.cast()?;
         let inspectable: IInspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi)? };
@@ -249,22 +339,24 @@ impl State {
         let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
         // 新画面一到就把帧池取空、只留最新一帧：帧池只有两块缓冲，不取空的话后来的画面会被丢掉，
         // 观看方就会看到旧画面，还漏掉最后一次变化
-        let (tx, frames) = channel();
         let latest: Arc<Mutex<Option<Direct3D11CaptureFrame>>> = Arc::default();
-        let slot = latest.clone();
+        let (slot, wake, counter) = (latest.clone(), tx.clone(), shared.clone());
         pool.FrameArrived(&TypedEventHandler::new(move |sender: windows::core::Ref<Direct3D11CaptureFramePool>, _| {
             let Some(pool) = sender.as_ref() else { return Ok(()) };
             let mut newest = None;
             while let Ok(f) = pool.TryGetNextFrame() {
                 if let Some(old) = newest.replace(f) {
+                    counter.arrived(true);
                     let _ = old.Close();
                 }
             }
             if let Some(f) = newest {
-                if let Some(old) = slot.lock().unwrap().replace(f) {
+                let old = slot.lock().unwrap().replace(f);
+                counter.arrived(old.is_some());
+                if let Some(old) = old {
                     let _ = old.Close();
                 }
-                let _ = tx.send(());
+                let _ = wake.send(Ev::Wake);
             }
             Ok(())
         }))?;
@@ -275,123 +367,327 @@ impl State {
         let _ = session.SetIsBorderRequired(false);
         session.StartCapture().context("开始抓屏失败")?;
         info!(display = %opts.display, width = size.Width, height = size.Height, "开始抓屏");
+        let source = Source::Wgc { winrt_device, pool, session, latest, size };
+        Self::with_source(device, ctx, source, opts, shared, tx, PIPELINED)
+    }
+
+    /// 测试用：画面由测试定时放进 latest
+    #[cfg(test)]
+    pub fn synthetic(device: ID3D11Device, ctx: ID3D11DeviceContext, source: Synthetic, opts: &CaptureOptions, shared: Arc<Shared>, tx: Sender<Ev>, depth: Depth) -> Result<Self> {
+        Self::with_source(device, ctx, Source::Synthetic(source), opts, shared, tx, depth)
+    }
+
+    fn with_source(device: ID3D11Device, ctx: ID3D11DeviceContext, source: Source, opts: &CaptureOptions, shared: Arc<Shared>, tx: Sender<Ev>, depth: Depth) -> Result<Self> {
+        // 编码器在它自己的线程上也会用这块显卡
+        if let Ok(mt) = device.cast::<ID3D11Multithread>() {
+            let _ = unsafe { mt.SetMultithreadProtected(true) };
+        }
+        let video_device: ID3D11VideoDevice = device.cast().context("显卡不支持视频处理")?;
+        let video_ctx: ID3D11VideoContext = ctx.cast().context("显卡不支持视频处理")?;
+        let manager = encoder_manager(&device)?;
         Ok(State {
             device,
             ctx,
             video_device,
             video_ctx,
             manager,
-            winrt_device,
-            pool,
-            session,
-            frames,
-            latest,
+            source,
+            tx,
+            shared,
+            depth,
             started: Instant::now(),
-            size,
             input: None,
             converter: None,
             encoder: None,
             sps_pps: None,
             try_yuv444: opts.yuv444,
-            stacked,
+            staged: None,
+            in_flight: VecDeque::new(),
+            ready: VecDeque::new(),
+            key_since: None,
         })
     }
 
+    // 不是测试时只有抓屏这一种来源
+    #[allow(irrefutable_let_patterns)]
     fn stop(&mut self) {
-        let _ = self.session.Close();
-        let _ = self.pool.Close();
+        if let Source::Wgc { pool, session, .. } = &self.source {
+            let _ = session.Close();
+            let _ = pool.Close();
+        }
     }
 
-    /// 等屏幕有变化，抓最新的一帧，转好编码。对面不要了（reply 关了）就返回空。
-    /// 要关键帧而屏幕一直不动时（恢复直连、观看方解码出错），拿 GPU 上留着的上一帧重新转、重新编
-    fn next(&mut self, reply: &oneshot::Sender<Result<EncodedFrame>>, want_key: &AtomicBool, bitrate: &AtomicU32, opts: &CaptureOptions) -> Result<Option<EncodedFrame>> {
-        loop {
-            let can_reuse = want_key.load(Ordering::Relaxed) && self.input.is_some();
-            let wait = if can_reuse { REUSE_AFTER } else { Duration::from_millis(200) };
-            let frame = match self.frames.recv_timeout(wait) {
-                Ok(()) => {
-                    while self.frames.try_recv().is_ok() {}
-                    match self.latest.lock().unwrap().take() {
-                        Some(f) => Some(f),
-                        None => continue,
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    if reply.is_closed() {
-                        return Ok(None);
-                    }
-                    if !can_reuse {
-                        continue;
-                    }
-                    None
-                }
-                Err(RecvTimeoutError::Disconnected) => bail!("抓屏停止了"),
+    /// 主循环：等事件（要帧、新画面、编码器事件），每次醒来都收编码结果、交帧、能送就送新帧进编码器。
+    /// 收到 Stop 或者出了修不好的错就返回；出错时把错误交给正在等（或者下一个来要）帧的人
+    pub fn run(&mut self, rx: &Receiver<Ev>, opts: &CaptureOptions) {
+        let mut pending: Option<Reply> = None;
+        let result = loop {
+            let first = match rx.recv_timeout(self.wait_time(pending.is_some())) {
+                Ok(ev) => Some(ev),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break Ok(()),
             };
-            // 没有新帧就是屏幕没动：输入纹理里还留着上一帧
-            if let Some(frame) = frame {
+            let mut stop = false;
+            for ev in first.into_iter().chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+                match ev {
+                    Ev::Next(reply) => pending = Some(reply),
+                    Ev::Stop => stop = true,
+                    Ev::Wake => {}
+                }
+            }
+            if stop {
+                break Ok(());
+            }
+            if let Err(e) = self.step(&mut pending, opts) {
+                break Err(e);
+            }
+        };
+        let Err(e) = result else { return };
+        let reply = pending.or_else(|| {
+            loop {
+                match rx.recv() {
+                    Ok(Ev::Next(reply)) => break Some(reply),
+                    Ok(Ev::Wake) => {}
+                    Ok(Ev::Stop) | Err(_) => break None,
+                }
+            }
+        });
+        if let Some(reply) = reply {
+            let _ = reply.send(Err(e));
+        }
+    }
+
+    /// 最多睡多久：要关键帧时到点就拿上一帧重编，别的事都会把线程叫醒
+    fn wait_time(&self, has_pending: bool) -> Duration {
+        let mut wait = Duration::from_millis(200);
+        if let Some(since) = self.key_since
+            && self.input.is_some()
+            && self.staged.is_none()
+            && self.has_room(has_pending)
+        {
+            wait = wait.min((since + REUSE_AFTER).saturating_duration_since(Instant::now()));
+        }
+        if let Some(f) = self.in_flight.front() {
+            wait = wait.min((f.taken + STALL).saturating_duration_since(Instant::now()));
+        }
+        wait.max(Duration::from_millis(1))
+    }
+
+    /// 还能不能再送一帧进编码器：编码器里不超过上限，编好没人要的不超过预备的那一帧
+    fn has_room(&self, has_pending: bool) -> bool {
+        let allowed = self.depth.prefetch + usize::from(has_pending);
+        let live = self.ready.len() + self.in_flight.iter().filter(|f| !f.discard).count();
+        live < allowed && self.in_flight.len() < self.depth.in_flight
+    }
+
+    fn step(&mut self, pending: &mut Option<Reply>, opts: &CaptureOptions) -> Result<()> {
+        if pending.as_ref().is_some_and(|r| r.is_closed()) {
+            // 对面已经不要了（停了、换屏了）
+            *pending = None;
+        }
+        if self.shared.want_key.load(Ordering::Relaxed) {
+            // 要关键帧：还没交出去的帧都不要了（观看方要的就是从关键帧重新开始），下一帧编成关键帧
+            self.ready.clear();
+            for f in &mut self.in_flight {
+                f.discard = true;
+            }
+            self.key_since.get_or_insert_with(Instant::now);
+        }
+        if let Err(e) = self.pump(pending, opts) {
+            self.recover(e)?;
+            self.pump(pending, opts)?;
+        }
+        Ok(())
+    }
+
+    fn pump(&mut self, pending: &mut Option<Reply>, opts: &CaptureOptions) -> Result<()> {
+        self.collect()?;
+        self.deliver(pending);
+        self.feed(pending.is_some(), opts)?;
+        // 软件编码器是同步的，送进去就有结果
+        self.collect()?;
+        self.deliver(pending);
+        Ok(())
+    }
+
+    /// 编码出错：4:4:4 时退回 4:2:0，拿输入纹理里留着的这帧接着编；4:2:0 也错就没办法了
+    fn recover(&mut self, e: anyhow::Error) -> Result<()> {
+        if !matches!(self.converter, Some(Converter::Stacked(_))) {
+            warn!("硬件编码出错：{e:#}");
+            return Err(e);
+        }
+        warn!("4:4:4 编码出错，改用 4:2:0：{e:#}");
+        self.try_yuv444 = false;
+        self.reset_encoder();
+        self.restage();
+        Ok(())
+    }
+
+    /// 转换器、编码器扔掉重建；编码器里的、编好没交出去的帧都不要了，下一帧是关键帧
+    fn reset_encoder(&mut self) {
+        self.converter = None;
+        self.encoder = None;
+        self.sps_pps = None;
+        self.in_flight.clear();
+        self.ready.clear();
+        self.shared.want_key.store(true, Ordering::Relaxed);
+        self.key_since.get_or_insert_with(Instant::now);
+    }
+
+    /// 输入纹理里的画面重新送一遍
+    fn restage(&mut self) {
+        if self.input.is_some() && self.staged.is_none() {
+            let now = Instant::now();
+            self.staged = Some(Staged { ts: self.ts(now), taken: now });
+        }
+    }
+
+    fn ts(&self, at: Instant) -> i64 {
+        (at.saturating_duration_since(self.started).as_nanos() / 100) as i64
+    }
+
+    /// 收编码器的结果：按时间戳对上是哪一帧，打包好放进 ready
+    fn collect(&mut self) -> Result<()> {
+        let Some(enc) = self.encoder.as_mut() else { return Ok(()) };
+        enc.poll()?;
+        while let Some((data, time)) = enc.take_output() {
+            // 排在它前面没对上的，是编码器自己丢掉的帧
+            let pos = time.and_then(|t| self.in_flight.iter().position(|f| f.ts == t)).unwrap_or(0);
+            self.in_flight.drain(..pos.min(self.in_flight.len()));
+            let entry = self.in_flight.pop_front();
+            let ts = entry.as_ref().map(|f| f.ts).or(time).unwrap_or(0);
+            let frame = package(enc, &mut self.sps_pps, &data, (ts / 10) as u64)?;
+            let stacked = matches!(self.converter, Some(Converter::Stacked(_)));
+            match entry {
+                Some(f) if f.discard => {}
+                entry => {
+                    if let Some(f) = entry {
+                        let us = f.taken.elapsed().as_micros() as u64;
+                        self.shared.busy_us.fetch_add(us, Ordering::Relaxed);
+                        self.shared.max_us.fetch_max(us, Ordering::Relaxed);
+                    }
+                    self.ready.push_back((frame, stacked));
+                }
+            }
+        }
+        if self.in_flight.front().is_some_and(|f| f.taken.elapsed() > STALL) {
+            warn!(在编 = self.in_flight.len(), "硬件编码器好久没出结果，重建编码器");
+            self.reset_encoder();
+            self.restage();
+        }
+        Ok(())
+    }
+
+    /// 有人在等、有编好的帧就交出去
+    fn deliver(&mut self, pending: &mut Option<Reply>) {
+        if pending.is_none() {
+            return;
+        }
+        let Some((frame, stacked)) = self.ready.pop_front() else { return };
+        // 先记下这帧的格式再交：对面拿到关键帧马上就读 color()
+        self.shared.stacked.store(stacked, Ordering::Relaxed);
+        match pending.take().unwrap().send(Ok(frame)) {
+            Ok(()) => {
+                self.shared.encoded_frames.fetch_add(1, Ordering::Relaxed);
+            }
+            // 对面刚好不要了：留着给下一个
+            Err(Ok(frame)) => self.ready.push_front((frame, stacked)),
+            Err(Err(_)) => {}
+        }
+    }
+
+    /// 有地方就送一帧进编码器：有新画面拿新的；要关键帧而屏幕一直不动，等一会儿就拿输入纹理里留着的上一帧重编
+    fn feed(&mut self, has_pending: bool, opts: &CaptureOptions) -> Result<()> {
+        if !self.has_room(has_pending) {
+            return Ok(());
+        }
+        if let Some(staged) = self.take()? {
+            // 还没送进去的那帧被新画面盖掉了
+            if self.staged.replace(staged).is_some() {
+                self.shared.skipped_frames.fetch_add(1, Ordering::Relaxed);
+            }
+        } else if self.key_since.is_some_and(|t| t.elapsed() >= REUSE_AFTER) {
+            self.restage();
+        }
+        let Some(staged) = self.staged else { return Ok(()) };
+        if self.converter.is_none() || self.encoder.is_none() {
+            self.setup(opts, self.shared.bitrate.load(Ordering::Relaxed))?;
+            self.shared.want_key.store(true, Ordering::Relaxed);
+            let tx = self.tx.clone();
+            let enc = self.encoder.as_mut().unwrap();
+            enc.set_waker(move || {
+                let _ = tx.send(Ev::Wake);
+            });
+            enc.poll()?;
+        }
+        // 新开的编码器还没要输入：画面先留着，它要了再送
+        if !self.encoder.as_ref().unwrap().ready_for_input() {
+            return Ok(());
+        }
+        let picture = self.convert()?;
+        let key = self.shared.want_key.swap(false, Ordering::Relaxed);
+        if key {
+            self.key_since = None;
+            self.ready.clear();
+            for f in &mut self.in_flight {
+                f.discard = true;
+            }
+        }
+        let enc = self.encoder.as_mut().unwrap();
+        enc.set_bitrate(self.shared.bitrate.load(Ordering::Relaxed));
+        if let Err(e) = enc.submit(&self.ctx, &picture, staged.ts, key) {
+            if key {
+                self.shared.want_key.store(true, Ordering::Relaxed);
+            }
+            return Err(e);
+        }
+        self.staged = None;
+        self.in_flight.push_back(InFlight { ts: staged.ts, taken: staged.taken, discard: false });
+        self.shared.submitted.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 取最新的一帧画面拷进输入纹理；没有新画面就是空
+    fn take(&mut self) -> Result<Option<Staged>> {
+        let taken = Instant::now();
+        let (texture, src, at, frame) = match &mut self.source {
+            Source::Wgc { winrt_device, pool, latest, size, .. } => {
+                let Some(frame) = latest.lock().unwrap().take() else { return Ok(None) };
                 let content = frame.ContentSize()?;
                 if content.Width <= 0 || content.Height <= 0 {
-                    continue;
+                    return Ok(None);
                 }
-                if content != self.size {
+                if content != *size {
                     // 分辨率变了：帧池、转换器、编码器都按新尺寸重建
-                    self.size = content;
-                    self.pool.Recreate(&self.winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, content)?;
+                    *size = content;
+                    pool.Recreate(&*winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, content)?;
                     self.input = None;
-                    self.converter = None;
-                    self.encoder = None;
-                    continue;
+                    self.staged = None;
+                    self.reset_encoder();
+                    return Ok(None);
                 }
                 let surface = frame.Surface()?;
                 let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
                 let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
-                let src = (content.Width as u32, content.Height as u32);
-                if self.input.as_ref().is_none_or(|(_, size)| *size != src) {
-                    let input = texture_2d(&self.device, src.0, src.1, DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32)?;
-                    self.input = Some((input, src));
-                    self.converter = None;
-                    self.encoder = None;
-                }
-                self.copy_in(&texture);
-                let _ = frame.Close();
+                (texture, (content.Width as u32, content.Height as u32), taken, Some(frame))
             }
-            if self.converter.is_none() || self.encoder.is_none() {
-                self.setup(opts, bitrate.load(Ordering::Relaxed))?;
-                want_key.store(true, Ordering::Relaxed);
+            #[cfg(test)]
+            Source::Synthetic(s) => {
+                let Some((at, i)) = s.latest.lock().unwrap().take() else { return Ok(None) };
+                (s.frames[i % s.frames.len()].clone(), s.size, at, None)
             }
-            let picture = self.convert()?;
-            let ts = (self.started.elapsed().as_nanos() / 100) as i64;
-
-            let key = want_key.swap(false, Ordering::Relaxed);
-            let enc = self.encoder.as_mut().unwrap();
-            enc.set_bitrate(bitrate.load(Ordering::Relaxed));
-            let data = match enc.encode(&self.ctx, &picture, ts, key) {
-                Ok(Some(d)) => d,
-                // 编码器丢了这帧：等下一次屏幕变化
-                Ok(None) => {
-                    if key {
-                        want_key.store(true, Ordering::Relaxed);
-                    }
-                    continue;
-                }
-                Err(e) if matches!(self.converter, Some(Converter::Stacked(_))) => {
-                    // 编码器开得起来、真编起来却不行（画面太大之类）：退回 4:2:0，拿留着的这帧接着编
-                    warn!("4:4:4 编码出错，改用 4:2:0：{e:#}");
-                    self.try_yuv444 = false;
-                    self.converter = None;
-                    self.encoder = None;
-                    want_key.store(true, Ordering::Relaxed);
-                    continue;
-                }
-                Err(e) => {
-                    warn!("硬件编码出错，重建编码器：{e:#}");
-                    self.encoder = None;
-                    want_key.store(true, Ordering::Relaxed);
-                    return Err(e);
-                }
-            };
-            return package(enc, &mut self.sps_pps, &data, (ts / 10) as u64).map(Some);
+        };
+        if self.input.as_ref().is_none_or(|(_, size)| *size != src) {
+            let input = texture_2d(&self.device, src.0, src.1, DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32)?;
+            self.input = Some((input, src));
+            self.staged = None;
+            self.reset_encoder();
         }
+        self.copy_in(&texture);
+        if let Some(frame) = frame {
+            let _ = frame.Close();
+        }
+        Ok(Some(Staged { ts: self.ts(at), taken }))
     }
 
     /// 按输入尺寸建转换器和编码器。要 4:4:4 时先试三倍高的画面（只用硬件编码器，软件的编不动），
@@ -402,6 +698,8 @@ impl State {
         self.converter = None;
         self.encoder = None;
         self.sps_pps = None;
+        self.in_flight.clear();
+        self.ready.clear();
         if self.try_yuv444 {
             let stacked = Stacker::new(&self.device, &self.ctx, &self.video_device, &self.video_ctx, &input, src, dst, opts.fps).and_then(|stacker| {
                 // 4:4:4 一定是全范围
@@ -413,7 +711,6 @@ impl State {
                     info!(width = dst.0, height = dst.1 * 3, hardware = enc.hardware, "远程画面用 4:4:4");
                     self.converter = Some(Converter::Stacked(stacker));
                     self.encoder = Some(enc);
-                    self.stacked.store(true, Ordering::Relaxed);
                     return Ok(());
                 }
                 Err(e) => {
@@ -422,7 +719,6 @@ impl State {
                 }
             }
         }
-        self.stacked.store(false, Ordering::Relaxed);
         self.converter = Some(self.build_converter(&input, src, dst, opts.fps, opts.full_range)?);
         let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate, opts.codec, opts.full_range, false)?;
         debug!(hardware = enc.hardware, "编码器已换新");

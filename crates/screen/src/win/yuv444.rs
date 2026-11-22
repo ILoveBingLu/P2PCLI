@@ -17,8 +17,8 @@ use windows::core::{PCSTR, s};
 
 use super::capture::{encoder_texture, texture_2d, video_processor, vp_blt, vp_input_view, vp_output_view};
 
-/// 叠好的纹理轮着用几块：编码器可能还在读上一块
-const POOL: usize = 3;
+/// 叠好的纹理轮着用几块：编码器里最多两帧在读，一块正在画，再留一块余量
+const POOL: usize = super::capture::NV12_POOL;
 
 /// 顶点着色器画一个盖住整个画面的三角形；像素着色器按像素在哪一段算 Y、Cb 或 Cr。
 /// 自己先四舍五入到 0~255 的整数再交给渲染目标：显卡把小数转成 8 位时允许差一点，正好在 .5 附近的会差 1。
@@ -186,7 +186,7 @@ fn render_target(device: &ID3D11Device, tex: &ID3D11Texture2D, format: DXGI_FORM
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     //! 要真显卡，平时不跑：
     //! cargo test -p p2pcli-screen --release --lib -- --ignored --nocapture yuv444
 
@@ -202,15 +202,15 @@ mod tests {
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
     use windows::core::Interface;
 
-    struct Gpu {
-        device: ID3D11Device,
-        ctx: ID3D11DeviceContext,
-        video_device: ID3D11VideoDevice,
-        video_ctx: ID3D11VideoContext,
+    pub(in crate::win) struct Gpu {
+        pub device: ID3D11Device,
+        pub ctx: ID3D11DeviceContext,
+        pub video_device: ID3D11VideoDevice,
+        pub video_ctx: ID3D11VideoContext,
     }
 
     /// 显存最大的那块硬件显卡（跳过远程桌面工具装的虚拟显卡、软件渲染器）
-    fn gpu() -> Gpu {
+    pub(in crate::win) fn gpu() -> Gpu {
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.unwrap();
         let mut best: Option<(IDXGIAdapter1, usize, String)> = None;
@@ -252,7 +252,7 @@ mod tests {
     }
 
     /// 测试图案（RGBA）：第一行开头是一个像素一个的纯色，其余是三个方向的渐变加上伪随机的像素
-    fn pattern(w: usize, h: usize, seed: u32) -> Vec<u8> {
+    pub(in crate::win) fn pattern(w: usize, h: usize, seed: u32) -> Vec<u8> {
         const SOLID: [[u8; 3]; 12] = [
             [255, 0, 0],
             [0, 255, 0],
@@ -290,7 +290,7 @@ mod tests {
     }
 
     /// RGBA 上传成 BGRA 纹理，和抓屏的输入纹理一样能当渲染目标、着色器资源
-    fn upload(gpu: &Gpu, rgba: &[u8], w: u32, h: u32) -> ID3D11Texture2D {
+    pub(in crate::win) fn upload(gpu: &Gpu, rgba: &[u8], w: u32, h: u32) -> ID3D11Texture2D {
         let bgra: Vec<u8> = rgba.chunks(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
         let desc = D3D11_TEXTURE2D_DESC {
             Width: w,

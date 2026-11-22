@@ -13,6 +13,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 use windows::core::{BOOL, PCWSTR};
 
+#[cfg(test)]
+mod bench;
 mod capture;
 mod cursor;
 mod encode;

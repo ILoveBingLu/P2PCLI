@@ -1,10 +1,13 @@
 //! Media Foundation 的 H.264 编码器。先找显卡的硬件编码器（NVENC、Quick Sync、AMF），
 //! 直接吃 GPU 上的 NV12 纹理；找不到（虚拟机、远程桌面会话里）才退到系统自带的软件编码器，
 //! 那时画面从显存拷回内存再编码。都开低延迟模式、不要 B 帧、只在要求时出关键帧。
+//!
+//! 硬件编码器是异步的：它要输入、有输出都发事件。[`Encoder::submit`] 只把一帧送进去不等结果，
+//! [`Encoder::poll`] 处理事件、把编好的收进队列，这样上一帧还在编的时候下一帧就能送进去。
 
 use std::collections::VecDeque;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use tracing::{info, warn};
@@ -20,14 +23,17 @@ use p2pcli_core::screen::VideoCodec;
 
 const ME_NEED_INPUT: u32 = 601; // METransformNeedInput
 const ME_HAVE_OUTPUT: u32 = 602; // METransformHaveOutput
-/// 等编码结果最多多久；超时这帧就算丢了，下一帧接着来
-const OUTPUT_WAIT: Duration = Duration::from_millis(400);
+
+/// 编码器发了事件就叫一声，让等着的线程醒过来调 [`Encoder::poll`]
+type Waker = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
 
 pub struct Encoder {
     transform: IMFTransform,
     codec: Option<ICodecAPI>,
     /// 硬件编码器是异步的：它要输入、有输出都通过事件说
     events: Option<Receiver<u32>>,
+    waker: Waker,
+    /// 它还要几帧输入
     need_input: u32,
     in_id: u32,
     out_id: u32,
@@ -46,8 +52,8 @@ pub struct Encoder {
     staging: Option<ID3D11Texture2D>,
     /// 编码器有时候不把 SPS/PPS 放进关键帧里，就从输出类型里取
     seq_header: Option<Vec<u8>>,
-    /// 编出来还没交出去的结果，按顺序
-    outputs: VecDeque<Vec<u8>>,
+    /// 编出来还没取走的结果和它的时间戳，按顺序
+    outputs: VecDeque<(Vec<u8>, Option<i64>)>,
 }
 
 unsafe impl Send for Encoder {}
@@ -233,10 +239,12 @@ impl Encoder {
         let out_size = info.cbSize.max(width * height * 3 / 2);
 
         // 异步编码器的事件单独一个线程等，阻塞着等不会占 CPU
+        let waker: Waker = Arc::default();
         let events = if hardware {
             let generator: IMFMediaEventGenerator = transform.cast()?;
             let (tx, rx) = channel();
             let generator = SendBox(generator);
+            let wake = waker.clone();
             std::thread::Builder::new().name("p2pcli-encoder-events".into()).spawn(move || {
                 let generator = generator;
                 let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
@@ -244,6 +252,9 @@ impl Encoder {
                     let kind = unsafe { ev.GetType() }.unwrap_or(0);
                     if tx.send(kind).is_err() {
                         break;
+                    }
+                    if let Some(wake) = wake.lock().unwrap().as_ref() {
+                        wake();
                     }
                 }
             })?;
@@ -264,6 +275,7 @@ impl Encoder {
             transform,
             codec,
             events,
+            waker,
             need_input: 0,
             in_id,
             out_id,
@@ -297,8 +309,48 @@ impl Encoder {
         self.seq_header.as_deref()
     }
 
-    /// 编一帧 NV12 纹理，返回最早一份还没交出去的 H.264（Annex B）；暂时没有就是空
-    pub fn encode(&mut self, ctx: &ID3D11DeviceContext, texture: &ID3D11Texture2D, ts_100ns: i64, key: bool) -> Result<Option<Vec<u8>>> {
+    /// 编码器一发事件就调 wake（在编码器自己的线程上），让等着的线程来 [`Self::poll`]
+    pub fn set_waker(&self, wake: impl Fn() + Send + 'static) {
+        *self.waker.lock().unwrap() = Some(Box::new(wake));
+    }
+
+    /// 现在能不能送一帧进去。软件编码器是同步的，随时能送
+    pub fn ready_for_input(&self) -> bool {
+        self.events.is_none() || self.need_input > 0
+    }
+
+    /// 处理编码器发来的事件，不等：记下它还要几帧输入，有输出就收进队列
+    pub fn poll(&mut self) -> Result<()> {
+        loop {
+            let Some(rx) = &self.events else { return Ok(()) };
+            let kind = match rx.try_recv() {
+                Ok(kind) => kind,
+                Err(TryRecvError::Empty) => return Ok(()),
+                Err(TryRecvError::Disconnected) => bail!("硬件编码器停止了"),
+            };
+            self.on_event(kind)?;
+        }
+    }
+
+    fn on_event(&mut self, kind: u32) -> Result<()> {
+        match kind {
+            ME_NEED_INPUT => self.need_input += 1,
+            ME_HAVE_OUTPUT => {
+                if let Some(out) = self.pull()? {
+                    self.outputs.push_back(out);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// 送一帧 NV12 纹理进去，不等结果；结果用 [`Self::take_output`] 取。
+    /// 硬件编码器要先 [`Self::ready_for_input`]
+    pub fn submit(&mut self, ctx: &ID3D11DeviceContext, texture: &ID3D11Texture2D, ts_100ns: i64, key: bool) -> Result<()> {
+        if self.events.is_some() && self.need_input == 0 {
+            bail!("编码器还没要输入");
+        }
         if key && let Some(c) = &self.codec {
             set_u32(c, &CODECAPI_AVEncVideoForceKeyFrame, 1);
         }
@@ -312,65 +364,51 @@ impl Encoder {
             sample.AddBuffer(&buffer)?;
             sample.SetSampleTime(ts_100ns)?;
             sample.SetSampleDuration(10_000_000 / self.fps.max(1) as i64)?;
+            self.transform.ProcessInput(self.in_id, &sample, 0)?;
         }
-        if self.events.is_some() { self.encode_async(&sample) } else { self.encode_sync(&sample) }
-    }
-
-    /// 送进一帧，等它吐出结果。编码器的输出一份都不扔：先到的先返回，没赶上的留到下次。
-    /// 丢一份输出后面的帧就解不出来了，所以宁可晚一帧，也不丢
-    fn encode_async(&mut self, sample: &IMFSample) -> Result<Option<Vec<u8>>> {
-        let deadline = Instant::now() + OUTPUT_WAIT;
-        // 等它要输入
-        while self.need_input == 0 {
-            match self.next_event(deadline)? {
-                Some(ME_NEED_INPUT) => self.need_input += 1,
-                Some(ME_HAVE_OUTPUT) => self.collect()?,
-                Some(_) => {}
-                // 它一直不要输入：这帧没送进去，不影响后面的帧
-                None => return Ok(self.outputs.pop_front()),
+        if self.events.is_some() {
+            self.need_input -= 1;
+        } else {
+            // 软件编码器是同步的：送进去马上把能取的都取出来
+            while let Some(out) = self.pull()? {
+                self.outputs.push_back(out);
             }
-        }
-        unsafe { self.transform.ProcessInput(self.in_id, sample, 0)? };
-        self.need_input -= 1;
-        while self.outputs.is_empty() {
-            match self.next_event(deadline)? {
-                Some(ME_NEED_INPUT) => self.need_input += 1,
-                Some(ME_HAVE_OUTPUT) => self.collect()?,
-                Some(_) => {}
-                // 结果还没出来，下次再取
-                None => break,
-            }
-        }
-        Ok(self.outputs.pop_front())
-    }
-
-    fn collect(&mut self) -> Result<()> {
-        if let Some(data) = self.pull()? {
-            self.outputs.push_back(data);
         }
         Ok(())
     }
 
-    fn next_event(&mut self, deadline: Instant) -> Result<Option<u32>> {
-        let rx = self.events.as_ref().unwrap();
-        let wait = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(wait) {
-            Ok(kind) => Ok(Some(kind)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => bail!("硬件编码器停止了"),
-        }
+    /// 最早一份编好还没取走的（Annex B）和它的时间戳（编码器给的话）
+    pub fn take_output(&mut self) -> Option<(Vec<u8>, Option<i64>)> {
+        self.outputs.pop_front()
     }
 
-    fn encode_sync(&mut self, sample: &IMFSample) -> Result<Option<Vec<u8>>> {
-        unsafe { self.transform.ProcessInput(self.in_id, sample, 0)? };
-        while let Some(data) = self.pull()? {
-            self.outputs.push_back(data);
+    /// 一帧一等：送进去，等它出结果（最多 400 毫秒）。测试里拿它当老的一路比
+    #[cfg(test)]
+    pub fn encode(&mut self, ctx: &ID3D11DeviceContext, texture: &ID3D11Texture2D, ts_100ns: i64, key: bool) -> Result<Option<Vec<u8>>> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(400);
+        let wait = |enc: &mut Self| -> Result<bool> {
+            let Some(rx) = &enc.events else { return Ok(false) };
+            match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+                Ok(kind) => enc.on_event(kind).map(|_| true),
+                Err(_) => Ok(false),
+            }
+        };
+        while !self.ready_for_input() {
+            if !wait(self)? {
+                return Ok(self.take_output().map(|o| o.0));
+            }
         }
-        Ok(self.outputs.pop_front())
+        self.submit(ctx, texture, ts_100ns, key)?;
+        while self.outputs.is_empty() {
+            if !wait(self)? {
+                break;
+            }
+        }
+        Ok(self.take_output().map(|o| o.0))
     }
 
-    /// 取一份输出；没有就是空
-    fn pull(&mut self) -> Result<Option<Vec<u8>>> {
+    /// 取一份输出和它的时间戳；没有就是空
+    fn pull(&mut self) -> Result<Option<(Vec<u8>, Option<i64>)>> {
         let own = if self.provides_samples {
             None
         } else {
@@ -402,13 +440,14 @@ impl Encoder {
             Err(e) => return Err(e).context("取编码结果失败"),
         }
         let Some(sample) = sample else { return Ok(None) };
+        let time = unsafe { sample.GetSampleTime() }.ok();
         let buffer = unsafe { sample.ConvertToContiguousBuffer()? };
         let mut ptr = std::ptr::null_mut();
         let mut len = 0u32;
         unsafe { buffer.Lock(&mut ptr, None, Some(&mut len))? };
         let data = unsafe { std::slice::from_raw_parts(ptr, len as usize) }.to_vec();
         unsafe { buffer.Unlock()? };
-        Ok(Some(data))
+        Ok(Some((data, time)))
     }
 
     /// 软件编码器：把显存里的 NV12 拷到内存
