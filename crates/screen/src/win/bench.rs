@@ -13,39 +13,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use p2pcli_core::screen::{CaptureOptions, EncodedFrame, VideoCodec};
 use tokio::sync::oneshot;
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
 use super::capture::{Depth, Ev, PIPELINED, SERIAL, Shared, State, Synthetic};
-use super::yuv444::tests::{Gpu, gpu, pattern, upload};
-
-/// 每秒 60 帧
-const TICK: Duration = Duration::from_nanos(16_666_667);
-/// 轮着放几张不一样的画面
-const FRAMES: usize = 16;
-
-/// 会动的画面：整屏往右下滚（渐变加伪随机的“字”），再加一个白方块
-fn moving_frames(gpu: &Gpu, w: usize, h: usize) -> Vec<ID3D11Texture2D> {
-    let base = pattern(w, h, 3);
-    (0..FRAMES)
-        .map(|i| {
-            let (dx, dy) = (i * 16 % w, i * 9 % h);
-            let mut f = vec![255u8; w * h * 4];
-            for y in 0..h {
-                let src = &base[((y + dy) % h) * w * 4..][..w * 4];
-                let dst = &mut f[y * w * 4..][..w * 4];
-                dst[..(w - dx) * 4].copy_from_slice(&src[dx * 4..]);
-                dst[(w - dx) * 4..].copy_from_slice(&src[..dx * 4]);
-            }
-            let (bx, by) = (i * 40 % (w - 200), i * 25 % (h - 200));
-            for y in by..by + 200 {
-                for x in bx..bx + 200 {
-                    f[(y * w + x) * 4..][..3].copy_from_slice(&[255, 255, 255]);
-                }
-            }
-            upload(gpu, &f, w as u32, h as u32)
-        })
-        .collect()
-}
+use super::synthetic::{Ticker, frames};
+use super::yuv444::tests::gpu;
 
 /// 一路跑起来的抓屏线程、定时放画面的线程，和要帧用的那头
 struct Rig {
@@ -54,9 +25,8 @@ struct Rig {
     started: Instant,
     /// 定时器在不在放画面
     ticking: Arc<AtomicBool>,
-    quit: Arc<AtomicBool>,
+    ticker: Option<Ticker>,
     worker: Option<JoinHandle<()>>,
-    ticker: Option<JoinHandle<()>>,
 }
 
 impl Rig {
@@ -69,7 +39,7 @@ impl Rig {
             let (tx, shared, latest) = (tx.clone(), shared.clone(), latest.clone());
             std::thread::spawn(move || {
                 let gpu = gpu();
-                let frames = moving_frames(&gpu, w as usize, h as usize);
+                let frames = frames(&gpu.device, w as usize, h as usize).unwrap();
                 let opts = CaptureOptions {
                     display: String::new(),
                     max_long_edge: w.max(h),
@@ -81,7 +51,7 @@ impl Rig {
                     wide_gamut: false,
                     yuv444,
                 };
-                let source = Synthetic { frames, size: (w, h), latest };
+                let source = Synthetic { frames, size: (w, h), latest, ticker: None };
                 let mut state = match State::synthetic(gpu.device.clone(), gpu.ctx.clone(), source, &opts, shared, tx, depth) {
                     Ok(s) => s,
                     Err(e) => {
@@ -95,32 +65,8 @@ impl Rig {
         };
         let started = ready_rx.recv().map_err(|_| anyhow!("抓屏线程没起来"))??;
         let ticking = Arc::new(AtomicBool::new(true));
-        let quit = Arc::new(AtomicBool::new(false));
-        let ticker = {
-            let (tx, shared, ticking, quit) = (tx.clone(), shared.clone(), ticking.clone(), quit.clone());
-            std::thread::spawn(move || {
-                let mut next = Instant::now();
-                let mut i = 0;
-                while !quit.load(Ordering::Relaxed) {
-                    next += TICK;
-                    // 睡到差一毫秒，剩下的空转，间隔才稳
-                    if let Some(d) = next.checked_duration_since(Instant::now()).and_then(|d| d.checked_sub(Duration::from_millis(1))) {
-                        std::thread::sleep(d);
-                    }
-                    while Instant::now() < next {
-                        std::hint::spin_loop();
-                    }
-                    if !ticking.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    let old = latest.lock().unwrap().replace((Instant::now(), i));
-                    shared.arrived(old.is_some());
-                    let _ = tx.send(Ev::Wake);
-                    i += 1;
-                }
-            })
-        };
-        Ok(Rig { tx, shared, started, ticking, quit, worker: Some(worker), ticker: Some(ticker) })
+        let ticker = Ticker::spawn(60, latest, shared.clone(), tx.clone(), ticking.clone())?;
+        Ok(Rig { tx, shared, started, ticking, ticker: Some(ticker), worker: Some(worker) })
     }
 
     /// 像被连方那样要一帧，等它来
@@ -143,11 +89,8 @@ impl Rig {
 
 impl Drop for Rig {
     fn drop(&mut self) {
-        self.quit.store(true, Ordering::Relaxed);
+        self.ticker = None;
         let _ = self.tx.send(Ev::Stop);
-        if let Some(t) = self.ticker.take() {
-            let _ = t.join();
-        }
         if let Some(t) = self.worker.take() {
             let _ = t.join();
         }

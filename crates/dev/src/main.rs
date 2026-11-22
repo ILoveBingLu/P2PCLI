@@ -75,6 +75,9 @@ enum Cmd {
         /// 让别人看本机画面（用真实的抓屏和硬件编码）
         #[arg(long, value_enum, default_value = "no")]
         screen: ScreenMode,
+        /// 画面不抓屏幕，用程序生成的 60 Hz 动态画面（照样走 GPU 转换和硬件编码），测网络这一段
+        #[arg(long)]
+        synthetic: bool,
     },
     /// 看对方画面（只看不操作）：收画面、回确认，每秒打印帧率、码率、线路
     Screen {
@@ -94,6 +97,9 @@ enum Cmd {
         /// 请对方用 H.265（对方编不了会自己退回 H.264）
         #[arg(long)]
         h265: bool,
+        /// 请对方用 4:4:4（对方做不到会自己退回 4:2:0）
+        #[arg(long)]
+        yuv444: bool,
     },
     /// 网络诊断：IPv6、NAT 类型、中继
     Diag,
@@ -241,8 +247,9 @@ async fn main() -> Result<()> {
         Arc::new(CliDelegate { approve, screen }),
     )
     .await?;
+    let synthetic = matches!(&cli.cmd, Cmd::Host { synthetic: true, .. });
     if !matches!(screen, ScreenMode::No) {
-        match p2pcli_screen::backend() {
+        match if synthetic { p2pcli_screen::synthetic_backend() } else { p2pcli_screen::backend() } {
             Some(b) => {
                 eprintln!("远程画面：屏幕 {:?}", b.displays());
                 node.host.set_screen_backend(b);
@@ -252,7 +259,7 @@ async fn main() -> Result<()> {
     }
 
     match cli.cmd {
-        Cmd::Screen { target, password, seconds, quality, save, h265 } => {
+        Cmd::Screen { target, password, seconds, quality, save, h265, yuv444 } => {
             let remote = match connect_target(&node, &target, password).await {
                 Ok(r) => r,
                 Err(ConnectError::Rejected(c)) => bail!("被拒：{}", c.describe()),
@@ -271,7 +278,7 @@ async fn main() -> Result<()> {
                 "smooth" => p2pcli_core::screen::Quality::Smooth,
                 _ => p2pcli_core::screen::Quality::Balanced,
             };
-            watch_screen(&remote, quality, seconds, save, h265).await?;
+            watch_screen(&remote, quality, seconds, save, h265, yuv444).await?;
             remote.close();
             node.shutdown().await;
             Ok(())
@@ -406,15 +413,23 @@ async fn connect_target(node: &Node, target: &str, password: Option<String>) -> 
 }
 
 /// 只看不操作：收画面、马上回确认，每秒打印一行
-async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool) -> Result<()> {
-    use p2pcli_core::screen::{ScreenEvent, ScreenOpen, ViewerMsg};
+async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool, yuv444: bool) -> Result<()> {
+    use p2pcli_core::screen::{HostMsg, ScreenEvent, ScreenOpen, ViewerMsg};
     let started = Instant::now();
     let (info, mut input, mut output) = remote.open_screen(ScreenOpen {
         display: None,
         quality,
         control: false,
         codecs: if h265 { vec![p2pcli_core::screen::VideoCodec::H265, p2pcli_core::screen::VideoCodec::H264] } else { vec![] },
+        color_tags: true,
+        wide_gamut: false,
+        yuv444,
     }).await?;
+    // 帧间隔：看稳不稳。整段的都留着，最后算分位数；每秒打印这一秒最长的和超过 25 毫秒的次数
+    let mut last_frame: Option<Instant> = None;
+    let mut gaps: Vec<f64> = Vec::new();
+    let (mut sec_max, mut sec_slow) = (0f64, 0u32);
+    let mut host_stats: Option<(u32, u32)> = None;
     eprintln!("开始看画面，用时 {} 毫秒：屏幕 {:?}，当前 {}", started.elapsed().as_millis(), info.displays, info.display);
     let mut file = match &save { Some(p) => Some(std::fs::File::create(p)?), None => None };
     let deadline = Instant::now() + Duration::from_secs(seconds);
@@ -436,6 +451,17 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
         match ev {
             Some(ScreenEvent::Frame { seq, key, data, .. }) => {
                 input.send(&ViewerMsg::Ack { seq }).await?;
+                let now = Instant::now();
+                if let Some(prev) = last_frame {
+                    let gap = (now - prev).as_secs_f64() * 1000.0;
+                    gaps.push(gap);
+                    sec_max = sec_max.max(gap);
+                    sec_slow += u32::from(gap > 25.0);
+                    if gap > 100.0 {
+                        eprintln!("      停了 {gap:.0} ms（第 {seq} 帧，{} KB{}）", data.len() / 1024, if key { "，关键帧" } else { "" });
+                    }
+                }
+                last_frame = Some(now);
                 first_frame.get_or_insert_with(|| started.elapsed());
                 frames += 1;
                 total_frames += 1;
@@ -481,6 +507,9 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
                     }
                 }
             }
+            Some(ScreenEvent::Host(HostMsg::Stats { bitrate, fps })) => host_stats = Some((fps, bitrate)),
+            // 指针的消息太多，不打印
+            Some(ScreenEvent::Host(HostMsg::Cursor { .. } | HostMsg::CursorShape { .. })) => {}
             Some(ScreenEvent::Host(m)) => eprintln!("对方：{m:?}"),
             None => {}
         }
@@ -488,11 +517,12 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
             let secs = tick.elapsed().as_secs_f64();
             let path = remote.path();
             eprintln!(
-                "{:>4.0}s  {:>3} 帧/秒  {:>6.2} Mbps  关键帧 {}  线路 {:?} {}ms",
+                "{:>4.0}s  {:>3} 帧/秒  {:>6.2} Mbps  关键帧 {}  最长间隔 {:>4.0} ms  超 25 ms {:>2} 次  对方 {:?}  线路 {:?} {}ms",
                 started.elapsed().as_secs_f64(), (frames as f64 / secs).round(), bytes as f64 * 8.0 / secs / 1e6, keys,
+                sec_max, sec_slow, host_stats.map(|(f, b)| format!("{f} 帧 {:.1} Mbps", b as f64 / 1e6)).unwrap_or_default(),
                 path.kind, path.rtt_ms.unwrap_or(0)
             );
-            (frames, bytes, keys) = (0, 0, 0);
+            (frames, bytes, keys, sec_max, sec_slow) = (0, 0, 0, 0.0, 0);
             tick = Instant::now();
         }
     }
@@ -501,6 +531,16 @@ async fn watch_screen(remote: &RemoteHost, quality: p2pcli_core::screen::Quality
         total_bytes as f64 / 1e6,
         first_frame.unwrap_or_default()
     );
+    if !gaps.is_empty() {
+        let mut sorted = gaps.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let pct = |p: f64| sorted[((sorted.len() as f64 - 1.0) * p) as usize];
+        eprintln!(
+            "帧间隔：中位 {:.1} ms、95% {:.1} ms、99% {:.1} ms、最长 {:.0} ms；超过 25 ms {} 次、50 ms {} 次、100 ms {} 次",
+            pct(0.5), pct(0.95), pct(0.99), sorted.last().unwrap(),
+            gaps.iter().filter(|&&g| g > 25.0).count(), gaps.iter().filter(|&&g| g > 50.0).count(), gaps.iter().filter(|&&g| g > 100.0).count()
+        );
+    }
     input.close().await;
     Ok(())
 }

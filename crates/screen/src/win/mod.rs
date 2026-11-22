@@ -19,10 +19,16 @@ mod capture;
 mod cursor;
 mod encode;
 mod input;
+mod synthetic;
 mod yuv444;
 
 pub fn backend() -> Option<Arc<dyn ScreenBackend>> {
     Some(Arc::new(WinBackend { input: Mutex::new(input::Injector::default()), cursor: cursor::CursorReader::default() }))
+}
+
+/// 合成屏幕：定时出会动的画面，走和真抓屏一样的转换、编码和流控，给端到端测试用
+pub fn synthetic_backend() -> Option<Arc<dyn ScreenBackend>> {
+    Some(Arc::new(synthetic::SyntheticBackend))
 }
 
 pub struct WinBackend {

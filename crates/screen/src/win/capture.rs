@@ -133,8 +133,15 @@ pub struct WinCapture {
     shared: Arc<Shared>,
 }
 
+/// 在抓屏线程上建状态：真抓屏是 [`State::new`]，合成屏幕见 [`super::synthetic`]
+pub(super) type MakeState = fn(&CaptureOptions, Arc<Shared>, Sender<Ev>) -> Result<State>;
+
 impl WinCapture {
     pub fn start(opts: CaptureOptions) -> Result<Self> {
+        Self::start_with(opts, State::new)
+    }
+
+    pub(super) fn start_with(opts: CaptureOptions, make: MakeState) -> Result<Self> {
         let (tx, rx) = channel();
         let (init_tx, init_rx) = channel();
         let shared = Shared::new(opts.bitrate);
@@ -142,7 +149,7 @@ impl WinCapture {
         let full_range = opts.full_range;
         std::thread::Builder::new()
             .name("p2pcli-screen".into())
-            .spawn(move || worker(opts, init_tx, wake, rx, sh))
+            .spawn(move || worker(opts, init_tx, wake, rx, sh, make))
             .context("开不了抓屏线程")?;
         init_rx.recv_timeout(Duration::from_secs(10)).map_err(|_| anyhow!("抓屏没有及时开起来"))??;
         Ok(WinCapture { tx, full_range, shared })
@@ -188,9 +195,9 @@ impl ScreenCapture for WinCapture {
     }
 }
 
-fn worker(opts: CaptureOptions, init: Sender<Result<()>>, tx: Sender<Ev>, rx: Receiver<Ev>, shared: Arc<Shared>) {
+fn worker(opts: CaptureOptions, init: Sender<Result<()>>, tx: Sender<Ev>, rx: Receiver<Ev>, shared: Arc<Shared>, make: MakeState) {
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-    let mut state = match State::new(&opts, shared, tx) {
+    let mut state = match make(&opts, shared, tx) {
         Ok(s) => {
             let _ = init.send(Ok(()));
             s
@@ -235,16 +242,16 @@ enum Source {
         latest: Arc<Mutex<Option<Direct3D11CaptureFrame>>>,
         size: SizeInt32,
     },
-    /// 测试用：定时往 latest 里放 (时刻, 第几帧)，取的时候把 frames 里对应的那张拷进输入纹理
-    #[cfg(test)]
+    /// 合成屏幕：定时往 latest 里放 (时刻, 第几帧)，取的时候把 frames 里对应的那张拷进输入纹理
     Synthetic(Synthetic),
 }
 
-#[cfg(test)]
 pub(super) struct Synthetic {
     pub frames: Vec<ID3D11Texture2D>,
     pub size: (u32, u32),
     pub latest: Arc<Mutex<Option<(Instant, usize)>>>,
+    /// 定时放画面的线程，停的时候一起停；测试自己管定时的话是空
+    pub ticker: Option<super::synthetic::Ticker>,
 }
 
 /// 已经拷进输入纹理、还没送进编码器的一帧
@@ -298,6 +305,29 @@ pub(super) struct State {
     key_since: Option<Instant>,
 }
 
+/// 默认的那块显卡（接着主屏幕的），要能做视频处理
+pub(super) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    let mut device = None;
+    let mut ctx = None;
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut ctx),
+        )
+        .context("开不了显卡（D3D11）")?;
+    }
+    let device = device.ok_or_else(|| anyhow!("开不了显卡"))?;
+    let ctx = ctx.ok_or_else(|| anyhow!("开不了显卡"))?;
+    Ok((device, ctx))
+}
+
 fn encoder_manager(device: &ID3D11Device) -> Result<IMFDXGIDeviceManager> {
     let mut token = 0u32;
     let mut manager = None;
@@ -310,24 +340,7 @@ fn encoder_manager(device: &ID3D11Device) -> Result<IMFDXGIDeviceManager> {
 impl State {
     fn new(opts: &CaptureOptions, shared: Arc<Shared>, tx: Sender<Ev>) -> Result<Self> {
         let monitor = super::find_monitor(&opts.display)?;
-        let mut device = None;
-        let mut ctx = None;
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut ctx),
-            )
-            .context("开不了显卡（D3D11）")?;
-        }
-        let device = device.ok_or_else(|| anyhow!("开不了显卡"))?;
-        let ctx = ctx.ok_or_else(|| anyhow!("开不了显卡"))?;
+        let (device, ctx) = create_device()?;
 
         let dxgi: IDXGIDevice = device.cast()?;
         let inspectable: IInspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi)? };
@@ -371,8 +384,7 @@ impl State {
         Self::with_source(device, ctx, source, opts, shared, tx, PIPELINED)
     }
 
-    /// 测试用：画面由测试定时放进 latest
-    #[cfg(test)]
+    /// 合成屏幕：画面由定时线程放进 latest
     pub fn synthetic(device: ID3D11Device, ctx: ID3D11DeviceContext, source: Synthetic, opts: &CaptureOptions, shared: Arc<Shared>, tx: Sender<Ev>, depth: Depth) -> Result<Self> {
         Self::with_source(device, ctx, Source::Synthetic(source), opts, shared, tx, depth)
     }
@@ -408,12 +420,14 @@ impl State {
         })
     }
 
-    // 不是测试时只有抓屏这一种来源
-    #[allow(irrefutable_let_patterns)]
     fn stop(&mut self) {
-        if let Source::Wgc { pool, session, .. } = &self.source {
-            let _ = session.Close();
-            let _ = pool.Close();
+        match &mut self.source {
+            Source::Wgc { pool, session, .. } => {
+                let _ = session.Close();
+                let _ = pool.Close();
+            }
+            // 定时线程丢掉就停
+            Source::Synthetic(s) => s.ticker = None,
         }
     }
 
@@ -671,7 +685,6 @@ impl State {
                 let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
                 (texture, (content.Width as u32, content.Height as u32), taken, Some(frame))
             }
-            #[cfg(test)]
             Source::Synthetic(s) => {
                 let Some((at, i)) = s.latest.lock().unwrap().take() else { return Ok(None) };
                 (s.frames[i % s.frames.len()].clone(), s.size, at, None)

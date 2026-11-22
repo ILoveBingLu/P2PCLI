@@ -33,6 +33,15 @@ pub fn backend() -> Option<Arc<dyn ScreenBackend>> {
     None
 }
 
+/// 合成屏幕：不抓真屏幕，按帧率定时出会动的画面（假装是一块 2560×1600 的主屏幕），
+/// 之后走和真抓屏一样的缩放、4:4:4、编码、流控和计数，给端到端的网络测试用。现在只有 Windows 有
+pub fn synthetic_backend() -> Option<Arc<dyn ScreenBackend>> {
+    #[cfg(windows)]
+    return win::synthetic_backend();
+    #[allow(unreachable_code)]
+    None
+}
+
 /// 系统权限：能不能录屏、能不能控制键鼠。只有 macOS 要单独授权，别的系统总是能
 #[derive(Debug, Clone, Copy)]
 pub struct Permissions {
