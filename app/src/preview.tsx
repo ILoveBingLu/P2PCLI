@@ -76,7 +76,8 @@ const previewSettings: SettingsView = {
   ],
 };
 /** 预览里的远程画面设置 */
-const previewScreen = { supported: true, enabled: true, view_only: false, capture_permission: true, control_permission: false };
+// s=perm-guide：Mac 第一次打开时的权限引导
+const previewScreen = { supported: true, enabled: true, view_only: false, capture_permission: s !== "perm-guide", control_permission: false, capture_needs_restart: false, guide_done: s !== "perm-guide" };
 const previewPermissions: SystemPermission[] = [{
   id: "local_network",
   name: "局域网访问",
@@ -1164,6 +1165,9 @@ mockIPC(
       case "screen_settings":
       case "screen_request_permission":
         return { ...previewScreen };
+      case "screen_open_permission_settings":
+      case "screen_guide_done":
+        return null;
       case "set_screen_settings":
         previewScreen.enabled = (args as { enabled: boolean }).enabled;
         previewScreen.view_only = (args as { viewOnly: boolean }).viewOnly;

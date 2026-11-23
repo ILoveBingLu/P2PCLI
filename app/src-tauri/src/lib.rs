@@ -91,6 +91,9 @@ struct Settings {
     /// 收到的文件放在哪；不写就是系统“下载”文件夹里的 P2PCLI
     #[serde(default)]
     inbox_dir: Option<String>,
+    /// macOS 第一次打开时的录屏、辅助功能权限引导已经点过“以后再说”或“完成”
+    #[serde(default)]
+    screen_guide_done: bool,
 }
 
 fn settings_path(dir: &Path) -> PathBuf {
@@ -1500,6 +1503,7 @@ async fn save_settings(
         screen_off: cur.screen_off,
         screen_view_only: cur.screen_view_only,
         inbox_dir: cur.inbox_dir,
+        screen_guide_done: cur.screen_guide_done,
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
@@ -1833,6 +1837,8 @@ pub fn run() {
             screen::screen_settings,
             screen::set_screen_settings,
             screen::screen_request_permission,
+            screen::screen_open_permission_settings,
+            screen::screen_guide_done,
             screen::remote_supports_screen,
             screen::open_screen_window,
             screen::screen_window_info,

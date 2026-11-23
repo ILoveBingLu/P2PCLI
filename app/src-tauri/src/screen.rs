@@ -92,7 +92,15 @@ pub(crate) struct ScreenSettingsView {
     /// macOS 的录屏、辅助功能权限
     capture_permission: bool,
     control_permission: bool,
+    /// 录屏是这次打开以后才允许的：要重开 P2PCLI 才生效
+    capture_needs_restart: bool,
+    /// 用户在第一次打开时的权限引导里点过“以后再说”或“完成”，不再自动弹
+    guide_done: bool,
 }
+
+/// 打开 P2PCLI 时有没有录屏权限。录屏权限要重开才生效，拿它判断现在是不是该提示重开
+#[cfg(desktop)]
+static CAPTURE_AT_LAUNCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// 本机能不能被看画面，和系统给没给录屏、辅助功能权限。手机只当连接的一方，没有这些
 #[cfg(desktop)]
@@ -109,7 +117,19 @@ fn platform() -> (bool, bool, bool) {
 fn screen_settings_view(state: &AppState) -> ScreenSettingsView {
     let s = state.settings.lock().unwrap();
     let (supported, capture_permission, control_permission) = platform();
-    ScreenSettingsView { supported, enabled: !s.screen_off, view_only: s.screen_view_only, capture_permission, control_permission }
+    #[cfg(desktop)]
+    let capture_needs_restart = capture_permission && !*CAPTURE_AT_LAUNCH.get_or_init(|| capture_permission);
+    #[cfg(mobile)]
+    let capture_needs_restart = false;
+    ScreenSettingsView {
+        supported,
+        enabled: !s.screen_off,
+        view_only: s.screen_view_only,
+        capture_permission,
+        control_permission,
+        capture_needs_restart,
+        guide_done: s.screen_guide_done,
+    }
 }
 
 #[tauri::command]
@@ -149,6 +169,40 @@ pub(crate) fn screen_request_permission(state: State<'_, AppState>, capture: boo
     #[cfg(mobile)]
     let _ = capture;
     screen_settings_view(&state)
+}
+
+/// 直接打开系统设置里录屏或辅助功能那一页（macOS）：系统的授权提示只弹一次，被关掉以后从这里去
+#[tauri::command]
+pub(crate) fn screen_open_permission_settings(capture: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let pane = if capture { "Privacy_ScreenCapture" } else { "Privacy_Accessibility" };
+        return std::process::Command::new("open")
+            .arg(format!("x-apple.systempreferences:com.apple.preference.security?{pane}"))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("打开系统设置失败：{e}"));
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = capture;
+        Err("只有 macOS 要在系统设置里授权".into())
+    }
+}
+
+/// 第一次打开时的权限引导：点过“以后再说”或“完成”就记下来，不再自动弹
+#[tauri::command]
+pub(crate) async fn screen_guide_done(state: State<'_, AppState>) -> Result<(), String> {
+    let _gate = state.config_gate.lock().await;
+    let s = {
+        let mut s = state.settings.lock().unwrap().clone();
+        s.screen_guide_done = true;
+        s
+    };
+    let bytes = serde_json::to_vec_pretty(&s).map_err(|e| e.to_string())?;
+    p2pcli_core::store::write_private(&settings_path(&state.data_dir), &bytes).map_err(|e| format!("保存设置失败：{e:#}"))?;
+    *state.settings.lock().unwrap() = s;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- 看别的设备
@@ -479,6 +533,7 @@ pub(crate) fn screen_close(state: State<'_, AppState>, screen_id: u64) {
 /// 桌面端启动时挂上本机的远程画面实现
 #[cfg(desktop)]
 pub(crate) fn attach_backend(node: &p2pcli_core::node::Node) {
+    CAPTURE_AT_LAUNCH.get_or_init(|| p2pcli_screen::permissions().capture);
     if let Some(backend) = p2pcli_screen::backend() {
         node.host.set_screen_backend(backend);
     }

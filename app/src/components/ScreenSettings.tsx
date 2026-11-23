@@ -2,14 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, LoaderCircle, Monitor } from "lucide-react";
 import { Checkbox, Description } from "@heroui/react";
 import { api, type ScreenSettings as ScreenSettingsView } from "../api";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { MacScreenPermissions, isMac } from "./ScreenPermissions";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { toast } from "@/components/ui/toast";
 import { t } from "@/i18n";
-
-const isMac = navigator.userAgent.includes("Mac");
 
 /** 远程画面：别的设备能不能看、能不能操作本机；macOS 上还要系统给录屏和辅助功能权限 */
 export function ScreenSettings() {
@@ -80,26 +77,7 @@ export function ScreenSettings() {
       {isMac && (
         <div className="flex flex-col gap-2">
           <p className="detail-note">{t("macOS 要先在系统设置里允许，别的设备才能看和操作本机：")}</p>
-          {([
-            [true, t("录屏"), t("让别的设备看到本机画面"), s.capture_permission],
-            [false, t("辅助功能"), t("让别的设备操作本机的键盘和鼠标"), s.control_permission],
-          ] as const).map(([capture, name, what, granted]) => (
-            <div key={name} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border px-3 py-2.5">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <strong className="text-sm">{name}</strong>
-                  <Badge variant={granted ? "success" : "warning"}>{granted ? t("已允许") : t("未允许")}</Badge>
-                </div>
-                <div className="mt-0.5 text-xs text-muted-foreground">{what}</div>
-              </div>
-              {!granted && (
-                <Button variant="outline" size="sm" onClick={() => void api.screenRequestPermission(capture).then(setS)}>
-                  {t("去允许")}
-                </Button>
-              )}
-            </div>
-          ))}
-          <p className="text-xs text-muted-foreground">{t("在系统设置里打开 P2PCLI 后，录屏权限要重新打开 P2PCLI 才生效。")}</p>
+          <MacScreenPermissions s={s} onChange={setS} />
         </div>
       )}
     </div>

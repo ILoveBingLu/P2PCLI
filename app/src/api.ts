@@ -315,6 +315,10 @@ export interface ScreenSettings {
   view_only: boolean;
   capture_permission: boolean;
   control_permission: boolean;
+  /** 录屏是这次打开以后才允许的，要重开 P2PCLI 才生效 */
+  capture_needs_restart: boolean;
+  /** 第一次打开时的权限引导点过“以后再说”或“完成” */
+  guide_done: boolean;
 }
 
 export type ScreenQuality = "sharp" | "balanced" | "smooth";
@@ -691,6 +695,9 @@ export const api = {
   screenSettings: () => invoke<ScreenSettings>("screen_settings"),
   setScreenSettings: (enabled: boolean, viewOnly: boolean) => invoke<ScreenSettings>("set_screen_settings", { enabled, viewOnly }),
   screenRequestPermission: (capture: boolean) => invoke<ScreenSettings>("screen_request_permission", { capture }),
+  /** 直接打开系统设置里录屏或辅助功能那一页（macOS） */
+  screenOpenPermissionSettings: (capture: boolean) => invoke<void>("screen_open_permission_settings", { capture }),
+  screenGuideDone: () => invoke<void>("screen_guide_done"),
   respondScreen: (id: number, allow: boolean, control: boolean) => invoke<void>("respond_screen", { id, allow, control }),
   stopScreenShare: (id?: number) => invoke<void>("stop_screen_share", { id: id ?? null }),
   /** 远程画面：看别的设备 */

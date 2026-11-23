@@ -24,6 +24,7 @@ import {
   shellQuote,
   type FileRequest,
   type ScreenRequest,
+  type ScreenSettings,
   type ForwardView,
   type HostEvent,
   type IncomingRequest,
@@ -63,6 +64,7 @@ import {
   ScreenApproveDialog,
 } from "./components/AppDialogs";
 import { RemoteSessions, type SessionTarget } from "./components/RemoteSessions";
+import { ScreenPermissionGuide } from "./components/ScreenPermissions";
 import { SettingsPage } from "./components/SettingsPage";
 import { Welcome } from "./components/Welcome";
 import { Titlebar } from "./components/Titlebar";
@@ -113,6 +115,14 @@ export default function App() {
   const [requests, setRequests] = useState<IncomingRequest[]>([]);
   const [fileRequests, setFileRequests] = useState<FileRequest[]>([]);
   const [screenRequests, setScreenRequests] = useState<ScreenRequest[]>([]);
+  // Mac 第一次打开：远程控制要的录屏、辅助功能权限还没给时，引导一次
+  const [permGuide, setPermGuide] = useState<ScreenSettings | null>(null);
+  useEffect(() => {
+    if (!isMac) return;
+    void api.screenSettings().then((s) => {
+      if (s.supported && s.enabled && !s.guide_done && (!s.capture_permission || !s.control_permission)) setPermGuide(s);
+    }).catch(() => {});
+  }, []);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
   // 认出命令行 AI 时终端下面的输入框：收没收起来记在本机，每个标签的草稿分开存
@@ -1113,6 +1123,9 @@ export default function App() {
             setScreenRequests((r) => r.filter((x) => x.id !== req.id));
           }}
         />
+      )}
+      {permGuide && requests.length === 0 && screenRequests.length === 0 && fileRequests.length === 0 && (
+        <ScreenPermissionGuide initial={permGuide} onClose={() => setPermGuide(null)} />
       )}
       {requests.length === 0 && screenRequests.length === 0 && fileRequests.length > 0 && (
         <FileApproveDialog
