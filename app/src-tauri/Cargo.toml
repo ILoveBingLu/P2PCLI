@@ -45,6 +45,6 @@ tauri-plugin-window-controls = "=0.2.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 dispatch2 = "0.3"
-# 远程画面全屏时藏起菜单栏和程序坞
+# 远程画面全屏时藏起菜单栏和程序坞；启动屏期间藏起窗口红绿灯
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSButton", "NSResponder", "NSRunningApplication", "NSView", "NSWindow"] }

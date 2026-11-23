@@ -406,6 +406,41 @@ fn system_locale() -> Option<String> {
     None
 }
 
+#[cfg(target_os = "macos")]
+fn apply_macos_controls_visible(ns_win_ptr: usize, visible: bool) {
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+    if ns_win_ptr == 0 {
+        return;
+    }
+    // SAFETY: `ns_win_ptr` comes from Tauri's `WebviewWindow::ns_window()` on the main thread.
+    let ns_win = unsafe { &*(ns_win_ptr as *const NSWindow) };
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(btn) = ns_win.standardWindowButton(kind) {
+            btn.setHidden(!visible);
+        }
+    }
+}
+
+/// 启动屏期间隐藏/恢复主窗口的原生窗口控件（macOS 红绿灯）。
+#[tauri::command]
+fn set_window_controls_visible(window: tauri::WebviewWindow, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let win = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            if let Ok(ptr) = win.ns_window() {
+                apply_macos_controls_visible(ptr as usize, visible);
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, visible);
+}
+
 #[tauri::command]
 fn overview(state: State<'_, AppState>) -> Overview {
     let node = state.node();
@@ -1760,6 +1795,14 @@ pub fn run() {
                 }
             });
 
+            // macOS 主窗口一创建先隐藏红绿灯，等前端启动屏淡出后再恢复显示
+            #[cfg(target_os = "macos")]
+            if let Some(win) = app.get_webview_window("main") {
+                if let Ok(ptr) = win.ns_window() {
+                    apply_macos_controls_visible(ptr as usize, false);
+                }
+            }
+
             // Windows 必须通过插件的 builder 创建窗口；平台配置禁用了自动创建。
             #[cfg(target_os = "windows")]
             {
@@ -1833,6 +1876,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             system_locale,
+            set_window_controls_visible,
             screen::respond_screen,
             screen::stop_screen_share,
             screen::screen_settings,

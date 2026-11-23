@@ -5,6 +5,7 @@ import {
   useState,
   type ComponentProps,
 } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -68,6 +69,7 @@ import { ScreenPermissionGuide } from "./components/ScreenPermissions";
 import { SettingsPage } from "./components/SettingsPage";
 import { Welcome } from "./components/Welcome";
 import { Titlebar } from "./components/Titlebar";
+import { SplashScreen } from "./components/SplashScreen";
 import { CollaborationProvider } from "./components/CollaborationContext";
 import { CollaborationPorts } from "./components/CollaborationPorts";
 import { CollaborationDrawer } from "./components/CollaborationDrawer";
@@ -106,6 +108,19 @@ interface Tab {
 type DropHint = { name: string } | { blocked: string };
 
 export default function App() {
+  const [showSplash, setShowSplash] = useState(true);
+  useEffect(() => {
+    if (!isTauri()) return;
+    void invoke("set_window_controls_visible", { visible: false }).catch(() => {});
+    const fallback = window.setTimeout(() => {
+      void invoke("set_window_controls_visible", { visible: true }).catch(() => {});
+    }, 5000);
+    return () => {
+      window.clearTimeout(fallback);
+      void invoke("set_window_controls_visible", { visible: true }).catch(() => {});
+    };
+  }, []);
+
   const tabSeq = useRef(1);
   const clearedSessions = useRef(new Map<string, Set<string>>());
   const [ov, setOv] = useState<Overview | null>(null);
@@ -736,6 +751,14 @@ export default function App() {
       onOpenChange={setShowCollaboration} onPrepare={prepareCollaboration}>
     <CollaborationPorts>
     <div className="app-shell">
+      {showSplash && (
+        <SplashScreen
+          onFadeStart={() => {
+            if (isTauri()) void invoke("set_window_controls_visible", { visible: true }).catch(() => {});
+          }}
+          onDone={() => setShowSplash(false)}
+        />
+      )}
       <DynamicIsland updater={updater} transfers={transfers} />
       <Titlebar
         ov={ov}
