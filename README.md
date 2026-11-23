@@ -25,7 +25,12 @@ After installation the app checks for updates on its own (once after launch, the
 
 The installers are not paid-signed, so the operating system asks the first time you open the app:
 
-- macOS: if Apple cannot verify P2PCLI, click Done, then System Settings → Privacy & Security, and click Open Anyway.
+- macOS: allow it once on first launch. After that, including in-app updates, you will not be asked again.
+  1. Drag P2PCLI into Applications and double-click it. The dialog says Apple could not verify P2PCLI and has only Done and Move to Trash. Click Done.
+  2. Open System Settings → Privacy & Security and scroll down to Security. It says P2PCLI was blocked. Click Open Anyway next to it and enter your login password.
+  3. A dialog appears again, this time with Open Anyway. Click it and the app opens.
+
+  If Open Anyway is missing in step 2, double-click the app again first. The button only shows for about an hour after macOS blocks the app.
 - Windows: if Windows protected your PC, click More info → Run anyway.
 
 The app uses `wss://p2pcli.aiqji.cn` as its rendezvous server by default, so it works as soon as it is installed. To use your own rendezvous server (self-hosted or Cloudflare, below), change it in the title-bar settings.
