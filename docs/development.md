@@ -50,6 +50,8 @@ pnpm run build --bundles appimage,deb,rpm  # Linux 本机架构正式包
 
 Linux 开发依赖、原生 runner 和验收步骤见 [Linux 桌面支持](linux-desktop.md)。dmg 窗口背景和 Windows 安装界面的图在 `app/src-tauri/installer`，Mac 菜单栏图标是 `app/src-tauri/icons/tray.svg`，改了 SVG 在 Mac 上跑 `CHROME=<Chrome 可执行文件> node scripts/render-art.mjs` 重新出图。在线更新包要签名：仓库 Secrets 里放 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容，没有密码），公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥丢了，已经装上的软件就收不到更新了。本地打正式包不需要私钥，只有加上 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 才会生成更新包并要求签名。
 
+Mac 安装包用一张自签名的代码签名证书签（证书名 `P2PCLI Self-Signed Code Signing`）：仓库 Secrets 里放 `MACOS_CERTIFICATE`（p12 文件转 base64）和 `MACOS_CERTIFICATE_PASSWORD`，发版流程导入到临时钥匙串，用 `APPLE_SIGNING_IDENTITY` 盖过配置里的 `-`。临时签名的认人规则是整个程序的指纹，每个版本都不同，macOS 会把新版本当成另一个程序，用户每次更新都得重新给录屏、辅助功能权限；用同一张证书签，规则变成“这张证书签的”，更新后权限还在。证书不是苹果发的，第一次打开照样要在隐私与安全性里放行。每个版本都要用同一张证书，丢了或换了，所有用户都要重新授权一次。正式发布时缺这两项就不发；本地打包照旧临时签名。
+
 发布牵线服务器：改好根目录 `Cargo.toml` 的版本号，推一个同版本的 `server-vX.Y.Z` 标签，GitHub Actions 会编译 Linux x86_64、aarch64 两个版本连同校验和放到发布页（`.github/workflows/server-release.yml`），一键安装脚本就从那里下载。
 
 ## 界面

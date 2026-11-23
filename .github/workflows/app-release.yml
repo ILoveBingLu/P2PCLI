@@ -3,6 +3,8 @@
 # 推 ci/ 开头的分支只编不发，改了打包配置先用它试，编出来的包在这次运行的 Artifacts 里。
 # 各平台共用的步骤在 .github/actions/build-app。
 # 在线更新的安装包要签名：仓库 Settings → Secrets 里要有 TAURI_SIGNING_PRIVATE_KEY（没有密码）。
+# Mac 安装包用自签名证书签：Secrets 里要有 MACOS_CERTIFICATE（p12 转 base64）、MACOS_CERTIFICATE_PASSWORD。
+# 每个版本都要用同一张证书，换了证书，用户给过的录屏、辅助功能权限就失效，得重新授权。
 # 安卓 APK 要用正式密钥签名，Secrets 里要有 ANDROID_KEYSTORE_BASE64（密钥文件转 base64）、ANDROID_KEYSTORE_PASSWORD、
 # ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD。以后每个版本都要用同一份密钥，换了用户就没法覆盖升级。
 # 正式发布时所有平台的包（桌面 7 种、安卓、iOS）必须都打出来才发布：没配安卓密钥、哪个包打失败，这次就不发，
@@ -45,6 +47,8 @@ jobs:
           bundles: ${{ matrix.bundles }}
           arch: ${{ matrix.arch }}
           signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          macos-certificate: ${{ secrets.MACOS_CERTIFICATE }}
+          macos-certificate-password: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
 
   android:
     name: 安卓（ARM64）

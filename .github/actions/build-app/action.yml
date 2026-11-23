@@ -15,6 +15,14 @@ inputs:
   signing-key:
     description: 在线更新包的签名私钥
     required: true
+  macos-certificate:
+    description: Mac 代码签名证书（自签名，p12 转 base64）；不同版本用同一张，系统设置里给的录屏、辅助功能权限更新后才不会失效
+    required: false
+    default: ""
+  macos-certificate-password:
+    description: Mac 代码签名证书的密码
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -71,6 +79,38 @@ runs:
       shell: bash
       run: node scripts/check-agent-input.mjs
 
+    # 临时签名（ad-hoc）的认人规则是整个程序的指纹，每个版本都不一样，macOS 就当成另一个程序，
+    # 用户每次更新都得重新给录屏、辅助功能权限。用同一张证书签，规则是“这张证书签的”，更新后照样认。
+    # 证书是自签名的，苹果不认，第一次打开照样要放行；系统提示证书不受信任，codesign 照样能签
+    - name: 装 Mac 签名证书
+      if: runner.os == 'macOS'
+      shell: bash
+      env:
+        CERTIFICATE: ${{ inputs.macos-certificate }}
+        CERTIFICATE_PASSWORD: ${{ inputs.macos-certificate-password }}
+      run: |
+        if [ -z "$CERTIFICATE" ] || [ -z "$CERTIFICATE_PASSWORD" ]; then
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "::error::仓库 Secrets 里缺 Mac 签名证书（MACOS_CERTIFICATE、MACOS_CERTIFICATE_PASSWORD），这次不发布：临时签名的版本装上后用户又得重新授权"
+            exit 1
+          fi
+          echo "::warning::没有 Mac 签名证书，这次用临时签名，只能自己试用"
+          exit 0
+        fi
+        kc="$RUNNER_TEMP/p2pcli-signing.keychain-db"
+        kc_pw="$(openssl rand -hex 16)"
+        echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+        security create-keychain -p "$kc_pw" "$kc"
+        security set-keychain-settings -lut 21600 "$kc"
+        security unlock-keychain -p "$kc_pw" "$kc"
+        security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pw" "$kc" > /dev/null
+        security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+        rm -f "$RUNNER_TEMP/signing.p12"
+        security find-identity -p codesigning "$kc"
+        # Tauri 按这个名字找证书签名，盖过 tauri.macos.conf.json 里的 "-"（本机打包照旧临时签名）
+        echo "APPLE_SIGNING_IDENTITY=P2PCLI Self-Signed Code Signing" >> "$GITHUB_ENV"
+
     - name: 打包
       shell: bash
       env:
@@ -100,8 +140,15 @@ runs:
         b="target/${{ inputs.target }}/release/bundle"
         mkdir -p dist
         if [ -d "$b/macos" ]; then
-          # 整个 app 要有完整的 ad-hoc 签名，只有编译器自带的签名时，下载后会提示“已损坏，无法打开”
+          # 整个 app 要有完整的签名，只有编译器自带的签名时，下载后会提示“已损坏，无法打开”
           codesign --verify --deep --strict --verbose=2 "$b/macos/P2PCLI.app"
+          # 用了证书就要真的签上：认人规则是证书，不是程序指纹
+          req="$(codesign -dr - "$b/macos/P2PCLI.app" 2>&1)"
+          echo "$req"
+          if [ -n "$APPLE_SIGNING_IDENTITY" ] && ! echo "$req" | grep -q "certificate root"; then
+            echo "::error::Mac 安装包没有用签名证书签上"
+            exit 1
+          fi
           cp "$b/dmg/P2PCLI_${ver}_${{ inputs.arch }}.dmg" dist/
           cp "$b/macos/P2PCLI.app.tar.gz" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz"
           cp "$b/macos/P2PCLI.app.tar.gz.sig" "dist/P2PCLI_${ver}_${{ inputs.arch }}.app.tar.gz.sig"
