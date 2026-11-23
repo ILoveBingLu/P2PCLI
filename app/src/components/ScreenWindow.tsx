@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink } from "lucide-react";
+import { ChevronDown, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink } from "lucide-react";
 import {
   api,
   type ScreenDisplay,
@@ -675,7 +675,8 @@ export default function ScreenWindow() {
     return () => { alive = false; void unlisten.then((f) => f()); };
   }, []);
 
-  // 全屏时工具栏收起来，画面铺满；鼠标碰到屏幕顶端才滑下来，移开一会儿再收回去。
+  // 全屏时工具栏收起来，画面铺满；鼠标碰到屏幕顶端、或者碰到顶部正中的小拉手才滑下来，移开一会儿再收回去。
+  // 只靠顶端不可靠（Windows 上有人推到顶也出不来），拉手一直在，像 Windows 远程桌面的连接栏。
   // 连接详情弹着的时候不收（弹窗不在工具栏里，鼠标移过去会算“离开”）
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarShown, setToolbarShown] = useState(false);
@@ -706,7 +707,7 @@ export default function ScreenWindow() {
     setToolbarShown(true);
     scheduleHide(1500);
     const onMove = (e: PointerEvent) => {
-      if (e.clientY > 2) return;
+      if (e.clientY > 4) return;
       cancelHide();
       setToolbarShown(true);
     };
@@ -716,6 +717,10 @@ export default function ScreenWindow() {
       cancelHide();
     };
   }, [fullscreen, cancelHide, scheduleHide]);
+  const revealToolbar = useCallback(() => {
+    cancelHide();
+    setToolbarShown(true);
+  }, [cancelHide]);
   toggleRef.current = toggleFullscreen;
   const reconnect = () => setAttempt((n) => n + 1);
 
@@ -788,6 +793,12 @@ export default function ScreenWindow() {
           {fullscreen ? <Shrink /> : <Expand />}
         </Button>
       </div>
+      {fullscreen && !toolbarShown && (
+        <button type="button" className="screen-reveal-tab" aria-label={t("显示工具栏")} title={t("显示工具栏")}
+          onPointerEnter={revealToolbar} onClick={revealToolbar}>
+          <ChevronDown />
+        </button>
+      )}
       <div className="screen-stage">
         <canvas key={renderMode} ref={canvasRef} className="screen-canvas" tabIndex={0}
           data-control={live && control && canControl ? "" : undefined}

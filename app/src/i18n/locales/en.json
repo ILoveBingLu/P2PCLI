@@ -1271,5 +1271,6 @@
   "录屏权限打开后要重新打开 P2PCLI 才生效，到时这里会有按钮。": "After you allow screen recording, P2PCLI has to reopen before it takes effect. A button will appear here.",
   "让别的设备能看、能操作这台 Mac": "Let other devices view and control this Mac",
   "远程控制要用 macOS 的两项权限。点“开启”后系统会弹出提示，点里面的“打开系统设置”，把 P2PCLI 的开关打开就行。不用远程控制可以跳过，以后在 设置 → 远程控制 里也能开。": "Remote control needs two macOS permissions. Click Turn on, then click Open System Settings in the prompt and turn on P2PCLI. If you do not use remote control, skip this; you can turn them on later under Settings → Remote control.",
-  "以后再说": "Not now"
+  "以后再说": "Not now",
+  "显示工具栏": "Show toolbar"
 }

@@ -3099,6 +3099,31 @@ html[data-mobile] [role="dialog"] {
 @media (prefers-reduced-motion: reduce) {
   .screen-window[data-fullscreen] .screen-toolbar { transition: none; }
 }
+/* 全屏时顶部正中的小拉手：碰一下工具栏就下来。浮在对方画面上，做得小、半透明，盖住的地方尽量少 */
+.screen-reveal-tab {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: rgb(0 0 0 / 0.55);
+  color: rgb(255 255 255 / 0.85);
+  opacity: 0.55;
+  transform: translateX(-50%);
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.screen-reveal-tab:hover,
+.screen-reveal-tab:focus-visible { opacity: 1; }
+.screen-reveal-tab > svg { width: 12px; height: 12px; }
 
 
 /* === 主窗口启动屏动画 === */

@@ -1174,6 +1174,11 @@ mockIPC(
         return { ...previewScreen };
       case "remote_supports_screen":
         return true;
+      // 画面窗口（preview.html?window=screen）：只看工具栏和全屏的样子，不真的出画面
+      case "screen_window_info":
+        return { endpoint_id: "f9bb5fbc3f0a1b2c3d4e5f60718293a4", device_name: "客厅的 Windows", platform: "windows" };
+      case "screen_set_fullscreen":
+        return (args as { on: boolean }).on;
       case "system_permissions":
       case "request_system_permission":
         return previewPermissions;
@@ -1266,6 +1271,10 @@ mockIPC(
 );
 
 await import("./main");
+// s=screen-fullscreen：画面窗口打开后自动进全屏，等工具栏收起来看顶部的拉手
+if (s === "screen-fullscreen") {
+  setTimeout(() => window.dispatchEvent(new KeyboardEvent("keydown", { code: navigator.userAgent.includes("Mac") ? "KeyF" : "F11", metaKey: true, ctrlKey: true })), 600);
+}
 // 测拖文件这类系统事件：页面里调 window.__emit("tauri://drag-drop", { paths, position })
 (window as any).__emit = emit;
 if (s === "file-request") {
