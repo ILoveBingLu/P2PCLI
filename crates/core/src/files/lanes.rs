@@ -529,7 +529,9 @@ impl Files {
         let total: u64 = entries.iter().map(|e| e.size).sum();
         let tops: Vec<String> = plan.tops.iter().map(|t| t.name.clone()).collect();
 
-        let partial_dir = self.inbox_root.join(PARTIAL_DIR);
+        // 收件目录取一次：中途在设置里换了，这批的半截文件和放好的文件也在同一个地方
+        let root = self.inbox_root();
+        let partial_dir = root.join(PARTIAL_DIR);
         if let Err(e) = tokio::fs::create_dir_all(&partial_dir).await {
             let message = format!("建收件目录失败：{}（{e}）", partial_dir.display());
             let _ = reply(send, FileMsg::Error { message: message.clone() }).await;
@@ -623,7 +625,7 @@ impl Files {
             if missing > 0 {
                 bail!("还有 {missing} 段没收到");
             }
-            let dest = self.inbox_root.join(safe_component(&name).unwrap_or_else(|| "未命名设备".into()));
+            let dest = root.join(safe_component(&name).unwrap_or_else(|| "未命名设备".into()));
             let shown = dest.display().to_string();
             let (entries, keys) = (entries.clone(), keys.clone());
             let placed = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {

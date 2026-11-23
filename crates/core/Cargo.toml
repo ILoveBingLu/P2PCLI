@@ -40,6 +40,8 @@ sysinfo = { version = "0.39.6", default-features = false, features = ["system"] 
 noq-proto = "=1.4.0"
 # 控制口里命令输出的原始字节用 base64 装进 JSON
 base64 = "0.22"
+# 系统“下载”文件夹的真实位置：Windows 上能挪到别的盘，要问系统（SHGetKnownFolderPath）
+dirs = "7"
 rusqlite = { version = "0.41", features = ["bundled"] }
 # 远程编辑的全项目搜索：ripgrep 用的目录遍历，认 .gitignore；匹配用 regex
 ignore = { version = "0.4", optional = true }

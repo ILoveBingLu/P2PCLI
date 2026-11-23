@@ -100,6 +100,7 @@ export function SettingsPage({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [inboxBusy, setInboxBusy] = useState(false);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [installingCli, setInstallingCli] = useState(false);
   const [agents, setAgents] = useState<InstalledAgent[]>([]);
@@ -185,6 +186,21 @@ export function SettingsPage({
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, [loadPermissions, mac, tab]);
+  const changeInbox = async (reset: boolean) => {
+    if (inboxBusy) return;
+    setInboxBusy(true);
+    try {
+      const dir = await api.setInboxDir(reset);
+      if (dir === null) return;
+      setSettings((s) => s && { ...s, inbox_dir: dir, inbox_custom: !reset });
+      onChanged();
+      toast.success(t("以后收到的文件放在 {{dir}}", { dir }));
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setInboxBusy(false);
+    }
+  };
   const save = async () => {
     if (!settings || saving) return;
     setSaving(true);
@@ -392,13 +408,22 @@ export function SettingsPage({
                     <FieldLabel>{t("收到的文件放在")}</FieldLabel>
                     <div className="flex min-w-0 items-center gap-2">
                       <code className="min-w-0 flex-1 truncate rounded-md bg-muted-surface px-2 py-1.5 text-xs" title={ov.inbox_dir}>{ov.inbox_dir}</code>
-                      {!isMobile && <Button variant="outline" size="sm" onClick={() => void api.openFolder(ov.inbox_dir).catch((e) => toast.error(String(e)))}>
-                        <FolderOpen data-icon="inline-start" />
-                        {t("打开")}
-                      </Button>}
+                      {!isMobile && <>
+                        <Button variant="outline" size="sm" onClick={() => void api.openFolder(ov.inbox_dir).catch((e) => toast.error(String(e)))}>
+                          <FolderOpen data-icon="inline-start" />
+                          {t("打开")}
+                        </Button>
+                        <Button variant="outline" size="sm" disabled={inboxBusy} onClick={() => void changeInbox(false)}>
+                          {t("换文件夹")}
+                        </Button>
+                        {settings?.inbox_custom && <Button variant="ghost" size="sm" disabled={inboxBusy} onClick={() => void changeInbox(true)}>
+                          {t("恢复默认")}
+                        </Button>}
+                      </>}
                     </div>
                     <FieldDescription>
                       {t("按发送的设备分文件夹，重名的自动加编号，不会覆盖。配对过的设备、你连过的设备发来的直接收；别的设备发来要你点同意。")}
+                      {!isMobile && " " + t("换了目录以后，新收到的文件放到新地方，已经收到的不会挪。")}
                     </FieldDescription>
                   </Field>
                   {/* 拖文件进终端、命令行工具 p2pcli：手机上都没有 */}

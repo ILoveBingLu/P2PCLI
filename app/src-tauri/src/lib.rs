@@ -88,6 +88,9 @@ struct Settings {
     /// 别的设备只能看本机画面，不能操作键盘鼠标
     #[serde(default)]
     screen_view_only: bool,
+    /// 收到的文件放在哪；不写就是系统“下载”文件夹里的 P2PCLI
+    #[serde(default)]
+    inbox_dir: Option<String>,
 }
 
 fn settings_path(dir: &Path) -> PathBuf {
@@ -654,6 +657,53 @@ async fn pick_paths(app: AppHandle, folders: bool) -> Result<Vec<String>, String
     if folders { return Err(MOBILE_UNSUPPORTED.into()) } else { dialog.pick_files(done) }
     let picked = rx.await.map_err(|e| e.to_string())?;
     Ok(picked.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect())
+}
+
+/// 换收件目录：弹系统的选择框选一个文件夹；reset 是改回默认（系统“下载”文件夹里的 P2PCLI）。
+/// 返回现在的收件目录，没选就是 None。只影响以后收的文件，已经收到的不挪
+#[cfg(desktop)]
+#[tauri::command]
+async fn set_inbox_dir(app: AppHandle, state: State<'_, AppState>, reset: bool) -> Result<Option<String>, String> {
+    let dir = if reset {
+        None
+    } else {
+        use tauri_plugin_dialog::DialogExt;
+        let (tx, rx) = oneshot::channel();
+        let mut dialog = app.dialog().file().set_title("选收到的文件放在哪");
+        let current = state.node().files.inbox_root();
+        if let Some(start) = current.ancestors().find(|p| p.is_dir()) {
+            dialog = dialog.set_directory(start);
+        }
+        dialog.pick_folder(move |picked| {
+            let _ = tx.send(picked);
+        });
+        let Some(picked) = rx.await.map_err(|e| e.to_string())? else { return Ok(None) };
+        let dir = picked.into_path().map_err(|e| e.to_string())?;
+        // 先试着写一下：选了没权限的地方，现在就报，别等别人发文件来才失败
+        let probe = dir.join(".p2pcli-write-test");
+        tokio::fs::write(&probe, b"").await.map_err(|e| format!("这个文件夹写不进去：{}（{e}）", dir.display()))?;
+        let _ = tokio::fs::remove_file(&probe).await;
+        Some(dir.display().to_string())
+    };
+    let _gate = state.config_gate.lock().await;
+    let s = {
+        let mut s = state.settings.lock().unwrap().clone();
+        s.inbox_dir = dir;
+        s
+    };
+    let bytes = serde_json::to_vec_pretty(&s).map_err(|e| e.to_string())?;
+    p2pcli_core::store::write_private(&settings_path(&state.data_dir), &bytes).map_err(|e| format!("保存设置失败：{e:#}"))?;
+    let root = s.inbox_dir.as_ref().map(PathBuf::from).unwrap_or_else(p2pcli_core::files::default_inbox_dir);
+    *state.settings.lock().unwrap() = s;
+    state.node().files.set_inbox_root(root.clone());
+    Ok(Some(root.display().to_string()))
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+async fn set_inbox_dir(reset: bool) -> Result<Option<String>, String> {
+    let _ = reset;
+    Err(MOBILE_UNSUPPORTED.into())
 }
 
 /// 前端要发的系统通知，比如远程会话里的 AI 停下来等你确认
@@ -1400,6 +1450,8 @@ struct SettingsView {
     agent_commands: BTreeMap<String, String>,
     /// 收到的文件放在哪
     inbox_dir: String,
+    /// 收件目录是自己选的，不是默认的
+    inbox_custom: bool,
 }
 
 #[tauri::command]
@@ -1414,6 +1466,7 @@ fn get_settings(state: State<'_, AppState>) -> SettingsView {
         lan_visible: !s.lan_hidden,
         agent_commands: s.agent_commands.clone(),
         inbox_dir: state.node().files.inbox_root().display().to_string(),
+        inbox_custom: s.inbox_dir.is_some(),
         server: s.server,
         device_name: s.device_name,
         relay: s.relay,
@@ -1446,6 +1499,7 @@ async fn save_settings(
         ai_hint_off: cur.ai_hint_off,
         screen_off: cur.screen_off,
         screen_view_only: cur.screen_view_only,
+        inbox_dir: cur.inbox_dir,
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
@@ -1471,6 +1525,7 @@ async fn save_settings(
         lan_visible: cfg!(desktop) && !s.lan_hidden,
         agent_commands: s.agent_commands.clone(),
         app_version: APP_VERSION.get().cloned(),
+        inbox_dir: s.inbox_dir.as_ref().map(PathBuf::from),
         ..Default::default()
     };
     let old = state.node();
@@ -1601,6 +1656,7 @@ pub fn run() {
                 lan_visible: cfg!(desktop) && !settings.lan_hidden,
                 agent_commands: settings.agent_commands.clone(),
                 app_version: APP_VERSION.get().cloned(),
+                inbox_dir: settings.inbox_dir.as_ref().map(PathBuf::from),
                 ..Default::default()
             };
             let node = tauri::async_runtime::block_on(Node::start(cfg, delegate.clone()))?;
@@ -1808,6 +1864,7 @@ pub fn run() {
             send_files,
             transfers,
             pick_paths,
+            set_inbox_dir,
             stage_file,
             reveal_path,
             open_folder,

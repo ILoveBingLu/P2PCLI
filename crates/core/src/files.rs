@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -166,18 +166,23 @@ pub struct InboxItem {
     pub total: u64,
 }
 
-/// 默认的收件目录：下载文件夹里的 P2PCLI，按发送设备分文件夹
+/// 默认的收件目录：系统“下载”文件夹里的 P2PCLI，按发送设备分文件夹。
+/// Windows 上“下载”可以挪到别的盘，要问系统要真实位置，不能拿用户目录拼
 pub fn default_inbox_dir() -> PathBuf {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    home.join("Downloads").join("P2PCLI")
+    let downloads = dirs::download_dir().unwrap_or_else(|| {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Downloads")
+    });
+    downloads.join("P2PCLI")
 }
 
 pub struct Files {
     host: Arc<Host>,
     recent: Arc<RecentStore>,
-    inbox_root: PathBuf,
+    /// 收件目录：用户在设置里能换，换了以后新收的文件放到新地方
+    inbox_root: RwLock<PathBuf>,
     inbox_path: PathBuf,
     inbox: Mutex<Vec<InboxItem>>,
     transfers: Mutex<Vec<Transfer>>,
@@ -205,7 +210,7 @@ impl Files {
         let files = Arc::new(Self {
             host,
             recent,
-            inbox_root,
+            inbox_root: RwLock::new(inbox_root),
             inbox_path,
             inbox: Mutex::new(inbox),
             transfers: Default::default(),
@@ -219,8 +224,13 @@ impl Files {
         files
     }
 
-    pub fn inbox_root(&self) -> &Path {
-        &self.inbox_root
+    pub fn inbox_root(&self) -> PathBuf {
+        self.inbox_root.read().unwrap().clone()
+    }
+
+    /// 换收件目录；正在收的那批还放原来的地方
+    pub fn set_inbox_root(&self, dir: PathBuf) {
+        *self.inbox_root.write().unwrap() = dir;
     }
 
     /// 最近的传输，新的在前
@@ -639,7 +649,9 @@ impl Files {
         let total: u64 = entries.iter().map(|e| e.size).sum();
         let tops: Vec<String> = plan.tops.iter().map(|t| t.name.clone()).collect();
 
-        let partial_dir = self.inbox_root.join(PARTIAL_DIR);
+        // 收件目录取一次：中途在设置里换了，这批的半截文件和放好的文件也在同一个地方
+        let root = self.inbox_root();
+        let partial_dir = root.join(PARTIAL_DIR);
         if let Err(e) = tokio::fs::create_dir_all(&partial_dir).await {
             let message = format!("建收件目录失败：{}（{e}）", partial_dir.display());
             let _ = reply(send, FileMsg::Error { message: message.clone() }).await;
@@ -704,7 +716,7 @@ impl Files {
         info!(remote = %remote.fmt_short(), %name, files = entries.len(), total, "开始收文件");
 
         let (dest, overwrite) = match &target {
-            Target::Inbox => (self.inbox_root.join(safe_component(&name).unwrap_or_else(|| "未命名设备".into())), false),
+            Target::Inbox => (root.join(safe_component(&name).unwrap_or_else(|| "未命名设备".into())), false),
             Target::Dir { dir, .. } => (dir.clone(), true),
         };
         let result: Result<(String, Vec<String>)> = async {

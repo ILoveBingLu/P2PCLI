@@ -508,6 +508,8 @@ export interface SettingsView {
   agent_commands: Record<string, string>;
   /** 收到的文件放在哪 */
   inbox_dir: string;
+  /** 收件目录是自己选的，不是默认的；手机上没有 */
+  inbox_custom?: boolean;
 }
 
 export type SystemPermissionStatus = "granted" | "denied" | "unknown";
@@ -596,6 +598,8 @@ export const api = {
     if (folders) throw new Error(t("手机上暂不支持这个功能"));
     return stagePhoneFiles(await pickPhoneFiles());
   },
+  /** 换收件目录：弹选择框选文件夹，reset 改回默认。返回现在的收件目录，没选返回 null */
+  setInboxDir: (reset: boolean) => invoke<string | null>("set_inbox_dir", { reset }),
   revealPath: (path: string) => invoke("reveal_path", { path }),
   openFolder: (path: string) => invoke("open_folder", { path }),
   cliStatus: () => invoke<CliStatus>("cli_status"),
