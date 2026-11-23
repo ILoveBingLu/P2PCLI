@@ -29,7 +29,7 @@
 
 ## 开发依赖
 
-Ubuntu 22.04 / Debian 12 安装系统依赖后，按 README 安装 Rust、Node 24 和 pnpm：
+Ubuntu 22.04 / Debian 12 安装系统依赖后，按 [开发](development.md) 里的要求安装 Rust、Node 24 和 pnpm：
 
 ```sh
 sudo apt-get update
