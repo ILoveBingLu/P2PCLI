@@ -106,7 +106,11 @@ impl Injector {
                 // 先移过去再按，同一批发出去
                 send(&[mouse(ax, ay, 0, abs), mouse(ax, ay, data, flags | abs)]);
             }
-            InputEvent::Wheel { dx, dy, .. } => {
+            InputEvent::Wheel { dx, dy, x, y } => {
+                // 滚轮落在鼠标下面的窗口上：鼠标不在滚轮的位置（移动事件丢了、还没到）就先移过去，同一批发出去
+                let before = self.last;
+                let (ax, ay) = self.absolute(display, x, y)?;
+                let moved = (ax, ay) != before;
                 // 浏览器 dy 正数往下滚；Windows 滚轮正数往上。横向两边都是正数往右
                 self.wheel.0 += -dy * WHEEL_PER_PIXEL;
                 self.wheel.1 += dx * WHEEL_PER_PIXEL;
@@ -115,6 +119,9 @@ impl Injector {
                 self.wheel.0 -= v as f64;
                 self.wheel.1 -= h as f64;
                 let mut inputs = Vec::new();
+                if moved {
+                    inputs.push(mouse(ax, ay, 0, abs));
+                }
                 if v != 0 {
                     inputs.push(mouse(0, 0, v, MOUSEEVENTF_WHEEL));
                 }

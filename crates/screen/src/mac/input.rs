@@ -167,7 +167,12 @@ impl Injector {
                 let (kind, cg, number) = Self::button_kind(button, down);
                 self.mouse(kind, at, cg, number, clicks);
             }
-            InputEvent::Wheel { dx, dy, .. } => {
+            InputEvent::Wheel { dx, dy, x, y } => {
+                // 滚轮落在鼠标下面的窗口上：鼠标不在滚轮的位置（移动事件丢了、还没到）就先移过去
+                let at = Self::point(display, x, y)?;
+                if (at.x - self.last.x).abs() >= 1.0 || (at.y - self.last.y).abs() >= 1.0 {
+                    self.inject(display, &InputEvent::Move { x, y })?;
+                }
                 // 浏览器 dy 正数是往下滚，CGEvent 正数是往上
                 let ev = CGEvent::new_scroll_wheel_event2(
                     self.source.as_deref(),

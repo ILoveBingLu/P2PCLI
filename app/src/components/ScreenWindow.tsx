@@ -32,6 +32,8 @@ const WIDE_GAMUT = typeof matchMedia === "function" && matchMedia("(color-gamut:
 
 /** 隔这么久问一次这台设备现在用哪条连接（断开、重连都能跟上） */
 const CONNECTION_POLL_MS = 2000;
+/** 鼠标移动和滚轮最多这么久合并发一次（约一帧） */
+const INPUT_FLUSH_MS = 16;
 
 type Phase =
   | { kind: "waiting" } // 还没连上这台设备
@@ -178,6 +180,7 @@ export default function ScreenWindow() {
   const pendingMove = useRef<ScreenInput | null>(null);
   const pendingWheel = useRef<{ dx: number; dy: number; x: number; y: number } | null>(null);
   const flushScheduled = useRef(false);
+  const lastFlush = useRef(0);
   const controlRef = useRef(control);
   controlRef.current = control && !!started?.control;
   const swapRef = useRef(swapMeta);
@@ -224,6 +227,7 @@ export default function ScreenWindow() {
 
   const flush = useCallback(() => {
     flushScheduled.current = false;
+    lastFlush.current = performance.now();
     const id = screenId.current;
     const msgs = queue.current;
     if (pendingMove.current) { msgs.push({ t: "input", ev: pendingMove.current }); pendingMove.current = null; }
@@ -241,9 +245,11 @@ export default function ScreenWindow() {
       flush();
       return;
     }
+    // 按 16 毫秒合并一次。不用 requestAnimationFrame：窗口被系统当成不可见、不出新帧时它根本不触发，
+    // 移动和滚轮就一直攒着发不出去（画面照样在动，因为画面是解码回调画的），对面只收到点击
     if (!flushScheduled.current) {
       flushScheduled.current = true;
-      requestAnimationFrame(flush);
+      window.setTimeout(flush, Math.max(0, INPUT_FLUSH_MS - (performance.now() - lastFlush.current)));
     }
   }, [flush]);
 
@@ -535,7 +541,8 @@ export default function ScreenWindow() {
     }
     if (canvas.style.cursor !== css) canvas.style.cursor = css;
   }, []);
-  useEffect(applyCursor, [applyCursor, look, remoteCursor?.visible, control, started]);
+  // 换了画布（切到 4:4:4 时整块换掉）也要重新设
+  useEffect(applyCursor, [applyCursor, look, remoteCursor?.visible, control, started, renderMode]);
 
   const onPointerMove = (e: React.PointerEvent) => {
     const p = pos(e);
@@ -575,7 +582,8 @@ export default function ScreenWindow() {
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-  }, [pos, send, phase.kind]);
+    // renderMode：切到 4:4:4 时画布整块换掉，要挂到新画布上，不然滚轮还挂在旧的那块上
+  }, [pos, send, phase.kind, renderMode]);
 
   /** 发出去按下、还没发抬起的键 */
   const pressed = useRef(new Set<string>());
@@ -638,7 +646,7 @@ export default function ScreenWindow() {
       window.removeEventListener("blur", releaseAll);
       canvas?.removeEventListener("blur", releaseAll);
     };
-  }, [device, send, releaseAll]);
+  }, [device, send, releaseAll, renderMode]);
 
   // 切到“只看”：按着的键和鼠标全松开
   useEffect(() => {
