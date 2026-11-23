@@ -89,9 +89,14 @@ interface Props {
   onOpenPath?: (link: TerminalPathLink) => void;
   /** 终端里的本机网址（http://localhost:5173/）被 ⌘/Ctrl+点击：对方电脑上的端口，要转发过来再打开 */
   onOpenUrl?: (url: FoundUrl) => void;
-  /** 对面的会话在 tmux 里（macOS、Linux）：滚轮交给它翻历史。Windows 的 psmux 没验证过，还是 xterm 自己的做法 */
+  /** 对面的会话在 tmux 里（macOS、Linux）：滚轮交给它翻历史。Windows 的 psmux 没验证过，还是 xterm 自己的做法。
+   *  对面用控制模式接会话时（输出开头带 CONTROL_OSC），历史在本机，这一套不用 */
   tmuxWheel?: boolean;
 }
+
+/** 被控端用 tmux 控制模式接会话时，输出开头带的私有 OSC（core 的 tmux_control::CONTROL_MARK）：
+ *  之后的输出是程序的原始输出，历史攒在本机，滚轮、鼠标模式都照普通终端处理 */
+const CONTROL_OSC = 7737;
 
 /** tmux 开了 mouse 会要本机进这几种鼠标模式，见下面的说明 */
 const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
@@ -243,6 +248,12 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     // 往上滚过以后对面可能停在复制模式，那里按键是复制模式的命令；所以打字前先发一下中键退出来，字照常进 shell
     let maybeCopyMode = false;
     let wheelRest = 0;
+    let controlMode = false;
+    term.parser.registerOscHandler(CONTROL_OSC, (data) => {
+      if (data !== "p2pcli-control") return false;
+      controlMode = true;
+      return true;
+    });
     // 按键回显：终端安静时敲一个键开始计时，下一次有输出就停表。AI 在刷屏时分不清哪段是回显，不测
     let echoStart: number | null = null;
     let lastOutput = 0;
@@ -273,10 +284,10 @@ export function TerminalView({ connId, sessionId, active, onStatus, onReady, onH
     };
     if (tmuxWheel) {
       term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) =>
-        params.length > 0 && params.every((p) => typeof p === "number" && MOUSE_MODES.has(p)));
+        !controlMode && params.length > 0 && params.every((p) => typeof p === "number" && MOUSE_MODES.has(p)));
       term.attachCustomWheelEventHandler((e) => {
-        // 没接上 tmux 时（普通屏幕）照常滚本机的回滚区
-        if (term.buffer.active.type !== "alternate" || e.deltaY === 0) return true;
+        // 控制模式、或者没接上 tmux 时（普通屏幕）照常滚本机的回滚区
+        if (controlMode || term.buffer.active.type !== "alternate" || e.deltaY === 0) return true;
         e.preventDefault();
         const rect = (el.querySelector(".xterm-screen") ?? el).getBoundingClientRect();
         const cellHeight = rect.height / term.rows;

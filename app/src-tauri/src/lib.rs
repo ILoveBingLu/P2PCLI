@@ -1336,8 +1336,9 @@ async fn open_terminal(
     status: Channel<TermStatus>,
 ) -> Result<OpenedTerminal, String> {
     let remote = state.remote(conn_id)?;
+    // 请对方用 tmux 控制模式接会话：历史在本机，滚动不走网络；对方是旧版本或 Windows 时照旧
     let (mut input, mut out) = remote
-        .attach_terminal(session_id, cols, rows)
+        .attach_terminal_control(session_id, cols, rows)
         .await
         .map_err(|e| format!("{e:#}"))?;
     let session_id = out.session_id.clone();

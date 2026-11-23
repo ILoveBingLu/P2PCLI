@@ -101,6 +101,10 @@ pub enum Msg {
         session_id: Option<String>,
         cols: u16,
         rows: u16,
+        /// 连接方能接控制模式的原始输出、自己攒历史：被连方用 tmux 控制模式接会话，滚动不走网络。
+        /// 旧版本不发这项，照旧用普通接法
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        control: bool,
     },
     Opened {
         shell: String,

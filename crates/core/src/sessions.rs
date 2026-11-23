@@ -41,6 +41,15 @@ const WHEEL_BINDINGS: &[&[&str]] = &[
     &["bind-key", "-n", "MouseUp2Pane", "select-pane"],
 ];
 
+/// 用控制模式接一个会话：哪个 tmux、哪个服务（-L）、哪个会话
+#[cfg(feature = "host")]
+#[derive(Debug, Clone)]
+pub struct ControlTarget {
+    pub program: PathBuf,
+    pub namespace: String,
+    pub name: String,
+}
+
 #[derive(Default)]
 struct Health {
     sessions: BTreeMap<String, String>,
@@ -396,6 +405,12 @@ impl SessionManager {
             bail!("AI 输入框非空或无法识别，请清空终端输入后重新连接协作");
         }
         Ok((pid, pane))
+    }
+
+    /// 用控制模式（tmux -C）接这个会话要的东西；会话要先用 attach 建好或核对过
+    #[cfg(feature = "host")]
+    pub fn control_target(&self, owner: &str, id: &str) -> Result<ControlTarget> {
+        Ok(ControlTarget { program: executable(self.program.as_deref())?, namespace: self.namespace.clone(), name: Self::name(owner, id)? })
     }
 
     #[cfg(feature = "host")]

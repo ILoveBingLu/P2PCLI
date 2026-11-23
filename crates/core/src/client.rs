@@ -210,24 +210,30 @@ impl RemoteHost {
     }
 
     pub async fn attach_terminal(&self, session_id: Option<String>, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
-        self.open(true, session_id, cols, rows).await
+        self.open(true, session_id, cols, rows, false).await
+    }
+
+    /// 同 attach_terminal，但请对方用 tmux 控制模式接会话：输出是程序的原始输出，开头带
+    /// [`crate::tmux_control::CONTROL_MARK`] 时历史要在本机攒、滚动在本机做。对方是旧版本或 Windows 时照旧
+    pub async fn attach_terminal_control(&self, session_id: Option<String>, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
+        self.open(true, session_id, cols, rows, true).await
     }
 
     /// One-shot CLI commands retain the shell's exit code and do not leave background sessions.
     pub async fn open_ephemeral_terminal(&self, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
-        self.open(false, None, cols, rows).await
+        self.open(false, None, cols, rows, false).await
     }
 
-    async fn open(&self, persistent: bool, session_id: Option<String>, cols: u16, rows: u16) -> Result<(TermInput, TermOutput)> {
+    async fn open(&self, persistent: bool, session_id: Option<String>, cols: u16, rows: u16, control: bool) -> Result<(TermInput, TermOutput)> {
         let conn = match &self.link {
             Link::Net { conn, .. } => conn,
             #[cfg(feature = "host")]
-            Link::Local { host, owner } => return open_local(host, owner, persistent, session_id, cols, rows).await,
+            Link::Local { host, owner } => return open_local(host, owner, persistent, session_id, cols, rows, control).await,
             #[cfg(not(feature = "host"))]
             Link::Local { .. } => unreachable!("手机端建不出本机连接"),
         };
         let (mut send, mut recv) = conn.open_bi().await?;
-        write_msg(&mut send, &Msg::Open { persistent, cols, rows, session_id }).await?;
+        write_msg(&mut send, &Msg::Open { persistent, cols, rows, session_id, control }).await?;
         match timeout(Duration::from_secs(35), read_msg(&mut recv)).await?? {
             Msg::Opened { shell, session_id } => Ok((
                 TermInput { send: Some(TermWrite::Quic(send)) },
@@ -683,6 +689,7 @@ async fn open_local(
     session_id: Option<String>,
     cols: u16,
     rows: u16,
+    control: bool,
 ) -> Result<(TermInput, TermOutput)> {
     let (target, requested) = match session_id.as_deref() {
         Some(session_id) => {
@@ -693,9 +700,12 @@ async fn open_local(
     };
     let attachment = if persistent {
         match host.terminals.attach(target, requested, cols, rows).await {
-            // 别的设备开的会话：回给界面的编号和列表里一样，带着设备公钥
-            Ok((cmd, id)) if target != owner => Some((cmd, format!("{target}-{id}"))),
-            Ok(attachment) => Some(attachment),
+            Ok((cmd, id)) => {
+                let via = if control && !cfg!(windows) { Some(host.terminals.control_target(target, &id)?) } else { None };
+                // 别的设备开的会话：回给界面的编号和列表里一样，带着设备公钥
+                let shown = if target != owner { format!("{target}-{id}") } else { id };
+                Some((cmd, shown, via))
+            }
             // 没装 tmux、psmux 这类会话管理器：新开的退回普通终端，照样能用，只是软件关了就没了；
             // 要接回指定的后台会话就不能糊弄，照实报错
             Err(e) if session_id.is_none() => {
@@ -711,7 +721,8 @@ async fn open_local(
     let (mut host_w, client_r) = tokio::io::duplex(LOCAL_PIPE);
     tokio::spawn(async move {
         let result = match attachment {
-            Some((cmd, id)) => serve_session(host_r, &mut host_w, cols, rows, cmd, id).await,
+            Some((_, id, Some(via))) => crate::tmux_control::serve_control(host_r, &mut host_w, cols, rows, via, id).await,
+            Some((cmd, id, None)) => serve_session(host_r, &mut host_w, cols, rows, cmd, id).await,
             None => serve_terminal(host_r, &mut host_w, cols, rows).await,
         };
         if let Err(e) = result {

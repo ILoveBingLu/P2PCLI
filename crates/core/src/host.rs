@@ -802,9 +802,12 @@ impl Host {
                     self.files()?.serve_put(&peer, &mut send, &mut recv, dest).await?;
                 }
                 #[cfg(feature = "host")]
-                Msg::Open { cols, rows, session_id, persistent } => {
+                Msg::Open { cols, rows, session_id, persistent, control } => {
                     let attachment = if persistent {
-                        Some(self.terminals.attach(&owner, session_id.as_deref(), cols, rows).await?)
+                        let (cmd, id) = self.terminals.attach(&owner, session_id.as_deref(), cols, rows).await?;
+                        // psmux 的控制模式没验证过，Windows 上照旧
+                        let via = if control && !cfg!(windows) { Some(self.terminals.control_target(&owner, &id)?) } else { None };
+                        Some((cmd, id, via))
                     } else {
                         if session_id.is_some() { bail!("临时终端不能恢复后台会话"); }
                         None
@@ -812,7 +815,8 @@ impl Host {
                     self.bump_terminals(session, 1);
                     self.delegate.event(HostEvent::TerminalOpened { session });
                     let result = match attachment {
-                        Some((cmd, id)) => serve_session(recv, &mut send, cols, rows, cmd, id).await,
+                        Some((_, id, Some(via))) => crate::tmux_control::serve_control(recv, &mut send, cols, rows, via, id).await,
+                        Some((cmd, id, None)) => serve_session(recv, &mut send, cols, rows, cmd, id).await,
                         None => serve_terminal(recv, &mut send, cols, rows).await,
                     };
                     self.bump_terminals(session, -1);

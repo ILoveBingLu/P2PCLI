@@ -30,6 +30,9 @@ pub mod remote_ops;
 /// 伪终端：只有被连的一方（和桌面端的“本机”终端）用，手机端不编
 #[cfg(feature = "host")]
 pub mod pty;
+/// 用 tmux 控制模式接后台会话：历史在连接方本机，滚动不走网络
+#[cfg(feature = "host")]
+pub mod tmux_control;
 pub mod rdv_ws;
 pub mod rendezvous;
 pub mod screen;

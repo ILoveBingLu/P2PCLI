@@ -351,6 +351,104 @@ async fn wheel_scrolls_tmux_history() {
     host.shutdown().await;
 }
 
+/// 控制模式：程序的原始输出直接过来，开头带标记和已有的历史；改尺寸、断开重连后历史还在；
+/// 全屏程序（备用屏幕）开着时重连，先还原底下的普通屏幕再切到备用屏幕。要真的起 tmux，默认不跑
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux on macOS/Linux"]
+async fn control_mode_keeps_history_on_viewer() {
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig {
+        data_dir: temp_dir("control-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("control-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let (mut input, mut output) = remote.attach_terminal_control(None, 80, 20).await.unwrap();
+    let id = output.session_id.clone();
+    read_until(&mut input, &mut output, "p2pcli-control").await;
+    input.write("seq 1 300 | sed 's/^/line-/'; echo 中文-ok\r".as_bytes()).await.unwrap();
+    read_until(&mut input, &mut output, "中文-ok").await;
+    input.resize(100, 30).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    input.write(b"echo cols-$(tput cols)\r").await.unwrap();
+    read_until(&mut input, &mut output, "cols-100").await;
+    input.close();
+    drop((input, output));
+
+    // 重连：开头补历史，第 150 行早就滚出屏幕了，也要在
+    let (mut input, mut output) = remote.attach_terminal_control(Some(id.clone()), 100, 30).await.unwrap();
+    read_until(&mut input, &mut output, "line-150").await;
+    input.write(b"printf '\\033[?1049h\\033[HALT-''SCREEN'; sleep 60\r").await.unwrap();
+    read_until(&mut input, &mut output, "ALT-SCREEN").await;
+    input.close();
+    drop((input, output));
+
+    let (mut input, mut output) = remote.attach_terminal_control(Some(id.clone()), 100, 30).await.unwrap();
+    let text = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut text = String::new();
+        while let Some(TermEvent::Output(data)) = output.next().await.unwrap() {
+            text.push_str(&String::from_utf8_lossy(&data));
+            if text.contains("ALT-SCREEN") { break; }
+        }
+        text
+    }).await.expect("重连后要补画备用屏幕");
+    let switch = text.find("\x1b[?1049h").expect("要切到备用屏幕");
+    assert!(text[..switch].contains("line-300"), "切过去之前先还原底下的普通屏幕");
+    assert!(text[switch..].contains("ALT-SCREEN"));
+    input.write(b"\x03").await.unwrap();
+
+    remote.end_terminal(id).await.unwrap();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
+/// 控制模式下连接方收得慢：tmux 暂停这个窗格，被连方跳过积压的输出、重画最新画面，
+/// 收到的字节远少于程序输出的，之后照常能用。要真的起 tmux，默认不跑
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires tmux on macOS/Linux"]
+async fn control_mode_skips_backlog_for_slow_viewer() {
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig {
+        data_dir: temp_dir("slow-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("slow-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap();
+    let (mut input, mut output) = remote.attach_terminal_control(None, 80, 20).await.unwrap();
+    let id = output.session_id.clone();
+    read_until(&mut input, &mut output, "p2pcli-control").await;
+    // 约 45 MB；连接方先 6 秒不读
+    input.write(b"yes p2pcli-flood-line | head -n 3000000; echo flood-''done\r").await.unwrap();
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let total = tokio::time::timeout(Duration::from_secs(60), async {
+        let (mut total, mut tail) = (0usize, String::new());
+        while let Some(TermEvent::Output(data)) = output.next().await.unwrap() {
+            total += data.len();
+            tail.push_str(&String::from_utf8_lossy(&data));
+            if tail.contains("flood-done") { return total; }
+            if tail.len() > 4096 { tail = tail[tail.len() - 64..].to_string(); }
+        }
+        panic!("流提前结束");
+    }).await.expect("要能看到结束标记");
+    eprintln!("收到 {total} 字节");
+    assert!(total < 20_000_000, "收得慢时应该跳过积压，实际收了 {total} 字节");
+    input.write(b"echo after-''flood\r").await.unwrap();
+    read_until(&mut input, &mut output, "after-flood").await;
+    remote.end_terminal(id).await.unwrap();
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
 /// Explicit opt-in: this starts a real detached tmux/psmux server on the test machine.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires tmux on macOS/Linux or psmux on Windows"]
