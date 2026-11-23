@@ -1434,6 +1434,8 @@ async fn save_settings(
     let _gate = state.config_gate.lock().await;
     let clean = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let agent_commands = p2pcli_core::launchers::normalize_commands(agent_commands.unwrap_or_default()).map_err(|e| format!("{e:#}"))?;
+    // 先拷一份再放锁：同一条语句里连着 lock() 会等自己手里的锁，卡死
+    let cur = state.settings.lock().unwrap().clone();
     let s = Settings {
         proxy: clean(proxy),
         server: clean(server),
@@ -1441,9 +1443,9 @@ async fn save_settings(
         relay: clean(relay),
         lan_hidden: !lan_visible.unwrap_or(true),
         agent_commands,
-        ai_hint_off: state.settings.lock().unwrap().ai_hint_off,
-        screen_off: state.settings.lock().unwrap().screen_off,
-        screen_view_only: state.settings.lock().unwrap().screen_view_only,
+        ai_hint_off: cur.ai_hint_off,
+        screen_off: cur.screen_off,
+        screen_view_only: cur.screen_view_only,
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
