@@ -9,6 +9,7 @@ import android.os.Build
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
@@ -38,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -69,16 +71,58 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.p2pcli_mobile.parsePairLink
 
-private enum class Phase { SCANNING, FOUND, WRONG }
+private enum class Phase { SCANNING, FOUND, WRONG, NO_CODE }
+
+private fun qrScanner() = BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
 
 /**
  * 扫码页：扫电脑上 P2PCLI 标题栏手机图标里的二维码，里面有设备码和配对密码，扫完直接连。
  * 相机画面铺满，不另画取景框、扫描线；下面一行字提示状态：认出来变绿、震一下，扫到别的码变红，接着扫。
+ * 二维码在手机自己屏幕上（远程桌面、截图）拍不到，底下可以从相册选图认；没有相机权限、相机打不开时也能用。
  * 系统返回键、左上角的关闭都只关这一页。
  */
 @Composable
 fun ScanScreen(core: Core) {
     val context = LocalContext.current
+    val view = LocalView.current
+    val scope = rememberCoroutineScope()
+    val phase = remember { mutableStateOf(Phase.SCANNING) }
+
+    // 认到一个或几个码（相机一帧、或者一张图片）：有 P2PCLI 的就连，没有就提示一下接着扫
+    val onCodes by rememberUpdatedState { codes: List<String> ->
+        val pair = if (phase.value == Phase.FOUND) null else codes.firstNotNullOfOrNull { parsePairLink(it) }
+        when {
+            phase.value == Phase.FOUND -> {}
+            pair != null -> {
+                phase.value = Phase.FOUND
+                view.performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.LONG_PRESS)
+                scope.launch { delay(550); core.scanned(pair) }
+            }
+            else -> {
+                val now = if (codes.isEmpty()) Phase.NO_CODE else Phase.WRONG
+                phase.value = now
+                view.performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.LONG_PRESS)
+                scope.launch { delay(1600); if (phase.value == now) phase.value = Phase.SCANNING }
+            }
+        }
+    }
+
+    // 从相册选图：系统的照片选择器，不用读相册权限；用同一个 ML Kit 认静态图
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null || phase.value == Phase.FOUND) return@rememberLauncherForActivityResult
+        val image = try {
+            InputImage.fromFilePath(context, uri)
+        } catch (e: Exception) {
+            onCodes(emptyList())
+            return@rememberLauncherForActivityResult
+        }
+        val scanner = qrScanner()
+        scanner.process(image)
+            .addOnSuccessListener { codes -> onCodes(codes.mapNotNull { it.rawValue }) }
+            .addOnFailureListener { onCodes(emptyList()) }
+            .addOnCompleteListener { scanner.close() }
+    }
+
     var granted by remember { mutableStateOf(hasCamera(context)) }
     var asked by remember { mutableStateOf(false) }
     val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -89,9 +133,10 @@ fun ScanScreen(core: Core) {
     // 从系统设置里开了权限回来
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { granted = hasCamera(context) }
 
+    var cameraError by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         when {
-            granted -> Scanner(core)
+            granted -> Scanner(phase, onCameraError = { cameraError = it }) { onCodes(listOf(it)) }
             asked -> Message(t("没有相机权限"), t("在系统设置里允许 P2PCLI 使用相机，或者输入设备码连接。")) {
                 Pill(t("去设置"), primary = true) {
                     context.startActivity(
@@ -101,6 +146,9 @@ fun ScanScreen(core: Core) {
                 }
             }
         }
+        cameraError?.takeIf { granted }?.let { Message(t("打不开相机"), it) {} }
+        // 没有相机画面时，“对准二维码”这句不用说；相册认出结果照样提示
+        if (granted && cameraError == null || phase.value != Phase.SCANNING) Hint(phase.value)
         // 顶上：关闭、标题
         Row(
             Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp),
@@ -114,8 +162,14 @@ fun ScanScreen(core: Core) {
                 modifier = Modifier.weight(1f))
             Spacer(Modifier.size(44.dp))
         }
-        // 底下：改成手输设备码
-        Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 28.dp)) {
+        // 底下：从相册选图、改成手输设备码
+        Row(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 28.dp, start = 16.dp, end = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Pill(t("从相册选择"), icon = Lucide.Image) {
+                pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            }
             Pill(t("输入设备码"), icon = Lucide.KeyRound) { core.scanToManual() }
         }
     }
@@ -126,44 +180,26 @@ private fun hasCamera(context: Context) =
 
 @OptIn(ExperimentalGetImage::class)
 @Composable
-private fun Scanner(core: Core) {
+private fun Scanner(phase: MutableState<Phase>, onCameraError: (String) -> Unit, onCode: (String) -> Unit) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
-    val view = LocalView.current
-    val scope = rememberCoroutineScope()
-    var phase by remember { mutableStateOf(Phase.SCANNING) }
-    var cameraError by remember { mutableStateOf<String?>(null) }
     val preview = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
-
-    // 认到一个码：是 P2PCLI 的就连，不是就提示一下接着扫
-    val onCode by rememberUpdatedState { raw: String ->
-        if (phase == Phase.SCANNING) {
-            val pair = parsePairLink(raw)
-            if (pair != null) {
-                phase = Phase.FOUND
-                view.performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.LONG_PRESS)
-                scope.launch { delay(550); core.scanned(pair) }
-            } else {
-                phase = Phase.WRONG
-                view.performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.LONG_PRESS)
-                scope.launch { delay(1600); if (phase == Phase.WRONG) phase = Phase.SCANNING }
-            }
-        }
-    }
+    val code by rememberUpdatedState(onCode)
+    val error by rememberUpdatedState(onCameraError)
 
     DisposableEffect(owner) {
-        val scanner = BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
+        val scanner = qrScanner()
         val main = ContextCompat.getMainExecutor(context)
         val previewUse = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
         val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
         analysis.setAnalyzer(main) { proxy ->
             val image = proxy.image
-            if (image == null || phase != Phase.SCANNING) {
+            if (image == null || phase.value != Phase.SCANNING) {
                 proxy.close()
                 return@setAnalyzer
             }
             scanner.process(InputImage.fromMediaImage(image, proxy.imageInfo.rotationDegrees))
-                .addOnSuccessListener { codes -> codes.firstNotNullOfOrNull { it.rawValue }?.let { onCode(it) } }
+                .addOnSuccessListener { codes -> codes.firstNotNullOfOrNull { it.rawValue }?.let { code(it) } }
                 .addOnCompleteListener { proxy.close() }
         }
         var provider: ProcessCameraProvider? = null
@@ -175,7 +211,7 @@ private fun Scanner(core: Core) {
                     it.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, previewUse, analysis)
                 }
             } catch (e: Exception) {
-                cameraError = e.message ?: e.toString()
+                error(e.message ?: e.toString())
             }
         }, main)
         onDispose {
@@ -186,14 +222,9 @@ private fun Scanner(core: Core) {
     }
 
     AndroidView(factory = { preview }, modifier = Modifier.fillMaxSize())
-    cameraError?.let {
-        Message(t("打不开相机"), it) {}
-        return
-    }
-    Hint(phase)
 }
 
-/** 相机画面上的一行提示：放在“输入设备码”上面 */
+/** 相机画面上的一行提示：放在底下按钮上面 */
 @Composable
 private fun Hint(phase: Phase) {
     Box(Modifier.fillMaxSize().navigationBarsPadding().padding(bottom = 96.dp), contentAlignment = Alignment.BottomCenter) {
@@ -201,11 +232,12 @@ private fun Hint(phase: Phase) {
             when (phase) {
                 Phase.FOUND -> t("已识别，正在连接…")
                 Phase.WRONG -> t("这不是 P2PCLI 的连接二维码")
+                Phase.NO_CODE -> t("这张图片里没找到二维码")
                 Phase.SCANNING -> t("对准电脑上 P2PCLI 显示的二维码")
             },
             color = when (phase) {
                 Phase.FOUND -> Color(0xFF86EFAC)
-                Phase.WRONG -> Color(0xFFFCA5A5)
+                Phase.WRONG, Phase.NO_CODE -> Color(0xFFFCA5A5)
                 Phase.SCANNING -> Color.White
             },
             fontSize = 14.sp,
@@ -236,7 +268,7 @@ private fun Message(title: String, text: String, action: @Composable () -> Unit)
 private fun Pill(text: String, primary: Boolean = false, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, onClick: () -> Unit) {
     Row(
         Modifier.height(48.dp).clip(RoundedCornerShape(24.dp)).background(if (primary) Hero.Accent else Color.Black.copy(alpha = 0.45f))
-            .clickable(onClick = onClick).padding(horizontal = 22.dp),
+            .clickable(onClick = onClick).padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
