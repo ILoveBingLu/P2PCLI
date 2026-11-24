@@ -54,6 +54,25 @@ struct DeviceScreen: View {
                     .listRowBackground(Color.clear)
                 }
             } else {
+                if core.supportsScreen(endpointId) {
+                    Section {
+                        Button { core.openScreen(endpointId) } label: {
+                            HStack(spacing: 12) {
+                                Tile { Icon("monitor").foregroundStyle(Hero.foreground) }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(t("远程控制")).font(.body.weight(.medium))
+                                    Text(t("看对方的屏幕，用手指操作鼠标和键盘")).font(.caption).foregroundStyle(Hero.muted)
+                                }
+                                Spacer(minLength: 0)
+                                Icon("chevron-right", size: 16).foregroundStyle(Hero.muted.opacity(0.7))
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Hero.surface)
+                        .accessibilityIdentifier("remote-control")
+                    }
+                }
                 Section {
                     if let err = state?.error {
                         Text(t("读不到会话列表：{{error}}", ["error": tr(err)])).font(.footnote).foregroundStyle(Hero.danger)

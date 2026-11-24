@@ -189,9 +189,33 @@ impl Injector {
                     self.key(vk, down);
                 }
             }
+            InputEvent::Text { ref text } => self.text(text),
             InputEvent::ReleaseAll => self.release_all(),
         }
         Ok(())
+    }
+
+    /// 直接打一段文字：键盘事件带上 Unicode 字符串，程序收到的就是这些字，不经过键盘布局和输入法。
+    /// 一个事件最多带 20 个 UTF-16 单元，长的分几段（不把代理对拆开）。按着的修饰键不带上，免得变成快捷键
+    fn text(&mut self, text: &str) {
+        const MAX: usize = 20;
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let mut start = 0;
+        while start < units.len() {
+            let mut end = (start + MAX).min(units.len());
+            if end < units.len() && (0xD800..0xDC00).contains(&units[end - 1]) {
+                end -= 1;
+            }
+            let chunk = &units[start..end];
+            for down in [true, false] {
+                if let Some(ev) = CGEvent::new_keyboard_event(self.source.as_deref(), 0, down) {
+                    CGEvent::set_flags(Some(&ev), CGEventFlags(0));
+                    unsafe { CGEvent::keyboard_set_unicode_string(Some(&ev), chunk.len() as _, chunk.as_ptr()) };
+                    CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
+                }
+            }
+            start = end;
+        }
     }
 
     fn release_all(&mut self) {

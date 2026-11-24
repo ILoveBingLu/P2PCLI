@@ -28,6 +28,7 @@ LUCIDE = [
     "send-horizontal", "keyboard", "triangle-alert", "square-arrow-out-up-right", "key-round", "arrow-up",
     "arrow-down", "arrow-left", "arrow-right", "bot", "plug", "settings", "copy", "check", "info",
     "clipboard-paste", "chevron-right", "image", "undo-2", "folder-open", "languages", "circle-check", "lock-keyhole", "flashlight", "folder", "house", "corner-down-left", "play", "circle-pause", "repeat-2", "pencil-line", "keyboard-off",
+    "monitor", "mouse-pointer-2", "pointer", "delete",
 ]
 PLATFORMS = ["apple", "windows", "linux", "android", "harmonyos"]
 

@@ -191,6 +191,7 @@ async fn view_and_control_over_direct_link() {
     assert_eq!(started.display, "1");
     assert_eq!(started.displays.len(), 2);
     assert!(started.control);
+    assert!(started.text_input);
     assert_eq!(delegate.screen_requests.lock().unwrap().len(), 1);
 
     // 先来解码配置，再来关键帧，然后是普通帧；每帧都回确认
@@ -222,6 +223,7 @@ async fn view_and_control_over_direct_link() {
     // 键鼠：发到当前屏幕
     input.send(&ViewerMsg::Input { ev: InputEvent::Key { code: "KeyA".into(), down: true } }).await.unwrap();
     input.send(&ViewerMsg::Input { ev: InputEvent::Move { x: 0.5, y: 0.25 } }).await.unwrap();
+    input.send(&ViewerMsg::Input { ev: InputEvent::Text { text: "中文".into() } }).await.unwrap();
     // 换屏：重新从关键帧开始
     let keys_before = fake.keyframes.load(Ordering::Relaxed);
     input.send(&ViewerMsg::Switch { display: "2".into() }).await.unwrap();
@@ -251,6 +253,7 @@ async fn view_and_control_over_direct_link() {
         let inputs = fake.inputs.lock().unwrap();
         assert!(inputs.iter().any(|(d, e)| d == "1" && matches!(e, InputEvent::Key { code, down: true } if code == "KeyA")));
         assert!(inputs.iter().any(|(d, e)| d == "1" && matches!(e, InputEvent::Move { .. })));
+        assert!(inputs.iter().any(|(d, e)| d == "1" && matches!(e, InputEvent::Text { text } if text == "中文")));
         assert!(inputs.iter().any(|(d, e)| d == "2" && matches!(e, InputEvent::Button { .. })));
     }
 

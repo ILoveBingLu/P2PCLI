@@ -7,7 +7,7 @@ use anyhow::Result;
 use p2pcli_core::screen::{InputEvent, MouseButton};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-    KEYEVENTF_SCANCODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
@@ -54,6 +54,17 @@ fn key(scan: u16, extended: bool, down: bool) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+    }
+}
+
+fn unicode(unit: u16, down: bool) -> INPUT {
+    let mut flags: KEYBD_EVENT_FLAGS = KEYEVENTF_UNICODE;
+    if !down {
+        flags |= KEYEVENTF_KEYUP;
+    }
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: unit, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
     }
 }
 
@@ -140,6 +151,16 @@ impl Injector {
                         self.keys.remove(&(scan, extended));
                     }
                     send(&[key(scan, extended, down)]);
+                }
+            }
+            InputEvent::Text { ref text } => {
+                // 直接打一段文字：每个 UTF-16 单元按下、松开各一个事件，程序收到的就是这些字，不经过键盘布局和输入法
+                let inputs: Vec<INPUT> = text
+                    .encode_utf16()
+                    .flat_map(|u| [unicode(u, true), unicode(u, false)])
+                    .collect();
+                for chunk in inputs.chunks(64) {
+                    send(chunk);
                 }
             }
             InputEvent::ReleaseAll => {

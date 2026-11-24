@@ -68,6 +68,7 @@ struct RootView: View {
         .sheet(item: $core.prompt) { p in ConnectSheet(prompt: p) }
         .sheet(isPresented: $core.showSettings) { SettingsSheet() }
         .fullScreenCover(isPresented: $core.scanning) { ScanScreen() }
+        .fullScreenCover(item: $core.screen) { s in RemoteScreenView(screen: s) }
         .alert(core.fileRequest.map { t("{{name}} 想发文件给你", ["name": $0.name]) } ?? "",
                isPresented: Binding(get: { core.fileRequest != nil }, set: { if !$0 { core.respondFiles(false) } }),
                presenting: core.fileRequest) { _ in

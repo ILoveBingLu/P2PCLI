@@ -351,6 +351,9 @@ pub enum InputEvent {
     /// 滚轮，像素；dy 正数往下
     Wheel { dx: f64, dy: f64, x: f64, y: f64 },
     Key { code: String, down: bool },
+    /// 直接输入一段文字（手机输入法打的中文、表情这些），不经过对方的键盘布局和输入法。
+    /// 被连方在 [`ScreenStarted::text_input`] 里说能收才发：老版本认不得会把整条输入流断掉
+    Text { text: String },
     /// 窗口失焦时把按着的键和鼠标都松开，免得对面一直按着 Shift
     ReleaseAll,
 }
@@ -400,6 +403,9 @@ pub struct ScreenStarted {
     /// 不能操作的原因
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_note: Option<String>,
+    /// 能收 [`InputEvent::Text`]（直接输入文字）。老版本不带，就是不能
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub text_input: bool,
 }
 
 /// 观看方发给被连方
@@ -912,7 +918,7 @@ where
     crate::proto::write_msg(
         &mut send,
         &crate::proto::Msg::ScreenStarted {
-            started: ScreenStarted { displays: displays.clone(), display: display.clone(), control, control_note },
+            started: ScreenStarted { displays: displays.clone(), display: display.clone(), control, control_note, text_input: control },
         },
     )
     .await?;

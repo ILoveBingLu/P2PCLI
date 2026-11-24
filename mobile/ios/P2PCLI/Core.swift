@@ -78,6 +78,8 @@ final class Core {
     var connectingName: String?
     var prompt: ConnectPrompt?
     var scanning = false
+    /// 正在看的远程画面（全屏盖在最上面）
+    var screen: RemoteScreen?
     var showSettings = false
     var fileRequest: FileRequestView?
     var settings: SettingsView?
@@ -290,10 +292,35 @@ final class Core {
         guard let c = conns[endpointId] else { return }
         p2p?.disconnect(connId: c.connId)
         conns[endpointId] = nil
+        if screen?.endpointId == endpointId { closeScreen() }
         for x in terms where x.endpointId == endpointId { x.close() }
         terms.removeAll { $0.endpointId == endpointId }
         selection = nil
         path = []
+    }
+
+    // MARK: 远程画面
+
+    /// 对方能不能远程控制（新版本的 macOS、Windows）
+    func supportsScreen(_ endpointId: String) -> Bool {
+        guard let p = p2p, let c = conns[endpointId] else { return false }
+        return p.supportsScreen(connId: c.connId)
+    }
+
+    func openScreen(_ endpointId: String) {
+        guard let p = p2p, let c = conns[endpointId], screen == nil else { return }
+        let connId = c.connId
+        let s = RemoteScreen(endpointId: endpointId, connId: connId, name: deviceName(endpointId),
+                             platform: device(endpointId)?.platform ?? c.platform) { quality, codecs, listener in
+            try await p.openScreen(connId: connId, quality: quality, control: true, codecs: codecs, listener: listener)
+        }
+        screen = s
+        s.open()
+    }
+
+    func closeScreen() {
+        screen?.stop()
+        screen = nil
     }
 
     // MARK: 会话
@@ -510,6 +537,7 @@ final class Core {
 
     func becameActive() {
         endBackground()
+        screen?.resume()
         Task { await refreshOverview() }
     }
 

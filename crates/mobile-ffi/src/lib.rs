@@ -8,6 +8,7 @@
 //! 不占界面线程。回调（[`AppListener`]、[`TerminalListener`]）也从 Rust 的线程调过来，界面要自己切回主线程。
 
 mod pair;
+mod screen;
 mod settings;
 mod types;
 
@@ -26,6 +27,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 
 pub use pair::{PairInfo, parse_pair_link};
+pub use screen::*;
 pub use settings::{MobileSettings, ServerPreset, SettingsView};
 pub use types::*;
 
@@ -443,6 +445,26 @@ impl P2p {
             Ok(Arc::new(Terminal { session_id, tx }))
         })
         .await
+    }
+
+    /// 对方能不能看远程画面（对方是新版本的 macOS 或 Windows）
+    pub fn supports_screen(&self, conn_id: u64) -> bool {
+        self.remote(conn_id).map(|r| r.supports_screen()).unwrap_or(false)
+    }
+
+    /// 开始看对方的画面：对方要点同意，可能等比较久。codecs 填本机能硬件解码的格式（有 H.265 就带上）。
+    /// 连接走中继时直接报错，错误以 “relay:” 开头
+    pub async fn open_screen(
+        &self,
+        conn_id: u64,
+        quality: ScreenQuality,
+        control: bool,
+        codecs: Vec<ScreenCodec>,
+        listener: Arc<dyn ScreenListener>,
+    ) -> Result<Arc<ScreenView>, P2pError> {
+        let remote = self.remote(conn_id)?;
+        let handle = self.rt.handle().clone();
+        self.run(screen::open(remote, handle, quality, control, codecs, listener)).await
     }
 
     /// 在后台给一台设备发文件，返回传输编号；进度从 AppListener.on_transfers_changed 来。
