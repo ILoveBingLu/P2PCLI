@@ -328,7 +328,12 @@ impl Node {
                 addr,
                 ..
             } => (endpoint_id, online, addr),
-            RdvResponse::NotFound => return Err(anyhow!("没有这个设备码").into()),
+            RdvResponse::NotFound => {
+                return Err(anyhow!(
+                    "没有这个设备码。两边要选同一台牵线服务器，设备码在别的牵线服务器上查不到"
+                )
+                .into());
+            }
             RdvResponse::Error { message } => return Err(anyhow!("{message}").into()),
             other => return Err(anyhow!("牵线服务器回了意外的结果：{other:?}").into()),
         };

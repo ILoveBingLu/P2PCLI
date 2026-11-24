@@ -151,6 +151,9 @@ private fun ColumnScope.SettingsForm(core: Core, v: SettingsView, saving: Boolea
                 }
             }
         }
+        item {
+            Text(t("两台设备要选同一台牵线服务器才能用设备码互相找到：各服务器的登记不互通，换服务器后本机的设备码也会变。"), color = Hero.Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 8.dp))
+        }
 
         item { SectionHeader(t("中继服务器")) }
         item {

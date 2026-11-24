@@ -1272,5 +1272,6 @@
   "让别的设备能看、能操作这台 Mac": "Let other devices view and control this Mac",
   "远程控制要用 macOS 的两项权限。点“开启”后系统会弹出提示，点里面的“打开系统设置”，把 P2PCLI 的开关打开就行。不用远程控制可以跳过，以后在 设置 → 远程控制 里也能开。": "Remote control needs two macOS permissions. Click Turn on, then click Open System Settings in the prompt and turn on P2PCLI. If you do not use remote control, skip this; you can turn them on later under Settings → Remote control.",
   "以后再说": "Not now",
-  "显示工具栏": "Show toolbar"
+  "显示工具栏": "Show toolbar",
+  "两台设备要选同一台牵线服务器才能用设备码互相找到：各服务器的登记不互通，换服务器后本机的设备码也会变。": "Both devices must use the same rendezvous server to find each other by device code. Servers do not share registrations, and this device's code changes when you switch servers."
 }

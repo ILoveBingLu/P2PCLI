@@ -140,6 +140,10 @@ export struct SettingsPage {
           // 卡片：标题在外面，组和组之间靠标题上方的留白隔开（和安卓、iOS 一样）
           .divider({ strokeWidth: 0.5, color: '#28282C', startMargin: 14, endMargin: 12 })
           .backgroundColor(Hero.surface).borderRadius(16).clip(true)
+          ListItem() {
+            Text(t('两台设备要选同一台牵线服务器才能用设备码互相找到：各服务器的登记不互通，换服务器后本机的设备码也会变。'))
+              .fontSize(12).fontColor(Hero.muted).padding({ left: 4, right: 4, top: 8 })
+          }
 
           ListItem() {
             sectionHeader(t('中继服务器'))

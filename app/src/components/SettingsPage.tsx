@@ -308,6 +308,9 @@ export function SettingsPage({
                       isDisabled={saving}
                     >
                       <FieldLabel>{t("牵线服务器")}</FieldLabel>
+                      <Description className="text-xs text-muted-foreground">
+                        {t("两台设备要选同一台牵线服务器才能用设备码互相找到：各服务器的登记不互通，换服务器后本机的设备码也会变。")}
+                      </Description>
                       {settings.server_presets.map((p) => (
                         <Radio key={p.address} value={p.address}>
                           <Radio.Content className="gap-3 text-sm">

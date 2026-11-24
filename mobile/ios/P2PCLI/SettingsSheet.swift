@@ -88,7 +88,7 @@ private struct SettingsForm: View {
                 Text(t("对方电脑上看到的名字，留空用手机型号。"))
             }
 
-            Section(t("牵线服务器")) {
+            Section {
                 ForEach(v.serverPresets, id: \.address) { p in
                     ChoiceRow(selected: !custom && server == p.address, title: p.label,
                               badge: p.address == v.defaultServer ? t("默认") : nil, lines: [p.note, p.address]) {
@@ -108,6 +108,10 @@ private struct SettingsForm: View {
                         .font(.system(.body, design: .monospaced))
                         .onChange(of: customServer) { error = nil }
                 }
+            } header: {
+                Text(t("牵线服务器"))
+            } footer: {
+                Text(t("两台设备要选同一台牵线服务器才能用设备码互相找到：各服务器的登记不互通，换服务器后本机的设备码也会变。"))
             }
 
             Section {
