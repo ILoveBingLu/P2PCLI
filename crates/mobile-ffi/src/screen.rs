@@ -349,7 +349,7 @@ pub(crate) async fn open(
     listener: Arc<dyn ScreenListener>,
 ) -> Result<Arc<ScreenView>, P2pError> {
     if !remote.supports_screen() {
-        return Err(P2pError::failed("对方的 P2PCLI 不支持远程画面：要对方是 macOS 或 Windows，并更新到新版本"));
+        return Err(P2pError::failed("对方的 P2PCLI 版本较旧或系统不支持远程画面，请更新对方的 P2PCLI"));
     }
     let open = ScreenOpen {
         display: None,

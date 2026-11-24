@@ -63,6 +63,7 @@ fun Root(core: Core) {
     val stack by core.stack.collectAsStateWithLifecycle()
     val prompt by core.prompt.collectAsStateWithLifecycle()
     val fileRequest by core.fileRequest.collectAsStateWithLifecycle()
+    val remoteScreen by core.screen.collectAsStateWithLifecycle()
     val toasts = remember { SnackbarHostState() }
     LaunchedEffect(core) { core.notices.collect { toasts.showSnackbar(it) } }
 
@@ -109,6 +110,7 @@ fun Root(core: Core) {
                     Screens(core, pages, detail = false)
                 }
                 if (stack.last() == Screen.Scan) ScanScreen(core)
+                remoteScreen?.let { RemoteScreenPage(core, it) }
             }
         }
 

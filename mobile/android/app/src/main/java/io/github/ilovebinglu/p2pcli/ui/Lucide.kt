@@ -68,4 +68,10 @@ object Lucide {
     val CornerDownLeft: ImageVector by lazy { icon("corner-down-left", "M20 4v7a4 4 0 0 1-4 4H4", "m9 10-5 5 5 5") }
     val Play: ImageVector by lazy { icon("play", "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z") }
     val Image: ImageVector by lazy { icon("image", "M5.0,3.0h14.0a2.0,2.0 0 0 1 2.0,2.0v14.0a2.0,2.0 0 0 1 -2.0,2.0h-14.0a2.0,2.0 0 0 1 -2.0,-2.0v-14.0a2.0,2.0 0 0 1 2.0,-2.0Z", "M7.0,9.0a2.0,2.0 0 1,0 4.0,0a2.0,2.0 0 1,0 -4.0,0", "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21") }
+    val Monitor: ImageVector by lazy { icon("monitor", "M4.0,3.0h16.0a2.0,2.0 0 0 1 2.0,2.0v10.0a2.0,2.0 0 0 1 -2.0,2.0h-16.0a2.0,2.0 0 0 1 -2.0,-2.0v-10.0a2.0,2.0 0 0 1 2.0,-2.0Z", "M8,21L16,21", "M12,17L12,21") }
+    val MousePointer2: ImageVector by lazy { icon("mouse-pointer-2", "M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z") }
+    val Pointer: ImageVector by lazy { icon("pointer", "M22 14a8 8 0 0 1-8 8", "M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2", "M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1", "M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10", "M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15") }
+    val Delete: ImageVector by lazy { icon("delete", "M10 5a2 2 0 0 0-1.344.519l-6.328 5.74a1 1 0 0 0 0 1.481l6.328 5.741A2 2 0 0 0 10 19h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z", "m12 9 6 6", "m18 9-6 6") }
+    val KeyboardOff: ImageVector by lazy { icon("keyboard-off", "M 20 4 A2 2 0 0 1 22 6", "M 22 6 L 22 16.41", "M 7 16 L 16 16", "M 9.69 4 L 20 4", "M14 8h.01", "M18 8h.01", "m2 2 20 20", "M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2", "M6 8h.01", "M8 12h.01") }
+    val CirclePause: ImageVector by lazy { icon("circle-pause", "M2.0,12.0a10.0,10.0 0 1,0 20.0,0a10.0,10.0 0 1,0 -20.0,0", "M10,15L10,9", "M14,15L14,9") }
 }

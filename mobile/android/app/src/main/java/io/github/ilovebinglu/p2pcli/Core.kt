@@ -8,6 +8,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.provider.OpenableColumns
 import android.provider.Settings
+import io.github.ilovebinglu.p2pcli.screen.RemoteScreen
 import io.github.ilovebinglu.p2pcli.terminal.RemoteTerminal
 import io.github.ilovebinglu.p2pcli.terminal.errorText
 import kotlinx.coroutines.CoroutineScope
@@ -87,6 +88,8 @@ class Core(private val app: Application) : AppListener {
     /** 各连接上装了的 AI：连接编号 → 检测结果（被控端还有五分钟缓存） */
     val agents = MutableStateFlow<Map<ULong, AgentsState>>(emptyMap())
     val terms = MutableStateFlow<List<RemoteTerminal>>(emptyList())
+    /** 正在看的远程画面（全屏盖在最上面） */
+    val screen = MutableStateFlow<RemoteScreen?>(null)
     val stack = MutableStateFlow<List<Screen>>(listOf(Screen.Home))
     /** 正在连哪台设备（公钥）；手输设备码时是 "new" */
     val connecting = MutableStateFlow<String?>(null)
@@ -294,9 +297,38 @@ class Core(private val app: Application) : AppListener {
         val c = conns.value[endpointId] ?: return
         p2p?.disconnect(c.connId)
         conns.update { it - endpointId }
+        if (screen.value?.endpointId == endpointId) closeScreen()
         terms.value.filter { it.endpointId == endpointId }.forEach { it.close() }
         terms.update { all -> all.filter { it.endpointId != endpointId } }
         home()
+    }
+
+    // ---- 远程画面 ----
+
+    /** 对方能不能远程控制（新版本的 macOS、Windows） */
+    fun supportsScreen(endpointId: String): Boolean {
+        val c = conns.value[endpointId] ?: return false
+        return p2p?.supportsScreen(c.connId) ?: false
+    }
+
+    fun openScreen(endpointId: String) {
+        val p = p2p ?: return
+        val c = conns.value[endpointId] ?: return
+        if (screen.value != null) return
+        val device = overview.value?.devices?.firstOrNull { it.endpointId == endpointId }
+        val s = RemoteScreen(
+            app, endpointId, c.connId, device?.remark ?: device?.name ?: c.name, device?.platform ?: c.platform, scope,
+            opener = { quality, codecs, listener -> p.openScreen(c.connId, quality, true, codecs, listener) },
+            notify = { notices.tryEmit(it) },
+        )
+        screen.value = s
+        s.open()
+    }
+
+    fun closeScreen() {
+        val s = screen.value ?: return
+        screen.value = null
+        s.dispose()
     }
 
     // ---- 会话 ----

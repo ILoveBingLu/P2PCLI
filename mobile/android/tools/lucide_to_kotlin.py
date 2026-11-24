@@ -14,6 +14,8 @@ NAMES = {
     "Settings": "settings", "Copy": "copy", "Check": "check", "Info": "info",
     "ArrowLeft": "arrow-left", "ArrowRight": "arrow-right", "ArrowBigUp": "arrow-big-up", "ClipboardPaste": "clipboard-paste", "PanelLeftClose": "panel-left-close", "PanelLeftOpen": "panel-left-open", "MousePointerClick": "mouse-pointer-click",
     "Folder": "folder", "FolderOpen": "folder-open", "House": "house", "CornerDownLeft": "corner-down-left", "Play": "play", "Image": "image",
+    "Monitor": "monitor", "MousePointer2": "mouse-pointer-2", "Pointer": "pointer", "Delete": "delete", "KeyboardOff": "keyboard-off",
+    "CirclePause": "circle-pause",
 }
 OUT = "mobile/android/app/src/main/java/io/github/ilovebinglu/p2pcli/ui/Lucide.kt"
 

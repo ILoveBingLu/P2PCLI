@@ -95,6 +95,19 @@ fun DeviceScreen(core: Core, endpointId: String) {
                 }
                 return@LazyColumn
             }
+            if (core.supportsScreen(endpointId)) {
+                item {
+                    Spacer(Modifier.height(18.dp))
+                    Group {
+                        HeroRow(
+                            onClick = { core.openScreen(endpointId) },
+                            leading = { Tile { Icon(Lucide.Monitor, null, Modifier.size(20.dp), tint = Hero.Foreground) } },
+                            title = { RowTitle(t("远程控制")) },
+                            subtitle = { SubText(t("看对方的屏幕，用手指操作鼠标和键盘"), size = 12.5.sp, maxLines = 2) },
+                        )
+                    }
+                }
+            }
             item {
                 SectionHeader(t("会话")) {
                     HeroIconButton(Lucide.RefreshCw, t("刷新会话"), { core.refreshSessions(endpointId) }, tint = Hero.Muted, size = 18.dp)
