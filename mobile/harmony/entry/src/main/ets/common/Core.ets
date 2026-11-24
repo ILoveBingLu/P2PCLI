@@ -12,6 +12,7 @@ import {
   Overview, PairInfo, parseError, SessionView, SettingsView, TransferView
 } from './Model';
 import { t, tr } from './I18n';
+import { RemoteScreenModel } from './RemoteScreen';
 
 /** 一台设备的会话列表；list 为空是还没读到 */
 export class SessionsState {
@@ -229,6 +230,8 @@ export class Core {
   @Trace fileRequest: FileRequestView | null = null;
   @Trace settings: SettingsView | null = null;
   @Trace savingSettings: boolean = false;
+  /** 正在看的远程画面（全屏盖在最上面） */
+  @Trace screen: RemoteScreenModel | null = null;
   private termSeq: number = 1;
 
   // ---- 启动 ----
@@ -453,9 +456,44 @@ export class Core {
     const next = new Map<string, Connected>(this.conns);
     next.delete(endpointId);
     this.conns = next;
+    if (this.screen?.endpointId === endpointId) {
+      this.closeScreen();
+    }
     this.terms.filter((x: TermModel) => x.endpointId === endpointId).forEach((x: TermModel) => x.close());
     this.terms = this.terms.filter((x: TermModel) => x.endpointId !== endpointId);
     this.stack.clear();
+  }
+
+  // ---- 远程画面 ----
+
+  /** 对方能不能远程控制（新版本的 macOS、Windows） */
+  supportsScreen(endpointId: string): boolean {
+    const c = this.conns.get(endpointId);
+    if (this.p2p === undefined || c === undefined) {
+      return false;
+    }
+    return this.p2p.supportsScreen(c.conn_id);
+  }
+
+  openScreen(endpointId: string): void {
+    const p = this.p2p;
+    const c = this.conns.get(endpointId);
+    if (p === undefined || c === undefined || this.screen !== null) {
+      return;
+    }
+    const s = new RemoteScreenModel(p, endpointId, c.conn_id, this.deviceName(endpointId),
+      this.device(endpointId)?.platform ?? c.platform, (text: string) => this.notify(text));
+    this.screen = s;
+    s.open();
+  }
+
+  closeScreen(): void {
+    const s = this.screen;
+    if (s === null) {
+      return;
+    }
+    this.screen = null;
+    s.stop();
   }
 
   // ---- 会话 ----

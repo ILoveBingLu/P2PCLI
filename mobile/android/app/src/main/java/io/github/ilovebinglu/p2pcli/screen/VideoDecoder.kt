@@ -43,11 +43,13 @@ class VideoDecoder(
 
     /** 显示的地方换了（TextureView 建好、销毁）。destroyed 回调里要等解码器放开旧的才能返回，done 在那之后调 */
     fun setSurface(s: Surface?, done: (() -> Unit)? = null) {
-        handler.post {
+        val posted = handler.post {
             surface = s
             rebuild()
             done?.invoke()
         }
+        // 解码线程已经停了（页面先关掉、View 后拆）：解码器早放开了，直接释放
+        if (!posted) done?.invoke()
     }
 
     fun configure(c: ScreenVideoConfig) {

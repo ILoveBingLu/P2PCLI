@@ -25,7 +25,7 @@ LUCIDE = [
     "send-horizontal", "keyboard", "triangle-alert", "square-arrow-out-up-right", "key-round", "arrow-up",
     "arrow-down", "arrow-left", "arrow-right", "bot", "plug", "settings", "copy", "check", "chevron-right",
     "clipboard-paste", "languages", "folder-open", "lock-keyhole", "image", "info", "folder", "house",
-    "corner-down-left", "play",
+    "corner-down-left", "play", "monitor", "mouse-pointer-2", "pointer", "delete", "keyboard-off", "circle-pause",
 ]
 COLORS = {"": "#FCFCFC", "_accent": "#0485F7", "_muted": "#9F9FA9", "_danger": "#DB3B3E", "_warning": "#F5A524"}
 PLATFORMS = ["apple", "windows", "linux", "android", "harmonyos"]

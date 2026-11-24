@@ -4541,12 +4541,14 @@ dependencies = [
 name = "p2pcli-harmony-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "napi-build-ohos",
  "napi-derive-ohos",
  "napi-ohos",
  "p2pcli-mobile-ffi",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

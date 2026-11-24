@@ -9,7 +9,9 @@
 //!
 //! 64 位整数（连接编号、传输编号）在 ArkTS 里都是 number：数值都很小，不会丢精度。
 
-use std::sync::Arc;
+mod screen;
+
+use std::sync::{Arc, OnceLock};
 
 use napi_derive_ohos::napi;
 use napi_ohos::bindgen_prelude::{Result, Uint8Array};
@@ -244,6 +246,123 @@ impl P2p {
     #[napi]
     pub fn shutdown(&self) {
         self.inner.shutdown();
+    }
+
+    /// 对方能不能远程控制（新版本的 macOS、Windows）
+    #[napi]
+    pub fn supports_screen(&self, conn_id: i64) -> bool {
+        self.inner.supports_screen(conn_id as u64)
+    }
+
+    /// 开始看对方的画面：对方点了同意才返回。quality 是 sharp、balanced、smooth。
+    /// on_event 收状态（JSON，type 是 config、first_frame、cursor、cursor_shape、paused、resumed、switched、stats、closed）；
+    /// 画面不经过 ArkTS：Rust 直接喂给系统解码器，画到 set_surface 给的 XComponent 上
+    #[napi]
+    pub async fn open_screen(&self, conn_id: i64, quality: String, on_event: StrCallback) -> Result<ScreenSession> {
+        let quality: ffi::ScreenQuality = serde_json::from_value(json!(quality)).map_err(bad_input)?;
+        let on_event = Arc::new(on_event);
+        // 解码器先建好（第一帧可能比 open_screen 返回还早到），要关键帧时找后面才有的 ScreenView
+        let view: Arc<OnceLock<Arc<ffi::ScreenView>>> = Arc::new(OnceLock::new());
+        let v = view.clone();
+        let ev = on_event.clone();
+        let decoder = screen::Decoder::new(
+            Box::new(move || {
+                if let Some(v) = v.get() {
+                    v.request_keyframe();
+                }
+            }),
+            Box::new(move |w, h| {
+                ev.call(json!({ "type": "unsupported", "width": w, "height": h }).to_string(), ThreadsafeFunctionCallMode::NonBlocking);
+            }),
+        );
+        let ev = on_event.clone();
+        let listener: Arc<dyn ffi::ScreenListener> = Arc::new(screen::Events {
+            decoder: decoder.clone(),
+            emit: Box::new(move |v| {
+                ev.call(v.to_string(), ThreadsafeFunctionCallMode::NonBlocking);
+            }),
+            saw_frame: Default::default(),
+        });
+        let inner = self
+            .inner
+            .open_screen(conn_id as u64, quality, true, screen::Decoder::supported_codecs(), listener)
+            .await
+            .map_err(err)?;
+        let _ = view.set(inner.clone());
+        Ok(ScreenSession { inner, decoder })
+    }
+}
+
+/// 一路正在看的远程画面
+#[napi]
+pub struct ScreenSession {
+    inner: Arc<ffi::ScreenView>,
+    decoder: Arc<screen::Decoder>,
+}
+
+#[napi]
+impl ScreenSession {
+    /// ScreenStartedView 的 JSON：屏幕列表、正在看哪块、能不能操作、能不能直接输入文字
+    #[napi]
+    pub fn started(&self) -> String {
+        to_json(&self.inner.started())
+    }
+
+    /// XComponent 的 Surface 建好了（surfaceId，十进制字符串）或者没了（null）
+    #[napi]
+    pub fn set_surface(&self, surface_id: Option<String>) -> Result<()> {
+        let id = match surface_id {
+            Some(s) => Some(s.parse::<u64>().map_err(bad_input)?),
+            None => None,
+        };
+        self.decoder.set_surface(id);
+        Ok(())
+    }
+
+    /// 发一个键鼠事件：ScreenInput 的 JSON，比如 {"k":"move","x":0.5,"y":0.5}、
+    /// {"k":"button","button":"left","down":true,"x":…,"y":…}、{"k":"wheel","dx":…,"dy":…,"x":…,"y":…}
+    #[napi]
+    pub fn send(&self, input: String) -> Result<()> {
+        let input: ffi::ScreenInput = serde_json::from_str(&input).map_err(bad_input)?;
+        self.inner.send(input);
+        Ok(())
+    }
+
+    /// 打一段字；modifiers 是按住的修饰键（ControlLeft、AltLeft、MetaLeft、ShiftLeft）
+    #[napi]
+    pub fn type_text(&self, text: String, modifiers: Vec<String>) {
+        self.inner.type_text(text, modifiers);
+    }
+
+    /// 按一下某个键（Escape、Tab、Backspace、ArrowLeft……）
+    #[napi]
+    pub fn tap_key(&self, code: String, modifiers: Vec<String>) {
+        self.inner.tap_key(code, modifiers);
+    }
+
+    #[napi]
+    pub fn switch_display(&self, display: String) {
+        self.inner.switch_display(display);
+    }
+
+    #[napi]
+    pub fn set_quality(&self, quality: String) -> Result<()> {
+        let quality: ffi::ScreenQuality = serde_json::from_value(json!(quality)).map_err(bad_input)?;
+        self.inner.set_quality(quality);
+        Ok(())
+    }
+
+    /// 切回前台：解码器重来，要一个关键帧
+    #[napi]
+    pub fn resume(&self) {
+        self.decoder.reset();
+    }
+
+    /// 不看了：对方停发，解码器、显示的地方都放开
+    #[napi]
+    pub fn stop(&self) {
+        self.inner.stop();
+        self.decoder.set_surface(None);
     }
 }
 

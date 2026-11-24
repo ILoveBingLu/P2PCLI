@@ -166,6 +166,59 @@ export interface P2pError {
   detail: string;
 }
 
+/** 对方电脑的一块屏幕 */
+export interface ScreenDisplay {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  primary: boolean;
+}
+
+/** 对方同意看画面以后的情况 */
+export interface ScreenStartedView {
+  displays: ScreenDisplay[];
+  display: string;
+  /** 能不能操作：对方只给看、或者对方电脑没给辅助功能权限时为假 */
+  control: boolean;
+  control_note: string | null;
+  /** 能直接输入文字（中文、表情）；对方是老版本时为假 */
+  text_input: boolean;
+}
+
+/** 远程画面的状态变化，type 是 config、first_frame、cursor、cursor_shape、paused、resumed、switched、stats、closed、unsupported */
+export interface ScreenEvent {
+  type: string;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+  visible?: boolean;
+  id?: number;
+  hot_x?: number;
+  hot_y?: number;
+  scale?: number;
+  /** 指针图案：RGBA（不预乘透明度），base64 */
+  rgba?: string;
+  relay?: boolean;
+  display?: string;
+  bitrate?: number;
+  fps?: number;
+  reason?: string | null;
+}
+
+/** 发给对方的键鼠事件，坐标是相对屏幕的 0~1 */
+export interface ScreenInput {
+  k: string;
+  x?: number;
+  y?: number;
+  button?: string;
+  down?: boolean;
+  dx?: number;
+  dy?: number;
+  code?: string;
+}
+
 export function parseError(e: Error): P2pError {
   try {
     return JSON.parse(e.message) as P2pError;

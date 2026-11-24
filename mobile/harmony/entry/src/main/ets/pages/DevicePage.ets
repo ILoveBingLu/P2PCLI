@@ -88,6 +88,24 @@ export struct DevicePage {
             }.padding(20).width('100%')
           }
         } else {
+          if (this.core.supportsScreen(this.endpointId)) {
+            ListItem() {
+              Row({ space: 12 }) {
+                Stack() {
+                  Image($r('app.media.lucide_monitor')).width(20).height(20)
+                }.width(42).height(42).borderRadius(13).backgroundColor(Hero.tile)
+                Column({ space: 3 }) {
+                  Text(t('远程控制')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(Hero.foreground)
+                  Text(t('看对方的屏幕，用手指操作鼠标和键盘')).fontSize(13).fontColor(Hero.muted)
+                }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+                Image($r('app.media.lucide_chevron_right_muted')).width(16).height(16)
+              }
+              .width('100%').padding({ left: 14, right: 12, top: 11, bottom: 11 })
+              .backgroundColor(Hero.surface).borderRadius(16)
+              .margin({ top: 12 })
+              .onClick(() => this.core.openScreen(this.endpointId))
+            }
+          }
           ListItem() {
             sectionHeader(t('会话'))
           }

@@ -29,6 +29,28 @@ export class P2p {
   settings(): string;
   saveSettings(settings: string): Promise<void>;
   shutdown(): void;
+  /** 对方能不能远程控制（新版本的 macOS、Windows） */
+  supportsScreen(connId: number): boolean;
+  /** 开始看对方的画面，对方点了同意才返回。quality：sharp | balanced | smooth。
+   *  onEvent 收状态（ScreenEvent 的 JSON）；画面不经过 ArkTS，Rust 直接解码画到 setSurface 给的 XComponent 上 */
+  openScreen(connId: number, quality: string, onEvent: (event: string) => void): Promise<ScreenSession>;
+}
+
+/** 一路正在看的远程画面 */
+export class ScreenSession {
+  /** ScreenStartedView 的 JSON */
+  started(): string;
+  /** XComponent 的 Surface 建好了（surfaceId）或者没了（null） */
+  setSurface(surfaceId: string | null): void;
+  /** 键鼠事件：ScreenInput 的 JSON，比如 {"k":"move","x":0.5,"y":0.5} */
+  send(input: string): void;
+  typeText(text: string, modifiers: string[]): void;
+  tapKey(code: string, modifiers: string[]): void;
+  switchDisplay(display: string): void;
+  setQuality(quality: string): void;
+  /** 切回前台：解码器重来，要一个关键帧 */
+  resume(): void;
+  stop(): void;
 }
 
 export class Terminal {

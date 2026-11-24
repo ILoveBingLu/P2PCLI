@@ -11,6 +11,7 @@ import { AgentStateLabel, Chip, PlatformTile, sectionHeader, SessionTile } from 
 import { DevicePage } from './DevicePage';
 import { TerminalPage } from './TerminalPage';
 import { SettingsPage } from './SettingsPage';
+import { RemoteScreenPage } from './RemoteScreenPage';
 import { barGlass, sheetBackground } from '../common/Glass';
 
 /**
@@ -25,10 +26,17 @@ struct Index {
   /** 面板开关：跟着 core.prompt、core.fileRequest 走，用户下滑关掉时反过来清掉它们 */
   @Local showConnect: boolean = false;
   @Local showFileRequest: boolean = false;
+  /** 远程画面：跟着 core.screen 走，全屏盖在最上面 */
+  @Local showScreen: boolean = false;
 
   @Monitor('core.prompt')
   onPrompt(): void {
     this.showConnect = this.core.prompt !== null;
+  }
+
+  @Monitor('core.screen')
+  onScreen(): void {
+    this.showScreen = this.core.screen !== null;
   }
 
   @Monitor('core.fileRequest')
@@ -58,6 +66,14 @@ struct Index {
       TerminalPage({ termKey: param as number })
     } else if (name === 'settings') {
       SettingsPage()
+    }
+  }
+
+  /** 远程画面盖住整个窗口 */
+  @Builder
+  screenCover() {
+    if (this.core.screen !== null) {
+      RemoteScreenPage({ screen: this.core.screen })
     }
   }
 
@@ -131,6 +147,15 @@ struct Index {
       }
       .width('100%')
       .height('100%')
+      // 返回键、返回手势关掉远程画面
+      .bindContentCover(this.showScreen, this.screenCover(), {
+        modalTransition: ModalTransition.NONE,
+        backgroundColor: Color.Black,
+        onWillDismiss: (action: DismissContentCoverAction) => {
+          this.core.closeScreen();
+          action.dismiss();
+        }
+      })
       .bindSheet(this.showFileRequest!!, this.fileRequestSheet(), {
         height: SheetSize.FIT_CONTENT,
         backgroundColor: sheetBackground(),
