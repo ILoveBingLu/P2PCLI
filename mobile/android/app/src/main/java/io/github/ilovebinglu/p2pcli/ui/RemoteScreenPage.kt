@@ -117,7 +117,7 @@ fun RemoteScreenPage(core: Core, screen: RemoteScreen) {
             }
             SheetLabel(t("画质"))
             listOf(ScreenQuality.SHARP, ScreenQuality.BALANCED, ScreenQuality.SMOOTH).forEach { q ->
-                SheetAction(if (q == screen.quality) Lucide.Check else Lucide.Monitor, qualityName(q), { menu = false; screen.setQuality(q) },
+                SheetAction(if (q == screen.quality) Lucide.Check else Lucide.Monitor, qualityName(q), { menu = false; screen.changeQuality(q) },
                     description = qualityNote(q))
             }
             screen.stats?.let { s ->

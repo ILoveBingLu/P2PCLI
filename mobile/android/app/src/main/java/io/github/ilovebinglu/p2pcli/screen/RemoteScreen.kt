@@ -144,7 +144,7 @@ class RemoteScreen(
         handle?.switchDisplay(id)
     }
 
-    fun setQuality(q: ScreenQuality) {
+    fun changeQuality(q: ScreenQuality) {
         quality = q
         handle?.setQuality(q)
     }
@@ -210,7 +210,7 @@ class RemoteScreen(
     private fun onUnsupported(w: Int, h: Int) {
         if (quality == ScreenQuality.SHARP) {
             notify(t("这台手机解不了 {{w}}×{{h}} 的画面，已换成均衡画质", "w" to w, "h" to h))
-            setQuality(ScreenQuality.BALANCED)
+            changeQuality(ScreenQuality.BALANCED)
         } else {
             stop()
             phase = Phase.Closed(t("这台手机解不了 {{w}}×{{h}} 的画面", "w" to w, "h" to h))
