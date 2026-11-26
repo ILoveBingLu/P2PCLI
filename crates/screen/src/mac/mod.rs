@@ -8,6 +8,7 @@ use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCapture
 use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend, ScreenCapture};
 
 mod capture;
+pub(crate) mod clip;
 mod cursor;
 pub mod encode;
 mod flow;
@@ -86,5 +87,9 @@ impl ScreenBackend for MacBackend {
 
     fn cursor(&self, display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
         self.cursor.read(display)
+    }
+
+    fn clipboard(&self) -> Option<Arc<dyn p2pcli_core::screen_clip::ClipPlatform>> {
+        crate::clipboard()
     }
 }

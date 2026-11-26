@@ -16,6 +16,7 @@ use windows::core::{BOOL, PCWSTR};
 #[cfg(test)]
 mod bench;
 mod capture;
+pub(crate) mod clip;
 mod cursor;
 mod encode;
 mod input;
@@ -120,5 +121,9 @@ impl ScreenBackend for WinBackend {
 
     fn cursor(&self, display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
         self.cursor.read(display)
+    }
+
+    fn clipboard(&self) -> Option<Arc<dyn p2pcli_core::screen_clip::ClipPlatform>> {
+        crate::clipboard()
     }
 }

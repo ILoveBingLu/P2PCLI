@@ -10,6 +10,11 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use p2pcli_core::screen_clip::ViewerClip;
+
 use crate::{AppState, UiDelegate, settings_path};
 
 /// 画面窗口的标题栏高度，和主窗口、前端 .screen-toolbar 一致
@@ -349,6 +354,7 @@ pub(crate) async fn screen_open(
     color_tags: Option<bool>,
     wide_gamut: Option<bool>,
     yuv444: Option<bool>,
+    clipboard: Option<bool>,
     events: Channel<InvokeResponseBody>,
 ) -> Result<ScreenOpened, String> {
     let remote = state.remote(conn_id)?;
@@ -360,11 +366,44 @@ pub(crate) async fn screen_open(
         color_tags: color_tags.unwrap_or(false),
         wide_gamut: wide_gamut.unwrap_or(false),
         yuv444: yuv444.unwrap_or(false),
+        clipboard: clipboard.unwrap_or(false),
     };
     let (started, mut input, mut output) = remote.open_screen(open).await.map_err(|e| format!("{e:#}"))?;
     let screen_id = state.next();
     let (tx, mut rx) = mpsc::unbounded_channel::<ViewerMsg>();
-    state.screens.lock().unwrap().insert(screen_id, ScreenEntry { window: window.label().to_string(), conn_id, tx: tx.clone() });
+    // 剪贴板互通：对方同意了、本机读写得了剪贴板（只有桌面端）
+    #[cfg(desktop)]
+    let platform = p2pcli_screen::clipboard();
+    #[cfg(mobile)]
+    let platform: Option<Arc<dyn p2pcli_core::screen_clip::ClipPlatform>> = None;
+    let clip = match platform {
+        Some(p) if started.clipboard => Some(ViewerClip::new(p, remote.clone(), started.clip_token)),
+        _ => None,
+    };
+    state.screens.lock().unwrap().insert(
+        screen_id,
+        ScreenEntry { window: window.label().to_string(), conn_id, tx: tx.clone(), clip: clip.clone() },
+    );
+    if let Some(clip) = &clip {
+        spawn_clip_poll(clip.clone(), tx.downgrade());
+    }
+    // 对方的剪贴板清单按到达的先后放进本机剪贴板
+    let (apply_tx, mut apply_rx) = mpsc::unbounded_channel::<p2pcli_core::screen_clip::ClipOffer>();
+    if let Some(clip) = clip.clone() {
+        tauri::async_runtime::spawn(async move {
+            while let Some(offer) = apply_rx.recv().await {
+                if !clip.enabled() {
+                    continue;
+                }
+                let (sync, fetch) = (clip.sync.clone(), clip.fetcher());
+                match tokio::task::spawn_blocking(move || sync.apply(offer, fetch)).await {
+                    Ok(Err(e)) => warn!("放进对方的剪贴板内容失败：{e:#}"),
+                    Err(e) => warn!("放进对方的剪贴板内容失败：{e}"),
+                    Ok(Ok(())) => {}
+                }
+            }
+        });
+    }
     info!(conn_id, screen_id, control = started.control, "开始看对方画面");
 
     // 发：确认、键鼠、换屏
@@ -414,6 +453,20 @@ pub(crate) async fn screen_open(
                     let _ = events.send(json_event(&serde_json::json!({ "t": "config", "config": config })));
                 }
                 Ok(Some(ScreenEvent::Host(HostMsg::Error { message }))) => break Some(message),
+                // 对方在画面里复制了东西：清单放进本机剪贴板，粘贴时才传
+                Ok(Some(ScreenEvent::Host(HostMsg::ClipOffer { offer }))) => {
+                    let _ = apply_tx.send(offer);
+                }
+                // 对方那边有程序要粘贴本机剪贴板里的内容：开一条流送过去
+                Ok(Some(ScreenEvent::Host(HostMsg::ClipWant { req, offer, what }))) => {
+                    if let Some(clip) = clip.clone() {
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = clip.put(req, offer, what).await {
+                                warn!("给对方剪贴板内容失败：{e:#}");
+                            }
+                        });
+                    }
+                }
                 Ok(Some(ScreenEvent::Host(msg))) => {
                     if let HostMsg::Stats { bitrate, fps } = msg {
                         diag.host = Some((fps, bitrate));
@@ -514,13 +567,56 @@ pub(crate) fn screen_report(screen_id: u64, decoded: u32, errors: u32, queue: u3
     );
 }
 
-/// 窗口发来的消息：键鼠、要关键帧、换屏、换画质
+/// 本机剪贴板：每隔一会儿看一眼，变了就把清单发给对方；画面关了就停
+fn spawn_clip_poll(clip: Arc<ViewerClip>, tx: mpsc::WeakUnboundedSender<ViewerMsg>) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(p2pcli_core::screen_clip::POLL).await;
+            let Some(tx) = tx.upgrade() else { return };
+            if !clip.enabled() {
+                continue;
+            }
+            let sync = clip.sync.clone();
+            match tokio::task::spawn_blocking(move || sync.poll()).await {
+                Ok(Ok(Some(offer))) => {
+                    let _ = tx.send(ViewerMsg::ClipOffer { offer });
+                }
+                Ok(Err(e)) => debug!("读本机剪贴板失败：{e:#}"),
+                _ => {}
+            }
+        }
+    });
+}
+
+/// 窗口发来的消息：键鼠、要关键帧、换屏、换画质。
+/// clipboard 为真（按了粘贴键）时，先看一眼本机剪贴板，刚复制了东西就先把清单发过去，
+/// 排在这批键鼠前面：对方读到粘贴键时剪贴板已经是新的（不用等下一次定时看）
 #[tauri::command]
-pub(crate) fn screen_send(state: State<'_, AppState>, screen_id: u64, msgs: Vec<ViewerMsg>) {
-    if let Some(ScreenEntry { tx, .. }) = state.screens.lock().unwrap().get(&screen_id) {
+pub(crate) fn screen_send(state: State<'_, AppState>, screen_id: u64, msgs: Vec<ViewerMsg>, clipboard: Option<bool>) {
+    if let Some(ScreenEntry { tx, clip, .. }) = state.screens.lock().unwrap().get(&screen_id) {
+        if clipboard == Some(true)
+            && let Some(clip) = clip
+            && clip.enabled()
+        {
+            match clip.sync.poll() {
+                Ok(Some(offer)) => {
+                    let _ = tx.send(ViewerMsg::ClipOffer { offer });
+                }
+                Ok(None) => {}
+                Err(e) => debug!("读本机剪贴板失败：{e:#}"),
+            }
+        }
         for m in msgs {
             let _ = tx.send(m);
         }
+    }
+}
+
+/// 观看窗口里开关剪贴板互通
+#[tauri::command]
+pub(crate) fn screen_set_clipboard(state: State<'_, AppState>, screen_id: u64, on: bool) {
+    if let Some(ScreenEntry { clip: Some(clip), .. }) = state.screens.lock().unwrap().get(&screen_id) {
+        clip.enabled.store(on, Ordering::Relaxed);
     }
 }
 
@@ -547,6 +643,8 @@ pub(crate) struct ScreenEntry {
     conn_id: u64,
     /// 发给对方的消息（确认、键鼠）；丢掉就停
     tx: mpsc::UnboundedSender<ViewerMsg>,
+    /// 剪贴板互通（对方同意了才有）
+    clip: Option<Arc<ViewerClip>>,
 }
 
 pub(crate) type ScreenSenders = std::collections::HashMap<u64, ScreenEntry>;

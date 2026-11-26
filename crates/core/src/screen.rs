@@ -298,6 +298,10 @@ pub trait ScreenBackend: Send + Sync + 'static {
     fn cursor(&self, _display: &str) -> Option<CursorInfo> {
         None
     }
+    /// 本机剪贴板：远程控制时和观看方互通。不支持就是空
+    fn clipboard(&self) -> Option<Arc<dyn crate::screen_clip::ClipPlatform>> {
+        None
+    }
 }
 
 /// 一路正在抓的画面。丢掉就停止
@@ -379,6 +383,9 @@ pub struct ScreenOpen {
     /// 观看方能还原 [`Layout::Yuv444Stacked`]（有 WebGL2）：被连方能做到就用 4:4:4
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub yuv444: bool,
+    /// 观看方想和被连方互通剪贴板。老版本不带这项，就不互通
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipboard: bool,
 }
 
 /// 视频编码格式。H.265 同样画质码率省三到五成，同样码率更清楚；H.264 哪儿都能用，兜底
@@ -400,6 +407,17 @@ pub struct ScreenStarted {
     /// 不能操作的原因
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_note: Option<String>,
+    /// 剪贴板互通：观看方要了、能操作、被连方也读写得了剪贴板时为真。
+    /// 为假时观看方不发剪贴板消息（老版本的被连方认不得，会断开）
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipboard: bool,
+    /// 剪贴板内容流（[`crate::screen_clip::ClipStreamReq`]）里带上，被连方按它找到这一路画面
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub clip_token: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 /// 观看方发给被连方
@@ -413,6 +431,9 @@ pub enum ViewerMsg {
     Switch { display: String },
     SetQuality { quality: Quality },
     Input { ev: InputEvent },
+    /// 观看方的剪贴板变了：被连方放进自己的剪贴板，排在后面的粘贴键读到的就是它。
+    /// 只在 [`ScreenStarted::clipboard`] 为真时发
+    ClipOffer { offer: crate::screen_clip::ClipOffer },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,6 +459,10 @@ pub enum HostMsg {
     Cursor { x: f64, y: f64, visible: bool },
     /// 指针换样子了（箭头、文本光标、手形……）
     CursorShape { shape: CursorShape },
+    /// 被连方的剪贴板变了（在画面里复制了东西）
+    ClipOffer { offer: crate::screen_clip::ClipOffer },
+    /// 被连方这边有程序要粘贴观看方剪贴板里的内容：观看方开一条 Put 流送来
+    ClipWant { req: u64, offer: u64, what: crate::screen_clip::ClipWhat },
     /// 出错了，画面结束
     Error { message: String },
 }
@@ -899,6 +924,18 @@ where
         let (backend, display) = (backend.clone(), display.clone());
         tokio::task::spawn_blocking(move || backend.cursor(&display).is_some()).await.unwrap_or(false)
     };
+    // 剪贴板互通只在能操作时开：只给看的人拿不到这边复制的东西。只发会话里新复制的，不把原有的塞给观看方
+    let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<HostMsg>();
+    let clip = match backend.clipboard() {
+        Some(platform) if open.clipboard && control => {
+            let sync = tokio::task::spawn_blocking(move || crate::screen_clip::ClipSync::new(platform, tokio::runtime::Handle::current(), false)).await?;
+            let clip = crate::screen_clip::HostClip::register(conn.remote_id(), sync, clip_tx.clone());
+            clip.spawn_poll();
+            Some(clip)
+        }
+        _ => None,
+    };
+    drop(clip_tx);
     let mut running = match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, format).await {
         Ok(r) => r,
         Err(e) => {
@@ -912,7 +949,14 @@ where
     crate::proto::write_msg(
         &mut send,
         &crate::proto::Msg::ScreenStarted {
-            started: ScreenStarted { displays: displays.clone(), display: display.clone(), control, control_note },
+            started: ScreenStarted {
+                displays: displays.clone(),
+                display: display.clone(),
+                control,
+                control_note,
+                clipboard: clip.is_some(),
+                clip_token: clip.as_ref().map_or(0, |c| c.token()),
+            },
         },
     )
     .await?;
@@ -923,9 +967,20 @@ where
     let reader = {
         let backend = backend.clone();
         let current_display = current_display.clone();
+        let clip = clip.clone();
         tokio::spawn(async move {
             loop {
                 match read_json::<_, ViewerMsg>(&mut recv).await {
+                    // 放进剪贴板以后才读下一条：紧跟着的粘贴键读到的就是新的
+                    Ok(Some(ViewerMsg::ClipOffer { offer })) => {
+                        let Some(clip) = &clip else { continue };
+                        let (sync, fetch) = (clip.sync.clone(), clip.fetcher());
+                        match tokio::task::spawn_blocking(move || sync.apply(offer, fetch)).await {
+                            Ok(Err(e)) => debug!("放进观看方的剪贴板内容失败：{e:#}"),
+                            Err(e) => debug!("放进观看方的剪贴板内容失败：{e}"),
+                            Ok(Ok(())) => {}
+                        }
+                    }
                     Ok(Some(ViewerMsg::Input { ev })) => {
                         if !control {
                             continue;
@@ -1130,7 +1185,7 @@ where
                     need_key = true;
                     last_config = None;
                 }
-                Some(ViewerMsg::Input { .. }) => {}
+                Some(ViewerMsg::Input { .. } | ViewerMsg::ClipOffer { .. }) => {}
                 None => break Ok(()),
             },
             _ = tick.tick() => {
@@ -1175,6 +1230,10 @@ where
                     last_stats = Instant::now();
                     let _ = out_tx.try_send(json(&Wire::Host { msg: HostMsg::Stats { bitrate: rate.bitrate, fps } }));
                 }
+            }
+            // 剪贴板：本机新复制的清单、要观看方剪贴板里的内容
+            Some(msg) = clip_rx.recv() => {
+                if out_tx.send(json(&Wire::Host { msg })).await.is_err() { break Ok(()); }
             }
             Some(c) = cursor_rx.recv() => {
                 // 暂停时画面整个不发，指针也不发

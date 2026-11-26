@@ -1904,6 +1904,7 @@ pub fn run() {
             screen::screen_set_fullscreen,
             screen::screen_open,
             screen::screen_send,
+            screen::screen_set_clipboard,
             screen::screen_close,
             screen::screen_connection,
             screen::screen_report,

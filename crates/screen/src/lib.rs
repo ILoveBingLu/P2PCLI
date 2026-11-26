@@ -23,6 +23,16 @@ pub use mac::encode as mac_encode;
 #[cfg(windows)]
 mod win;
 
+/// 本机剪贴板（远程控制时和对方互通）；这个系统还不支持就是空
+pub fn clipboard() -> Option<Arc<dyn p2pcli_core::screen_clip::ClipPlatform>> {
+    #[cfg(target_os = "macos")]
+    return Some(Arc::new(mac::clip::MacClip));
+    #[cfg(windows)]
+    return Some(Arc::new(win::clip::WinClip));
+    #[allow(unreachable_code)]
+    None
+}
+
 /// 本机的远程画面实现；这个系统还不支持就是空
 pub fn backend() -> Option<Arc<dyn ScreenBackend>> {
     #[cfg(target_os = "macos")]

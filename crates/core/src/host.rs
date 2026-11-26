@@ -663,6 +663,10 @@ impl Host {
             self.screen(session, &owner, conn, open, send, recv).await;
             return;
         }
+        if let Msg::ScreenClip { req } = request {
+            crate::screen_clip::handle_stream(conn.remote_id(), req, send, recv).await;
+            return;
+        }
         #[cfg(not(feature = "host"))]
         let _ = conn;
         let result: Result<()> = async {

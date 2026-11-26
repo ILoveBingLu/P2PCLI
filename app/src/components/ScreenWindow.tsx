@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink } from "lucide-react";
+import { ChevronDown, ClipboardCopy, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink } from "lucide-react";
 import {
   api,
   type ScreenDisplay,
@@ -131,6 +131,12 @@ function readable(message: string) {
   return message.replace(/^(relay|denied|permission):\s*/, "");
 }
 
+/** 远程控制时和对方互通剪贴板，默认开；关掉的人记在本机 */
+const CLIPBOARD_KEY = "p2pcli.screen.clipboard";
+function loadShareClipboard() {
+  try { return localStorage.getItem(CLIPBOARD_KEY) !== "off"; } catch { return true; }
+}
+
 export default function ScreenWindow() {
   const [device, setDevice] = useState<{ endpointId: string; name: string; platform: string } | null>(null);
   const [connId, setConnId] = useState<number | null>(null);
@@ -142,6 +148,7 @@ export default function ScreenWindow() {
   const [quality, setQuality] = useState<ScreenQuality>("balanced");
   const [control, setControl] = useState(true);
   const [swapMeta, setSwapMeta] = useState(true);
+  const [shareClipboard, setShareClipboard] = useState(loadShareClipboard);
   const [fullscreen, setFullscreen] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [hwNote, setHwNote] = useState<string | null>(null);
@@ -185,6 +192,11 @@ export default function ScreenWindow() {
   controlRef.current = control && !!started?.control;
   const swapRef = useRef(swapMeta);
   swapRef.current = swapMeta;
+  /** 现在互通剪贴板：自己开着、在操作、对方也同意 */
+  const clipboardRef = useRef(false);
+  clipboardRef.current = shareClipboard && controlRef.current && !!started?.clipboard;
+  /** 下一次发消息前先把本机剪贴板发过去 */
+  const syncClipboard = useRef(false);
 
   // 自己是哪台设备的
   useEffect(() => {
@@ -233,8 +245,10 @@ export default function ScreenWindow() {
     if (pendingMove.current) { msgs.push({ t: "input", ev: pendingMove.current }); pendingMove.current = null; }
     if (pendingWheel.current) { msgs.push({ t: "input", ev: { k: "wheel", ...pendingWheel.current } }); pendingWheel.current = null; }
     queue.current = [];
-    if (id == null || msgs.length === 0) return;
-    void api.screenSend(id, msgs).catch(() => {});
+    const clipboard = syncClipboard.current;
+    syncClipboard.current = false;
+    if (id == null || (msgs.length === 0 && !clipboard)) return;
+    void api.screenSend(id, msgs, clipboard).catch(() => {});
   }, []);
 
   const send = useCallback((msg: ScreenViewerMsg, coalesce = false) => {
@@ -488,6 +502,7 @@ export default function ScreenWindow() {
         screenId.current = opened.screen_id;
         setStarted(opened.started);
         setDisplay(opened.started.display);
+        if (opened.started.clipboard && !shareClipboard) void api.screenSetClipboard(opened.screen_id, false).catch(() => {});
         setPaused(null);
         setPhase({ kind: "live" });
         // 画面拿到焦点，直接就能打字
@@ -616,6 +631,8 @@ export default function ScreenWindow() {
       if (down) {
         if (!controlRef.current || document.activeElement !== canvasRef.current) return;
         pressed.current.add(code);
+        // 粘贴键（Ctrl/⌘+V、Shift+Insert）：马上看一眼本机剪贴板，刚复制的先过去，对方读到的就是它
+        if (clipboardRef.current && (e.code === "KeyV" || e.code === "Insert")) syncClipboard.current = true;
       } else {
         // 抬起只要按下时发过就一定发，焦点挪走了也发，免得对面一直按着
         if (!pressed.current.delete(code)) return;
@@ -647,6 +664,13 @@ export default function ScreenWindow() {
       canvas?.removeEventListener("blur", releaseAll);
     };
   }, [device, send, releaseAll, renderMode]);
+
+  const toggleShareClipboard = () => {
+    const on = !shareClipboard;
+    setShareClipboard(on);
+    try { localStorage.setItem(CLIPBOARD_KEY, on ? "on" : "off"); } catch { /* 存不了就只管这次 */ }
+    if (screenId.current != null) void api.screenSetClipboard(screenId.current, on).catch(() => {});
+  };
 
   // 切到“只看”：按着的键和鼠标全松开
   useEffect(() => {
@@ -795,6 +819,14 @@ export default function ScreenWindow() {
             aria-label={t("对调 ⌘ 和 Ctrl")}
             onPress={() => setSwapMeta((v) => !v)}>
             <Keyboard />
+          </Button>
+        )}
+        {live && canControl && started?.clipboard && (
+          <Button variant="ghost" size="icon-sm" className="screen-tool" data-active={shareClipboard ? "" : undefined}
+            title={shareClipboard ? t("剪贴板互通：文字、图片、文件都能在两台电脑之间复制粘贴，粘贴时才传。点一下关掉") : t("剪贴板不互通，点一下打开")}
+            aria-label={t("剪贴板互通")}
+            onPress={toggleShareClipboard}>
+            <ClipboardCopy />
           </Button>
         )}
         <Button variant="ghost" size="icon-sm" className="screen-tool" title={`${fullscreen ? t("退出全屏") : t("全屏")}（${isMac ? "⌃⌘F" : "F11"}）`} aria-label={t("全屏")} onPress={() => void toggleFullscreen()}>

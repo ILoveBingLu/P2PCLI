@@ -3,7 +3,7 @@
 #![cfg(feature = "host")]
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,9 +12,10 @@ use iroh::{EndpointAddr, TransportAddr};
 use p2pcli_core::host::{BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest, ScreenDecision, ScreenRequest};
 use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::screen::{
-    CaptureOptions, DisplayInfo, EncodedFrame, InputEvent, Quality, ScreenBackend, ScreenCapture, ScreenEvent, ScreenOpen,
+    CaptureOptions, HostMsg, DisplayInfo, EncodedFrame, InputEvent, Quality, ScreenBackend, ScreenCapture, ScreenEvent, ScreenOpen,
     VideoConfig, ViewerMsg,
 };
+use p2pcli_core::screen_clip::{ClipContent, ClipPlatform, ClipSource, ViewerClip};
 use tokio::time::timeout;
 
 struct Delegate {
@@ -52,6 +53,55 @@ struct Fake {
     keyframes: AtomicUsize,
     bitrate: AtomicU32,
     inputs: Mutex<Vec<(String, InputEvent)>>,
+    /// 本机剪贴板
+    clip: Option<Arc<FakeClip>>,
+    /// 注入键鼠、设剪贴板的先后
+    order: Arc<Mutex<Vec<String>>>,
+}
+
+/// 内存里的剪贴板
+#[derive(Default)]
+struct FakeClip {
+    count: AtomicU64,
+    ours: AtomicU64,
+    content: Mutex<ClipContent>,
+    written: Mutex<Option<Arc<dyn ClipSource>>>,
+    order: Arc<Mutex<Vec<String>>>,
+}
+
+impl FakeClip {
+    fn copy(&self, content: ClipContent) {
+        *self.content.lock().unwrap() = content;
+        self.count.fetch_add(1, Ordering::SeqCst);
+    }
+    fn written(&self) -> Option<Arc<dyn ClipSource>> {
+        self.written.lock().unwrap().clone()
+    }
+}
+
+impl ClipPlatform for FakeClip {
+    fn change_count(&self) -> u64 {
+        self.count.load(Ordering::SeqCst)
+    }
+    fn is_ours(&self) -> bool {
+        self.ours.load(Ordering::SeqCst) == self.change_count()
+    }
+    fn read(&self) -> Result<ClipContent> {
+        Ok(self.content.lock().unwrap().clone())
+    }
+    fn read_format(&self, key: &str) -> Result<Vec<u8>> {
+        self.content.lock().unwrap().formats.iter().find(|(k, _)| k == key).and_then(|(_, d)| d.clone()).or_else(|| (key == "mac:com.example.lazy").then(|| b"lazy".to_vec())).ok_or_else(|| anyhow::anyhow!("没有 {key}"))
+    }
+    fn write(&self, source: Arc<dyn ClipSource>) -> Result<()> {
+        // 慢一点：后面的按键也得等它放好
+        std::thread::sleep(Duration::from_millis(30));
+        *self.written.lock().unwrap() = Some(source);
+        *self.content.lock().unwrap() = ClipContent::default();
+        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        self.ours.store(n, Ordering::SeqCst);
+        self.order.lock().unwrap().push("clip".into());
+        Ok(())
+    }
 }
 
 struct FakeBackend(Arc<Fake>);
@@ -82,7 +132,13 @@ impl ScreenBackend for FakeBackend {
     }
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
         self.0.inputs.lock().unwrap().push((display.to_string(), ev.clone()));
+        if let InputEvent::Key { code, .. } = ev {
+            self.0.order.lock().unwrap().push(format!("key:{code}"));
+        }
         Ok(())
+    }
+    fn clipboard(&self) -> Option<Arc<dyn ClipPlatform>> {
+        self.0.clip.clone().map(|c| c as Arc<dyn ClipPlatform>)
     }
     fn cursor(&self, _display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
         if !self.0.cursor {
@@ -160,13 +216,13 @@ async fn pair(screen: ScreenDecision, backend: Option<Arc<Fake>>) -> (Node2, Arc
     }
     let guest = Node::start(gc, delegate.clone()).await.unwrap();
     let remote = guest.connect_addr(local_addr(&host), Some(host.host.password())).await.unwrap();
-    (Node2 { host, guest, remote, dirs }, delegate)
+    (Node2 { host, guest, remote: Arc::new(remote), dirs }, delegate)
 }
 
 struct Node2 {
     host: Arc<Node>,
     guest: Arc<Node>,
-    remote: p2pcli_core::client::RemoteHost,
+    remote: Arc<p2pcli_core::client::RemoteHost>,
     dirs: [std::path::PathBuf; 2],
 }
 
@@ -413,4 +469,138 @@ async fn yuv444_is_negotiated() {
         assert_eq!(config.layout, want, "color_tags={color_tags} yuv444={yuv444} quality={quality:?}");
         n.shutdown().await;
     }
+}
+
+/// 剪贴板互通：清单先到、粘贴键排在后面；大内容和文件粘贴时才传（两个方向）；对方放进来的不发回去
+#[tokio::test(flavor = "multi_thread")]
+async fn clipboard_is_shared_while_controlling() {
+    let order = Arc::new(Mutex::new(vec![]));
+    let host_clip = Arc::new(FakeClip { order: order.clone(), ..Default::default() });
+    host_clip.copy(ClipContent { formats: vec![("text".into(), Some(b"host old".to_vec()))], files: vec![] });
+    let fake = Arc::new(Fake { clip: Some(host_clip.clone()), order: order.clone(), ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (started, mut input, mut output) = n.remote.open_screen(ScreenOpen { control: true, clipboard: true, ..Default::default() }).await.unwrap();
+    assert!(started.clipboard);
+    assert_ne!(started.clip_token, 0);
+
+    // 观看方剪贴板：一段文字、一张大图、一个文件夹
+    let dir = std::env::temp_dir().join(format!("p2pcli-clip-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("folder/sub")).unwrap();
+    let big: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.join("folder/a.txt"), b"hello").unwrap();
+    std::fs::write(dir.join("folder/sub/b.bin"), &big).unwrap();
+    std::fs::create_dir_all(dir.join("folder/empty")).unwrap();
+    let viewer_clip = Arc::new(FakeClip::default());
+    viewer_clip.copy(ClipContent {
+        formats: vec![("text".into(), Some("本机复制的".as_bytes().to_vec())), ("png".into(), Some(big.clone())), ("mac:com.example.lazy".into(), None)],
+        files: vec![dir.join("folder")],
+    });
+    let vclip = ViewerClip::new(viewer_clip.clone(), n.remote.clone(), started.clip_token);
+
+    // 画面一直收着、确认着；被连方要内容就送过去，发来的清单交给测试
+    let (offers_tx, mut offers) = tokio::sync::mpsc::unbounded_channel();
+    let (ack_tx, mut ack_rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let pump = {
+        let vclip = vclip.clone();
+        tokio::spawn(async move {
+            while let Ok(Some(ev)) = output.next().await {
+                match ev {
+                    ScreenEvent::Frame { seq, .. } => { let _ = ack_tx.send(seq); }
+                    ScreenEvent::Host(HostMsg::ClipOffer { offer }) => { let _ = offers_tx.send(offer); }
+                    ScreenEvent::Host(HostMsg::ClipWant { req, offer, what }) => {
+                        let vclip = vclip.clone();
+                        tokio::spawn(async move { vclip.put(req, offer, what).await.unwrap() });
+                    }
+                    _ => {}
+                }
+            }
+        })
+    };
+    let sender = tokio::spawn({
+        let vclip = vclip.clone();
+        async move {
+        let mut first = true;
+        loop {
+            tokio::select! {
+                Some(seq) = ack_rx.recv() => { input.send(&ViewerMsg::Ack { seq }).await.unwrap(); }
+                _ = tokio::time::sleep(Duration::from_millis(10)), if first => {
+                    first = false;
+                    let s = vclip_poll(&vclip).await.expect("一开始就发本机剪贴板");
+                    assert_eq!(s.format("text").unwrap().data.as_deref(), Some("本机复制的".as_bytes()));
+                    assert!(s.format("png").unwrap().data.is_none(), "大图不该带在清单里");
+                    assert_eq!(s.files.len(), 1);
+                    input.send(&ViewerMsg::ClipOffer { offer: s }).await.unwrap();
+                    input.send(&ViewerMsg::Input { ev: InputEvent::Key { code: "KeyV".into(), down: true } }).await.unwrap();
+                }
+                else => break,
+            }
+        }
+    }});
+    async fn vclip_poll(v: &Arc<ViewerClip>) -> Option<p2pcli_core::screen_clip::ClipOffer> {
+        let sync = v.sync.clone();
+        tokio::task::spawn_blocking(move || sync.poll()).await.unwrap().unwrap()
+    }
+
+    // 清单放好了才按粘贴键
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while order.lock().unwrap().len() < 2 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(*order.lock().unwrap(), vec!["clip".to_string(), "key:KeyV".to_string()]);
+
+    // 被连方这边粘贴：小的直接有，大图和文件现传
+    let source = host_clip.written().unwrap();
+    let (text, png, files) = tokio::task::spawn_blocking(move || {
+        (source.format("text").unwrap(), source.format("png").unwrap(), source.download().unwrap())
+    })
+    .await
+    .unwrap();
+    assert_eq!(text, "本机复制的".as_bytes());
+    assert_eq!(png, big);
+    // 只有名字的格式：粘贴时才读
+    let source = host_clip.written().unwrap();
+    let lazy = tokio::task::spawn_blocking(move || source.format("mac:com.example.lazy").unwrap()).await.unwrap();
+    assert_eq!(lazy, b"lazy");
+    assert_eq!(files.len(), 1);
+    assert!(files[0].ends_with("folder"));
+    assert_eq!(std::fs::read(files[0].join("a.txt")).unwrap(), b"hello");
+    assert_eq!(std::fs::read(files[0].join("sub/b.bin")).unwrap(), big);
+    assert!(files[0].join("empty").is_dir());
+
+    // 被连方原有的、刚放进来的观看方的，都不发回去
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(offers.try_recv().is_err(), "不该发回去");
+
+    // 被连方在画面里复制了：清单发给观看方，大的粘贴时现要
+    let rtf: Vec<u8> = (0..700_000u32).map(|i| (i % 7) as u8).collect();
+    host_clip.copy(ClipContent { formats: vec![("text".into(), Some(b"from host".to_vec())), ("rtf".into(), Some(rtf.clone()))], files: vec![] });
+    let offer = timeout(Duration::from_secs(3), offers.recv()).await.unwrap().unwrap();
+    assert_eq!(offer.format("text").unwrap().data.as_deref(), Some(&b"from host"[..]));
+    let (sync, fetch) = (vclip.sync.clone(), vclip.fetcher());
+    tokio::task::spawn_blocking(move || sync.apply(offer, fetch)).await.unwrap().unwrap();
+    let source = viewer_clip.written().unwrap();
+    let got = tokio::task::spawn_blocking(move || source.format("rtf").unwrap()).await.unwrap();
+    assert_eq!(got, rtf);
+    // 观看方刚放进来的不再发回去
+    assert!(vclip_poll(&vclip).await.is_none());
+
+    sender.abort();
+    pump.abort();
+    n.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // 只给看：不互通
+    let fake = Arc::new(Fake { clip: Some(Arc::new(FakeClip::default())), ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+    let (started, _input, _output) = n.remote.open_screen(ScreenOpen { control: true, clipboard: true, ..Default::default() }).await.unwrap();
+    assert!(!started.clipboard);
+    n.shutdown().await;
+
+    // 观看方没要（老版本）：不互通
+    let fake = Arc::new(Fake { clip: Some(Arc::new(FakeClip::default())), ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (started, _input, _output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
+    assert!(!started.clipboard);
+    n.shutdown().await;
 }

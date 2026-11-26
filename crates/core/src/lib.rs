@@ -36,6 +36,7 @@ pub mod tmux_control;
 pub mod rdv_ws;
 pub mod rendezvous;
 pub mod screen;
+pub mod screen_clip;
 pub mod store;
 pub mod sessions;
 mod session_diagnostics;

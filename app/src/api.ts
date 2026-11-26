@@ -338,6 +338,8 @@ export interface ScreenStarted {
   display: string;
   control: boolean;
   control_note?: string | null;
+  /** 对方同意互通剪贴板；老版本没有这项 */
+  clipboard?: boolean;
 }
 
 export interface ScreenVideoConfig {
@@ -723,9 +725,11 @@ export const api = {
     };
     // 认得解码配置里的范围、色域标记；屏幕是广色域就请对方按 P3 传
     const wideGamut = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches && supportsP3Video();
-    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, events });
+    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, clipboard: true, events });
   },
-  screenSend: (screenId: number, msgs: ScreenViewerMsg[]) => invoke<void>("screen_send", { screenId, msgs }),
+  /** clipboard：先看一眼本机剪贴板，变了就先把清单发过去，再发这批消息 */
+  screenSend: (screenId: number, msgs: ScreenViewerMsg[], clipboard = false) => invoke<void>("screen_send", { screenId, msgs, clipboard }),
+  screenSetClipboard: (screenId: number, on: boolean) => invoke<void>("screen_set_clipboard", { screenId, on }),
   screenClose: (screenId: number) => invoke<void>("screen_close", { screenId }),
   /** 每 5 秒报一次本机解码的情况，记进日志排查卡顿 */
   screenReport: (screenId: number, decoded: number, errors: number, queue: number, hardware: boolean, seconds: number) =>

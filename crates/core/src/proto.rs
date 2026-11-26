@@ -176,6 +176,9 @@ pub enum Msg {
     /// 远程画面：看对方的屏幕（可以操作）。对方同意后回 ScreenStarted，之后这条流按 screen 模块的格式走。需要 screen_v1
     ScreenOpen { open: crate::screen::ScreenOpen },
     ScreenStarted { started: crate::screen::ScreenStarted },
+    /// 远程控制时剪贴板里的内容（文件、大图片……），粘贴时才传。观看方开，被连方按 token 找到那一路画面。
+    /// 只在 ScreenStarted.clipboard 为真时用
+    ScreenClip { req: crate::screen_clip::ClipStreamReq },
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,

@@ -24,7 +24,8 @@ objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-screen-capture-kit = "0.3"
 # 读整个系统当前的鼠标指针样子
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSGraphicsContext", "objc2-core-graphics", "objc2-core-foundation"] }
+# 剪贴板互通：NSPasteboard、粘贴时才传的数据提供者，TIFF 换 PNG
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSGraphicsContext", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "objc2-core-graphics", "objc2-core-foundation"] }
 block2 = "0.6"
 dispatch2 = "0.3"
 # 4:4:4：在 GPU 上把 BGRA 画面排成三倍高的灰度图
@@ -70,7 +71,22 @@ windows = { version = "0.62", features = [
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # 剪贴板互通：读剪贴板、OLE 剪贴板（粘贴时才传）、虚拟文件
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
 ] }
+# 剪贴板里的位图（DIB）和 PNG 互换
+png = "0.18"
+# 实现 COM 接口（剪贴板的 IDataObject、文件流 IStream）的宏要直接引它
+windows-core = "0.62"
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+
+# 真的系统剪贴板的测试：macOS 的数据提供者在主线程上被调，自己写 main 跑 run loop
+[[test]]
+name = "clip_mac"
+harness = false

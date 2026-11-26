@@ -4586,10 +4586,12 @@ dependencies = [
  "objc2-screen-capture-kit",
  "objc2-video-toolbox",
  "p2pcli-core",
+ "png",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "windows",
+ "windows-core",
 ]
 
 [[package]]
