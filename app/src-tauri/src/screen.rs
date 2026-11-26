@@ -386,6 +386,11 @@ pub(crate) async fn screen_open(
     );
     if let Some(clip) = &clip {
         spawn_clip_poll(clip.clone(), tx.downgrade());
+        // 剪贴板内容走中继传：窗口里提示会比较慢
+        let events = events.clone();
+        clip.on_relay(move || {
+            let _ = events.send(json_event(&serde_json::json!({ "t": "notice", "kind": "clip_relay" })));
+        });
     }
     // 对方的剪贴板清单按到达的先后放进本机剪贴板
     let (apply_tx, mut apply_rx) = mpsc::unbounded_channel::<p2pcli_core::screen_clip::ClipOffer>();

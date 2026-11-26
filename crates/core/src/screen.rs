@@ -929,7 +929,7 @@ where
     let clip = match backend.clipboard() {
         Some(platform) if open.clipboard && control => {
             let sync = tokio::task::spawn_blocking(move || crate::screen_clip::ClipSync::new(platform, tokio::runtime::Handle::current(), false)).await?;
-            let clip = crate::screen_clip::HostClip::register(conn.remote_id(), sync, clip_tx.clone());
+            let clip = crate::screen_clip::HostClip::register(conn.clone(), sync, clip_tx.clone());
             clip.spawn_poll();
             Some(clip)
         }

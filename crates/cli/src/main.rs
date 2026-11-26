@@ -186,6 +186,8 @@ async fn transfer(dir: &Path, request: Request, verb: Verb, json: bool) -> Resul
     let started = Instant::now();
     let (mut done, mut err) = (None::<Transfer>, None);
     let (mut waiting_since, mut hinted) = (None::<Instant>, false);
+    // 走中继时提示一次：中继只是兜底，会比较慢
+    let mut relay_hinted = false;
     control::request(dir, &request, |reply| match reply {
         Reply::Progress { transfer } => match transfer.state {
             // 连接中也提示：用终端连接认证的操作，对方可能要点同意
@@ -196,9 +198,18 @@ async fn transfer(dir: &Path, request: Request, verb: Verb, json: bool) -> Resul
                     hinted = true;
                 }
             }
-            TransferState::Running if tty => {
-                eprint!("\r\x1b[K{}", progress_line(&transfer, started.elapsed(), verb));
-                let _ = std::io::stderr().flush();
+            TransferState::Running => {
+                if transfer.relay && !relay_hinted && !json {
+                    relay_hinted = true;
+                    if tty {
+                        eprint!("\r\x1b[K");
+                    }
+                    eprintln!("现在走的是中继，会比较慢；直连接通后会自动切过去");
+                }
+                if tty {
+                    eprint!("\r\x1b[K{}", progress_line(&transfer, started.elapsed(), verb));
+                    let _ = std::io::stderr().flush();
+                }
             }
             _ => {}
         },
@@ -329,7 +340,8 @@ fn progress_line(t: &Transfer, elapsed: Duration, verb: Verb) -> String {
     let percent = (t.done * 100).checked_div(t.total).unwrap_or(100);
     let speed = t.done as f64 / elapsed.as_secs_f64().max(0.1);
     let what = if verb == Verb::Pull { "拉取中" } else { "发送中" };
-    format!("{what} {percent}%  {} / {}  {}/s", size(t.done), size(t.total), size(speed as u64))
+    let relay = if t.relay { "  经中继，较慢" } else { "" };
+    format!("{what} {percent}%  {} / {}  {}/s{relay}", size(t.done), size(t.total), size(speed as u64))
 }
 
 fn print_devices(devices: &[KnownDevice]) {

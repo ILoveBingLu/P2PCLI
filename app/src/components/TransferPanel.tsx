@@ -37,7 +37,8 @@ export function TransferRow({ transfer, onDismiss }: { transfer: Transfer; onDis
     running:
       `${percent}% · ${formatSize(transfer.done)} / ${formatSize(transfer.total)}` +
       (speed != null ? ` · ${formatSize(speed)}/s` : "") +
-      ((transfer.lanes ?? 0) > 1 ? t(" · {{lanes}} 条并发", { lanes: transfer.lanes }) : ""),
+      ((transfer.lanes ?? 0) > 1 ? t(" · {{lanes}} 条并发", { lanes: transfer.lanes }) : "") +
+      (transfer.relay ? t(" · 经中继，较慢") : ""),
     done: send ? t("已发到 {{peer_name}}，{{value}}", { peer_name: transfer.peer_name, value: formatSize(transfer.total) }) : t("已收到，{{value}}", { value: formatSize(transfer.total) }),
     failed: transfer.error ?? t("失败"),
   }[transfer.state];

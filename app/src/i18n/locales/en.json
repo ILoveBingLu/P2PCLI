@@ -1301,5 +1301,7 @@
   "这是本机，不用反向转发": "This is this computer; no reverse forwarding needed",
   "现在走的是中继，转发能用但会比较慢；直连接通后会自动切过去": "The connection is going through a relay. Forwarding works but will be slower; it switches to a direct connection automatically once one is available",
   "线路：{{path}}": "Connection: {{path}}",
-  "中继只是兜底，转发和借网能用但会比较慢；直连接通后自动切过去": "Relays are only a fallback. Forwarding and proxy sharing work but will be slower; it switches to a direct connection automatically once one is available"
+  "中继只是兜底，转发和借网能用但会比较慢；直连接通后自动切过去": "Relays are only a fallback. Forwarding and proxy sharing work but will be slower; it switches to a direct connection automatically once one is available",
+  "剪贴板里的内容正在经中继传，会比较慢；直连接通后会自动切过去": "Clipboard content is going through a relay and will be slower; it switches to a direct connection automatically once one is available",
+  " · 经中继，较慢": " · via relay, slower"
 }

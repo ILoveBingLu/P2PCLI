@@ -615,6 +615,7 @@ impl Files {
             finished_at: None,
             lanes,
             diag: String::new(),
+            relay: false,
         });
         info!(remote = %remote.fmt_short(), %name, files = entries.len(), total, lanes, resumed, "开始并发分段收文件");
 

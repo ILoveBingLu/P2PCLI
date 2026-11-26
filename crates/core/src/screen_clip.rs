@@ -552,6 +552,8 @@ impl ClipSource for RemoteSource {
 /// 被连方这一路画面的剪贴板：观看方开来的内容流按 token 找到它
 pub struct HostClip {
     remote: iroh::EndpointId,
+    /// 这一路画面的连接：要观看方的内容前看一眼线路，直连优先
+    conn: iroh::endpoint::Connection,
     pub sync: Arc<ClipSync>,
     token: u64,
     next_req: AtomicU64,
@@ -563,14 +565,15 @@ pub struct HostClip {
 static HOST_CLIPS: Mutex<Option<HashMap<u64, Weak<HostClip>>>> = Mutex::new(None);
 
 impl HostClip {
-    pub fn register(remote: iroh::EndpointId, sync: Arc<ClipSync>, out: mpsc::UnboundedSender<crate::screen::HostMsg>) -> Arc<Self> {
+    pub fn register(conn: iroh::endpoint::Connection, sync: Arc<ClipSync>, out: mpsc::UnboundedSender<crate::screen::HostMsg>) -> Arc<Self> {
+        let remote = conn.remote_id();
         let token = loop {
             let t: u64 = rand::random();
             if t != 0 {
                 break t;
             }
         };
-        let clip = Arc::new(Self { remote, sync, token, next_req: AtomicU64::new(1), pending: Mutex::new(HashMap::new()), out });
+        let clip = Arc::new(Self { remote, conn, sync, token, next_req: AtomicU64::new(1), pending: Mutex::new(HashMap::new()), out });
         HOST_CLIPS.lock().unwrap().get_or_insert_with(HashMap::new).insert(token, Arc::downgrade(&clip));
         clip
     }
@@ -628,6 +631,11 @@ impl ClipFetch for HostFetch {
         let clip = self.0.upgrade();
         Box::pin(async move {
             let clip = clip.ok_or_else(|| anyhow!("远程画面已经结束了，对方剪贴板里的内容拿不到了"))?;
+            // 直连优先：要传的是大内容或文件，还在中继上的话先等一会儿直连
+            let path = crate::path::wait_direct(&clip.conn, crate::path::DIRECT_WAIT).await;
+            if path.kind == crate::path::PathKind::Relay {
+                info!("要观看方剪贴板里的内容时还没有直连，走中继");
+            }
             let req = clip.next_req.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = oneshot::channel();
             clip.pending.lock().unwrap().insert(req, tx);
@@ -681,11 +689,49 @@ pub struct ViewerClip {
     token: u64,
     /// 观看窗口里关掉了互通
     pub enabled: AtomicBool,
+    /// 剪贴板内容走中继时提示一下观看的人（中继只是兜底，会比较慢）
+    notice: Arc<RelayNotice>,
+}
+
+/// 走中继时的提示：同一路画面十秒内只提示一次
+#[derive(Default)]
+struct RelayNotice {
+    callback: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    last: Mutex<Option<std::time::Instant>>,
+}
+
+impl RelayNotice {
+    /// 等过直连以后还是中继就提示
+    fn check(&self, path: &crate::path::PathInfo) {
+        if path.kind != crate::path::PathKind::Relay {
+            return;
+        }
+        info!("剪贴板内容走中继传");
+        let mut last = self.last.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(10)) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+        if let Some(cb) = self.callback.lock().unwrap().as_ref() {
+            cb();
+        }
+    }
 }
 
 impl ViewerClip {
     pub fn new(platform: Arc<dyn ClipPlatform>, remote: Arc<crate::client::RemoteHost>, token: u64) -> Arc<Self> {
-        Arc::new(Self { sync: ClipSync::new(platform, Handle::current(), true), remote, token, enabled: AtomicBool::new(true) })
+        Arc::new(Self {
+            sync: ClipSync::new(platform, Handle::current(), true),
+            remote,
+            token,
+            enabled: AtomicBool::new(true),
+            notice: Arc::default(),
+        })
+    }
+
+    /// 剪贴板内容走中继时调它（界面上提示会比较慢）；十秒内只调一次
+    pub fn on_relay(&self, callback: impl Fn() + Send + Sync + 'static) {
+        *self.notice.callback.lock().unwrap() = Some(Box::new(callback));
     }
 
     pub fn enabled(&self) -> bool {
@@ -693,11 +739,13 @@ impl ViewerClip {
     }
 
     pub fn fetcher(&self) -> Arc<dyn ClipFetch> {
-        Arc::new(ViewerFetch { remote: self.remote.clone(), token: self.token })
+        Arc::new(ViewerFetch { remote: self.remote.clone(), token: self.token, notice: self.notice.clone() })
     }
 
     /// 被连方要本机剪贴板里的内容：开一条流送过去
     pub async fn put(&self, req: u64, offer: u64, what: ClipWhat) -> Result<()> {
+        // 直连优先：还在中继上的话先等一会儿直连，等不到就走中继并提示
+        self.notice.check(&self.remote.wait_direct(crate::path::DIRECT_WAIT).await);
         let (mut send, _recv) = self.remote.open_stream(&crate::proto::Msg::ScreenClip { req: ClipStreamReq::Put { token: self.token, req } }).await?;
         let _ = send.set_priority(CLIP_PRIORITY);
         self.sync.serve(offer, what, &mut send).await?;
@@ -711,13 +759,17 @@ impl ViewerClip {
 struct ViewerFetch {
     remote: Arc<crate::client::RemoteHost>,
     token: u64,
+    notice: Arc<RelayNotice>,
 }
 
 impl ClipFetch for ViewerFetch {
     fn fetch(&self, offer: u64, what: ClipWhat) -> BoxFuture<Result<Box<dyn AsyncRead + Send + Unpin>>> {
         let remote = self.remote.clone();
         let req = ClipStreamReq::Get { token: self.token, offer, what };
+        let notice = self.notice.clone();
         Box::pin(async move {
+            // 直连优先：还在中继上的话先等一会儿直连，等不到就走中继并提示
+            notice.check(&remote.wait_direct(crate::path::DIRECT_WAIT).await);
             let (mut send, recv) = remote.open_stream(&crate::proto::Msg::ScreenClip { req }).await?;
             let _ = send.finish();
             Ok(Box::new(recv) as Box<dyn AsyncRead + Send + Unpin>)

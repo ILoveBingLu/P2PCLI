@@ -397,6 +397,8 @@ export type ScreenStreamEvent =
   | { t: "config"; config: ScreenVideoConfig }
   | { t: "host"; msg: ScreenHostMsg }
   | { t: "closed"; reason: string | null }
+  /** 提示：剪贴板内容走中继传（中继只是兜底，会比较慢） */
+  | { t: "notice"; kind: "clip_relay" }
   | { t: "frame"; key: boolean; seq: number; data: Uint8Array };
 
 export type PresenceState = "checking" | "online" | "offline" | "old_version";
@@ -464,6 +466,8 @@ export interface Transfer {
   lanes?: number;
   /** 并发分段传输的诊断：往返延迟、丢包、时间花在读盘还是等网络上，查慢的时候看 */
   diag?: string;
+  /** 现在走的是中继（直连优先，中继只是兜底，会比较慢） */
+  relay?: boolean;
 }
 
 /** 终端里用的命令行工具 p2pcli */

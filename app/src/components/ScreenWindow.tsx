@@ -23,6 +23,7 @@ import {
   type ScreenViewerMsg,
 } from "../api";
 import { Button } from "@/components/ui/button";
+import { Toaster, toast } from "@/components/ui/toast";
 import { ConnectionCard, Row, Section } from "./ConnectionCard";
 import { t } from "@/i18n";
 import { Yuv444Renderer, canRender444 } from "./yuv444";
@@ -467,6 +468,10 @@ export default function ScreenWindow() {
         else if (ev.msg.t === "cursor") setRemoteCursor({ x: ev.msg.x, y: ev.msg.y, visible: ev.msg.visible });
         else if (ev.msg.t === "cursor_shape") setLook(cursorLook(ev.msg.shape));
         return;
+      case "notice":
+        // 剪贴板内容走中继传：中继只是兜底，会比较慢
+        if (ev.kind === "clip_relay") toast.notice(t("剪贴板里的内容正在经中继传，会比较慢；直连接通后会自动切过去"));
+        return;
       case "closed":
         screenId.current = null;
         resetDecoder();
@@ -880,6 +885,7 @@ export default function ScreenWindow() {
           </div>
         )}
       </div>
+      <Toaster />
     </div>
   );
 }

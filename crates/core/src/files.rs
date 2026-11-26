@@ -145,6 +145,9 @@ pub struct Transfer {
     /// 并发分段传输的诊断：往返延迟、丢包、时间花在读盘还是等网络上，查慢的时候看
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub diag: String,
+    /// 现在走的是中继（直连优先，中继只是兜底，会比较慢）。发起的一方传的过程中会跟着线路更新
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relay: bool,
 }
 
 impl Transfer {
@@ -328,6 +331,7 @@ impl Files {
             finished_at: None,
             lanes: 0,
             diag: String::new(),
+            relay: false,
         });
         id
     }
@@ -344,8 +348,37 @@ impl Files {
     async fn send_inner(&self, id: &str, endpoint: &Endpoint, addr: EndpointAddr, me: &DeviceInfo, paths: Vec<PathBuf>) -> Result<(String, Vec<String>)> {
         let list = self.list_for(id, paths).await?;
         let conn = self.connection(endpoint, addr).await?;
+        // 直连优先：刚连上还在中继上的话先等一会儿直连
+        let path = crate::path::wait_direct(&conn, crate::path::DIRECT_WAIT).await;
+        self.note_path(id, path.kind);
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        self.send_batch(id, &mut send, &mut recv, me, list, Some(&conn)).await
+        let batch = self.send_batch(id, &mut send, &mut recv, me, list, Some(&conn));
+        self.watch_path(id, || crate::path::current(&conn).kind, batch).await
+    }
+
+    /// 记下现在是不是走中继，界面上提示会比较慢
+    fn note_path(&self, id: &str, kind: crate::path::PathKind) {
+        let relay = kind == crate::path::PathKind::Relay;
+        if relay {
+            info!(id, "传文件时还没有直连，先走中继");
+        }
+        self.update(id, |t| t.relay = relay);
+    }
+
+    /// 传的过程中每两秒看一眼线路：中继切到直连以后不再提示慢
+    async fn watch_path<T>(&self, id: &str, path: impl Fn() -> crate::path::PathKind, work: impl std::future::Future<Output = T>) -> T {
+        tokio::pin!(work);
+        let mut tick = tokio::time::interval(Duration::from_secs(2));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                out = &mut work => return out,
+                _ = tick.tick() => {
+                    let relay = path() == crate::path::PathKind::Relay;
+                    self.update(id, |t| t.relay = relay);
+                }
+            }
+        }
     }
 
     /// 把本机的文件推到对方电脑上指定的目录（目录在对方电脑上，不存在会建，同名文件会被盖掉）。
@@ -353,8 +386,11 @@ impl Files {
     pub async fn run_put(&self, id: &str, remote: &RemoteHost, me: &DeviceInfo, paths: Vec<PathBuf>, dest: String) -> Transfer {
         let result = async {
             let list = self.list_for(id, paths).await?;
+            // 直连优先：刚连上还在中继上的话先等一会儿直连
+            self.note_path(id, remote.wait_direct(crate::path::DIRECT_WAIT).await.kind);
             let (mut send, mut recv) = remote.open_stream(&Msg::PutFiles { dest }).await?;
-            self.send_batch(id, &mut send, &mut recv, me, list, None).await
+            let batch = self.send_batch(id, &mut send, &mut recv, me, list, None);
+            self.watch_path(id, || remote.path().kind, batch).await
         }
         .await;
         if let Err(e) = &result {
@@ -477,6 +513,13 @@ impl Files {
     }
 
     async fn pull_inner(&self, id: &str, remote: &RemoteHost, paths: Vec<String>, to: PathBuf) -> Result<(String, Vec<String>)> {
+        // 直连优先：刚连上还在中继上的话先等一会儿直连
+        self.note_path(id, remote.wait_direct(crate::path::DIRECT_WAIT).await.kind);
+        let pull = self.pull_batch(id, remote, paths, to);
+        self.watch_path(id, || remote.path().kind, pull).await
+    }
+
+    async fn pull_batch(&self, id: &str, remote: &RemoteHost, paths: Vec<String>, to: PathBuf) -> Result<(String, Vec<String>)> {
         let (mut send, mut recv) = remote.open_stream(&Msg::GetFiles { paths }).await?;
         // 对方要先把文件夹走一遍列出清单，文件多时要等一会儿
         let first = timeout(Duration::from_secs(120), read_json::<_, FileMsg>(&mut recv))
@@ -709,6 +752,7 @@ impl Files {
                     finished_at: None,
                     lanes: 0,
                     diag: String::new(),
+                    relay: false,
                 });
                 id
             }
