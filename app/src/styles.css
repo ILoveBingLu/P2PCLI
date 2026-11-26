@@ -2767,6 +2767,7 @@ img.agent-icon {
 .ports-device { color: var(--muted-foreground); font-size: 12px; }
 .ports-note { color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
 .ports-note.is-error { color: var(--danger); }
+.ports-note.is-warn { color: var(--warning); }
 .ports-section { display: flex; flex-direction: column; gap: 2px; }
 .ports-section h3 {
   display: flex;

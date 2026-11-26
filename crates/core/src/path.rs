@@ -178,6 +178,27 @@ impl PathKind {
             PathKind::Unknown => "连接中",
         }
     }
+
+    /// 直连（或本机自己），不是中继、也不是还没选好路
+    pub fn is_direct(self) -> bool {
+        matches!(self, PathKind::Ipv6 | PathKind::Ipv4 | PathKind::Local)
+    }
+}
+
+/// 大流量开始前最多等多久直连：刚连上时常常先在中继上，几秒内打洞成功再切到直连
+pub const DIRECT_WAIT: Duration = Duration::from_secs(3);
+
+/// 直连优先、中继兜底：现在在中继上（或还没选好路）的话，最多等 max 看直连能不能接通，返回等完时的线路。
+/// 给大流量、持续流量的功能（端口转发、借网、传大内容）开始前用；等不到直连照样返回，调用方接着走中继并提示
+pub async fn wait_direct(conn: &Connection, max: Duration) -> PathInfo {
+    let deadline = tokio::time::Instant::now() + max;
+    loop {
+        let info = current(conn);
+        if info.kind.is_direct() || tokio::time::Instant::now() >= deadline {
+            return info;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

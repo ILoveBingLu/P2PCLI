@@ -414,7 +414,8 @@ impl SessionManager {
     }
 
     #[cfg(feature = "host")]
-    pub async fn attach(&self, owner: &str, requested: Option<&str>, cols: u16, rows: u16) -> Result<(CommandBuilder, String)> {
+    /// env：新建会话时额外加的环境变量（借网时的代理）；恢复已有的会话时用不上，里面的 shell 早就起来了
+    pub async fn attach(&self, owner: &str, requested: Option<&str>, cols: u16, rows: u16, env: &[(String, String)]) -> Result<(CommandBuilder, String)> {
         let _gate = self.gate.lock().await;
         let id = requested.map(str::to_string).unwrap_or_else(|| format!("{:032x}", rand::random::<u128>()));
         let name = Self::name(owner, &id)?;
@@ -428,7 +429,17 @@ impl SessionManager {
         } else {
             let cols = cols.max(2).to_string();
             let rows = rows.max(2).to_string();
-            self.checked(&["new-session", "-d", "-s", &name, "-x", &cols, "-y", &rows]).await?;
+            let base = ["new-session", "-d", "-s", &name, "-x", &cols, "-y", &rows];
+            let with_env: Vec<String> = env.iter().flat_map(|(k, v)| ["-e".to_string(), format!("{k}={v}")]).collect();
+            let mut args: Vec<&str> = base.to_vec();
+            args.extend(with_env.iter().map(String::as_str));
+            if env.is_empty() || self.checked(&args).await.is_err() {
+                // 老 tmux（3.2 以前）、psmux 不认 -e：不带环境变量照样建
+                if !env.is_empty() {
+                    tracing::warn!(namespace = %self.namespace, terminal = %name, "会话管理器不支持 -e，这个会话不走借来的代理");
+                }
+                self.checked(&base).await?;
+            }
             self.health.lock().unwrap().sessions.insert(name.clone(), String::new());
             tracing::info!(namespace = %self.namespace, terminal = %name, "后台会话已创建");
             // Per-session options only: never change the user's unrelated tmux sessions.

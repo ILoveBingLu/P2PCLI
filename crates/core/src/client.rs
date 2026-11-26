@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, Msg, RejectCode, SessionOwner, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, REVERSE_FORWARD_V1, Frame, Msg, RejectCode, SessionOwner, TerminalSession, read_frame, read_msg, write_data, write_msg};
 #[cfg(feature = "host")]
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
@@ -117,7 +117,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into(), crate::screen::SCREEN_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into(), REVERSE_FORWARD_V1.into(), crate::screen::SCREEN_V1.into()],
         },
     )
     .await?;
@@ -532,6 +532,18 @@ impl RemoteHost {
         }
     }
 
+    /// 对方支不支持反向端口转发（借网）
+    pub fn supports_reverse_forward(&self) -> bool {
+        matches!(&self.link, Link::Net { capabilities, .. } if capabilities.iter().any(|c| c == REVERSE_FORWARD_V1))
+    }
+
+    pub(crate) fn require_reverse_forward(&self) -> Result<()> {
+        if !self.supports_reverse_forward() {
+            bail!("对方的 P2PCLI 版本较旧，不支持反向端口转发，请更新对方的 P2PCLI");
+        }
+        Ok(())
+    }
+
     fn require_port_forward(&self) -> Result<()> {
         if let Link::Net { capabilities, .. } = &self.link
             && !capabilities.iter().any(|c| c == PORT_FORWARD_V1)
@@ -651,6 +663,14 @@ impl RemoteHost {
         }
     }
 
+    /// 直连优先：在中继上的话最多等 max 看直连能不能接通（见 [`path::wait_direct`]）
+    pub async fn wait_direct(&self, max: Duration) -> PathInfo {
+        match &self.link {
+            Link::Net { conn, .. } => path::wait_direct(conn, max).await,
+            Link::Local { .. } => self.path(),
+        }
+    }
+
     pub fn path(&self) -> PathInfo {
         match &self.link {
             Link::Net { conn, .. } => path::current(conn),
@@ -699,7 +719,7 @@ async fn open_local(
         None => (owner, None),
     };
     let attachment = if persistent {
-        match host.terminals.attach(target, requested, cols, rows).await {
+        match host.terminals.attach(target, requested, cols, rows, &[]).await {
             Ok((cmd, id)) => {
                 let via = if control && !cfg!(windows) { Some(host.terminals.control_target(target, &id)?) } else { None };
                 // 别的设备开的会话：回给界面的编号和列表里一样，带着设备公钥
@@ -723,7 +743,7 @@ async fn open_local(
         let result = match attachment {
             Some((_, id, Some(via))) => crate::tmux_control::serve_control(host_r, &mut host_w, cols, rows, via, id).await,
             Some((cmd, id, None)) => serve_session(host_r, &mut host_w, cols, rows, cmd, id).await,
-            None => serve_terminal(host_r, &mut host_w, cols, rows).await,
+            None => serve_terminal(host_r, &mut host_w, cols, rows, &[]).await,
         };
         if let Err(e) = result {
             let _ = write_msg(&mut host_w, &Msg::Error { message: format!("{e:#}") }).await;

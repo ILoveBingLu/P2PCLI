@@ -211,6 +211,9 @@ export interface LspOpened { lsp_id: number; server: string; root: string }
 export interface ListeningPort { port: number; process?: string; pid?: number }
 /** 一个正在进行的端口转发：对方的 remote_port 接到了本机的 local_port */
 export interface ForwardView { id: number; conn_id: number; remote_port: number; local_port: number; connections: number }
+export type ProxyKind = "http" | "socks5";
+/** 反向端口转发：本机的 target 接到对方电脑的 127.0.0.1:remote_port；proxy 有值时是借网 */
+export interface ReverseView { id: number; conn_id: number; remote_port: number; target: string; proxy: ProxyKind | null; connections: number }
 export type LspEventView = { kind: "message"; message: string } | { kind: "closed"; reason: string | null };
 
 export interface OpenedTerminal { term_id: number; session_id: string }
@@ -686,6 +689,11 @@ export const api = {
   forwardPort: (connId: number, remotePort: number, localPort?: number) => invoke<ForwardView>("forward_port", { connId, remotePort, localPort: localPort ?? null }),
   stopForward: (id: number) => invoke<void>("stop_forward", { id }),
   portForwards: () => invoke<ForwardView[]>("port_forwards"),
+  reverseInfo: (connId: number) => invoke<{ supported: boolean; proxy: string | null }>("reverse_info", { connId }),
+  reverseForward: (connId: number, target: string, proxy: ProxyKind | null, remotePort?: number) =>
+    invoke<ReverseView>("reverse_forward", { connId, target, proxy, remotePort: remotePort ?? null }),
+  stopReverse: (id: number) => invoke<void>("stop_reverse", { id }),
+  reverseForwards: () => invoke<ReverseView[]>("reverse_forwards"),
   /** 在浏览器里打开转发过来的端口，path 是 / 开头的路径 */
   openForward: (id: number, path = "/", https = false) => invoke<void>("open_forward", { id, path, https }),
   /** 本机自己的服务，不用转发 */

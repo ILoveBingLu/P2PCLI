@@ -27,6 +27,7 @@ import {
   type ScreenRequest,
   type ScreenSettings,
   type ForwardView,
+  type ReverseView,
   type HostEvent,
   type IncomingRequest,
   type Overview,
@@ -254,14 +255,17 @@ export default function App() {
   };
   // 端口转发：后端按连接记，这里只拿来显示；有转发时隔几秒刷新一下连接数，连接断了也会跟着消失
   const [forwards, setForwards] = useState<ForwardView[]>([]);
+  // 反向转发（本机的端口接到对方电脑上，借网也是它）
+  const [reverses, setReverses] = useState<ReverseView[]>([]);
   const refreshForwards = useCallback(() => {
     void api.portForwards().then((list) => setForwards((old) => JSON.stringify(old) === JSON.stringify(list) ? old : list)).catch(() => {});
+    void api.reverseForwards().then((list) => setReverses((old) => JSON.stringify(old) === JSON.stringify(list) ? old : list)).catch(() => {});
   }, []);
   useEffect(() => {
-    if (!forwards.length) return;
+    if (!forwards.length && !reverses.length) return;
     const timer = window.setInterval(refreshForwards, 3000);
     return () => window.clearInterval(timer);
-  }, [forwards.length, refreshForwards]);
+  }, [forwards.length, reverses.length, refreshForwards]);
   const isLocalTab = (tab: Tab) => tab.connId === ov?.local?.conn_id;
   /** 终端里 ⌘/Ctrl+点击了 http://localhost:5173/ 这种：对方电脑上的端口先转发到本机，再用浏览器打开 */
   const openUrlFromTerminal = async (tab: Tab, url: FoundUrl) => {
@@ -1063,7 +1067,8 @@ export default function App() {
                   </Button>
                   {!isLocalTab(activeTab) && (
                     <PortForwards connId={activeTab.connId} deviceName={activeTab.info.name}
-                      forwards={forwards.filter((f) => f.conn_id === activeTab.connId)} onChanged={refreshForwards} />
+                      forwards={forwards.filter((f) => f.conn_id === activeTab.connId)}
+                      reverses={reverses.filter((f) => f.conn_id === activeTab.connId)} onChanged={refreshForwards} />
                   )}
                 </div>
               )}

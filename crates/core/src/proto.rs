@@ -23,6 +23,8 @@ pub const REMOTE_LSP_V1: &str = "remote_lsp_v1";
 pub const PORT_FORWARD_V1: &str = "port_forward_v1";
 /// 编辑器的 Git 面板：暂存、提交、推送、拉取、提交记录
 pub const GIT_V1: &str = "git_v1";
+/// 反向端口转发：把本机的端口接到对方电脑的 127.0.0.1 上，借网给对方
+pub const REVERSE_FORWARD_V1: &str = "reverse_forward_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -173,6 +175,17 @@ pub enum Msg {
     /// 端口转发：对方连它自己 localhost 上的这个端口，回 PortOpened 以后这条流上就是原样的 TCP 字节
     ForwardPort { port: u16 },
     PortOpened,
+    /// 反向端口转发（见 reverse 模块）：对方在它的 127.0.0.1:port 上监听（0 是随便挑），回 ReverseListening；
+    /// 这条流一直连着，每来一个连接对方发 ReverseIncoming。proxy 有值时是借网：对方给这条连接之后新开的终端加代理环境变量
+    ReverseForward {
+        port: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proxy: Option<crate::reverse::ProxyKind>,
+    },
+    ReverseListening { port: u16, token: u64 },
+    ReverseIncoming { id: u64 },
+    /// 接上反向转发等着的某个连接：对方回 PortOpened 以后这条流上就是原样的 TCP 字节
+    ReverseConnect { token: u64, id: u64 },
     /// 远程画面：看对方的屏幕（可以操作）。对方同意后回 ScreenStarted，之后这条流按 screen 模块的格式走。需要 screen_v1
     ScreenOpen { open: crate::screen::ScreenOpen },
     ScreenStarted { started: crate::screen::ScreenStarted },

@@ -196,6 +196,11 @@ impl Forward {
         if remote_port == 0 { bail!("端口不对"); }
         // 本机自己：直接用 localhost，转发反而会占掉同号端口、连回自己
         if remote.is_local() { bail!("这是本机，直接在浏览器里打开 localhost 就行，不用转发"); }
+        // 直连优先：刚连上还在中继上的话先等一会儿直连，等不到就走中继（界面上会提示慢）
+        let path = remote.wait_direct(crate::path::DIRECT_WAIT).await;
+        if !path.kind.is_direct() {
+            tracing::info!(remote_port, ?path.kind, "端口转发开始时还没有直连，先走中继");
+        }
         // 先试连一次：对方那个端口上没有服务就直接说，不要等浏览器打开才发现
         drop(remote.open_port(remote_port).await?);
         let wanted = local_port.unwrap_or(remote_port);

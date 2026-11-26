@@ -101,12 +101,16 @@ impl Drop for InputGuard {
 }
 
 /// 起终端并在 recv/send 上跑到结束。调用前对面已经发过 Open。
-pub async fn serve_terminal<R, W>(recv: R, send: W, cols: u16, rows: u16) -> Result<()>
+/// env：额外的环境变量（借网时的代理）
+pub async fn serve_terminal<R, W>(recv: R, send: W, cols: u16, rows: u16, env: &[(String, String)]) -> Result<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send,
 {
-    let (cmd, shell) = shell_command();
+    let (mut cmd, shell) = shell_command();
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
     serve_command(recv, send, cols, rows, cmd, shell, String::new()).await
 }
 
@@ -299,7 +303,7 @@ mod tests {
     async fn runs_real_shell() {
         let (client, server) = tokio::io::duplex(1 << 20);
         let (srv_r, srv_w) = tokio::io::split(server);
-        let task = tokio::spawn(serve_terminal(srv_r, srv_w, 100, 30));
+        let task = tokio::spawn(serve_terminal(srv_r, srv_w, 100, 30, &[]));
         let (mut cr, mut cw) = tokio::io::split(client);
 
         let Msg::Opened { shell, .. } = read_msg(&mut cr).await.unwrap() else {

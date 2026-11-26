@@ -291,6 +291,8 @@ struct AppState {
     lsps: Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>,
     /// 端口转发：编号 → (连接编号, 转发)。丢掉就停止；连接断了一起清掉
     forwards: Mutex<HashMap<u64, (u64, p2pcli_core::ports::Forward)>>,
+    /// 反向端口转发（本机的端口接到对方电脑上，借网也是它）：编号 → (连接, 转发)
+    reverses: Mutex<HashMap<u64, (u64, p2pcli_core::reverse::ReverseForward)>>,
     /// 代码编辑器窗口：窗口标签 → 它是哪台设备的、还没取走的请求（打开哪个文件、换根目录）
     editor_windows: Mutex<HashMap<String, EditorWindow>>,
     /// 正在看的远程画面：编号 → 发给对方的消息（键鼠、确认）。丢掉就停
@@ -1005,6 +1007,7 @@ async fn connect(
         let reason = watch.closed().await;
         app.state::<AppState>().remotes.lock().unwrap().remove(&conn_id);
         app.state::<AppState>().forwards.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
+        app.state::<AppState>().reverses.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
         let _ = app.emit(
             "remote-closed",
             serde_json::json!({ "conn_id": conn_id, "reason": reason }),
@@ -1037,6 +1040,7 @@ fn close_connection(state: &AppState, conn_id: u64) {
         r.close();
     }
     state.forwards.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
+    state.reverses.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
 }
 
 /// 这条连接的对方是谁：版本、系统等（远程画面窗口的连接详情用）
@@ -1253,6 +1257,72 @@ fn stop_forward(state: State<'_, AppState>, id: u64) {
 #[tauri::command]
 fn port_forwards(state: State<'_, AppState>) -> Vec<ForwardView> {
     let mut list: Vec<_> = state.forwards.lock().unwrap().iter().map(|(id, (conn, f))| forward_view(*id, *conn, f)).collect();
+    list.sort_by_key(|f| f.id);
+    list
+}
+
+#[derive(Serialize)]
+struct ReverseView {
+    id: u64,
+    conn_id: u64,
+    /// 对方电脑上监听的端口（127.0.0.1）
+    remote_port: u16,
+    /// 本机的目标，主机:端口
+    target: String,
+    /// 借网时是代理的种类
+    proxy: Option<p2pcli_core::reverse::ProxyKind>,
+    connections: usize,
+}
+
+fn reverse_view(id: u64, conn_id: u64, f: &p2pcli_core::reverse::ReverseForward) -> ReverseView {
+    ReverseView { id, conn_id, remote_port: f.remote_port, target: f.target.clone(), proxy: f.proxy, connections: f.connections() }
+}
+
+#[derive(Serialize)]
+struct ReverseInfo {
+    /// 对方支不支持反向转发
+    supported: bool,
+    /// 设置里填的代理（主机:端口），借网时默认用它
+    proxy: Option<String>,
+}
+
+#[tauri::command]
+fn reverse_info(state: State<'_, AppState>, conn_id: u64) -> Result<ReverseInfo, String> {
+    let supported = state.remote(conn_id)?.supports_reverse_forward();
+    let proxy = state.settings.lock().unwrap().proxy.as_deref().and_then(|p| p2pcli_core::proxy::parse_proxy(p).ok()).and_then(|u| {
+        let host = u.host_str()?.to_string();
+        Some(format!("{host}:{}", u.port_or_known_default()?))
+    });
+    Ok(ReverseInfo { supported, proxy })
+}
+
+/// 把本机的 target（主机:端口）接到对方电脑的 127.0.0.1 上；proxy 有值时是借网，同一条连接只借一份
+#[tauri::command]
+async fn reverse_forward(state: State<'_, AppState>, conn_id: u64, remote_port: Option<u16>, target: String, proxy: Option<p2pcli_core::reverse::ProxyKind>) -> Result<ReverseView, String> {
+    if proxy.is_some()
+        && let Some((id, (_, f))) = state.reverses.lock().unwrap().iter().find(|(_, (c, f))| *c == conn_id && f.proxy.is_some())
+    {
+        return Ok(reverse_view(*id, conn_id, f));
+    }
+    let remote = state.remote(conn_id)?;
+    let forward = p2pcli_core::reverse::ReverseForward::start(remote, remote_port.unwrap_or(0), target, proxy).await.map_err(|e| format!("{e:#}"))?;
+    let id = state.next();
+    let view = reverse_view(id, conn_id, &forward);
+    state.reverses.lock().unwrap().insert(id, (conn_id, forward));
+    Ok(view)
+}
+
+#[tauri::command]
+fn stop_reverse(state: State<'_, AppState>, id: u64) {
+    state.reverses.lock().unwrap().remove(&id);
+}
+
+/// 正在进行的反向转发；对方那边停了的顺手清掉
+#[tauri::command]
+fn reverse_forwards(state: State<'_, AppState>) -> Vec<ReverseView> {
+    let mut map = state.reverses.lock().unwrap();
+    map.retain(|_, (_, f)| !f.is_finished());
+    let mut list: Vec<_> = map.iter().map(|(id, (conn, f))| reverse_view(*id, *conn, f)).collect();
     list.sort_by_key(|f| f.id);
     list
 }
@@ -1715,6 +1785,7 @@ pub fn run() {
                 terms: Mutex::new(HashMap::new()),
                 lsps: Mutex::new(HashMap::new()),
                 forwards: Mutex::new(HashMap::new()),
+                reverses: Mutex::new(HashMap::new()),
                 editor_windows: Mutex::new(HashMap::new()),
                 screens: Mutex::new(HashMap::new()),
                 screen_windows: Mutex::new(HashMap::new()),
@@ -1974,6 +2045,10 @@ pub fn run() {
             stop_forward,
             port_forwards,
             open_forward,
+            reverse_info,
+            reverse_forward,
+            stop_reverse,
+            reverse_forwards,
             open_localhost,
             term_input,
             term_resize,

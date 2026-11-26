@@ -29,7 +29,8 @@ const DRAIN_IDLE: Duration = Duration::from_millis(500);
 
 /// 跑一条命令，输出写进 send。`recv` 上对面发任何东西或者关流，都当成取消。
 /// 返回 Ok 时 ExecExit 已经写出去了。
-pub async fn serve<R, W>(recv: &mut R, send: &mut W, command: String, cwd: Option<String>, timeout_secs: Option<u64>) -> Result<()>
+/// env：额外的环境变量（借网时的代理）
+pub async fn serve<R, W>(recv: &mut R, send: &mut W, command: String, cwd: Option<String>, timeout_secs: Option<u64>, env: &[(String, String)]) -> Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -41,6 +42,7 @@ where
         bail!("命令太长，最多 {} 字节", MAX_COMMAND_LEN);
     }
     let mut cmd = build(&command, cwd.as_deref())?;
+    cmd.envs(env.iter().map(|(k, v)| (k, v)));
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);

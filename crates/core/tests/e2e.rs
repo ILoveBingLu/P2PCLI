@@ -1459,7 +1459,7 @@ async fn local_can_continue_sessions_opened_by_other_devices() {
     let phone = phone_id.to_string();
     node.host.paired.add(&phone_id, "测试手机", "harmony").unwrap();
     // 手机开的会话：直接用会话管理器以手机的身份建一个
-    let (_cmd, phone_session) = node.host.terminals.attach(&phone, None, 80, 24).await.expect("要能建会话");
+    let (_cmd, phone_session) = node.host.terminals.attach(&phone, None, 80, 24, &[]).await.expect("要能建会话");
 
     let local = node.local_remote().await;
     let compound = format!("{phone}-{phone_session}");
@@ -2023,6 +2023,121 @@ async fn port_forward_over_connection() {
     host.shutdown().await;
 }
 
+
+/// 反向端口转发：本机的服务（这里是个回显服务）接到对方电脑的 127.0.0.1 上；借网时对方新开的命令带上代理环境变量
+#[tokio::test]
+async fn reverse_forward_and_proxy() {
+    use p2pcli_core::reverse::{ProxyKind, ReverseForward};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("rf-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("rf-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = Arc::new(guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap());
+    assert!(remote.supports_reverse_forward());
+    // 直连优先：已经是直连（本机回环）时不用等
+    let started = std::time::Instant::now();
+    assert!(remote.wait_direct(p2pcli_core::path::DIRECT_WAIT).await.kind.is_direct());
+    assert!(started.elapsed() < Duration::from_millis(500));
+
+    // “本机的服务”
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = server.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = server.accept().await {
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 64 * 1024];
+                while let Ok(n) = s.read(&mut buf).await { if n == 0 || s.write_all(&buf[..n]).await.is_err() { break; } }
+            });
+        }
+    });
+
+    // 本机目标没开：开始时就报错
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    assert!(ReverseForward::start(remote.clone(), 0, closed, None).await.is_err());
+
+    let env_of = async |name: &str| {
+        let command = if cfg!(windows) { format!("$env:{name}") } else { format!("printf %s \"${name}\"") };
+        let (out, _, _) = run_exec(&remote, &command, None, None).await.unwrap();
+        String::from_utf8_lossy(&out).trim().to_string()
+    };
+    // 对方电脑自己可能就设了代理（系统环境变量），记下来
+    let before = env_of("HTTPS_PROXY").await;
+
+    {
+        let forward = ReverseForward::start(remote.clone(), 0, target.clone(), None).await.unwrap();
+        assert_ne!(forward.remote_port, 0);
+        let echo = async |payload: Vec<u8>| {
+            // 测试里两边是同一台电脑：对方电脑上的程序连它自己的 127.0.0.1
+            let mut c = tokio::net::TcpStream::connect(("127.0.0.1", forward.remote_port)).await.unwrap();
+            let (mut r, mut w) = c.split();
+            let send = async { w.write_all(&payload).await.unwrap(); w.shutdown().await.unwrap(); };
+            let mut back = Vec::new();
+            let recv = async { r.read_to_end(&mut back).await.unwrap(); };
+            tokio::time::timeout(Duration::from_secs(20), async { tokio::join!(send, recv) }).await.unwrap();
+            assert_eq!(back, payload);
+        };
+        let big: Vec<u8> = (0..1_000_000u32).map(|i| i as u8).collect();
+        tokio::join!(echo(b"hello".to_vec()), echo(big), echo("中文".as_bytes().to_vec()));
+        // 不是借网：不加环境变量
+        assert_eq!(env_of("HTTPS_PROXY").await, before);
+        let port = forward.remote_port;
+        drop(forward);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "停止以后对方的端口应该关掉");
+    }
+
+    // 借网：之后新开的命令带上代理
+    {
+        let forward = ReverseForward::start(remote.clone(), 0, target.clone(), Some(ProxyKind::Http)).await.unwrap();
+        let want = format!("http://127.0.0.1:{}", forward.remote_port);
+        assert_eq!(env_of("HTTPS_PROXY").await, want);
+        assert_eq!(env_of("HTTP_PROXY").await, want);
+        assert!(env_of("NO_PROXY").await.contains("localhost"));
+        drop(forward);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(env_of("HTTPS_PROXY").await, before, "停了以后不再带代理");
+    }
+
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
+/// 借网：之后新建的后台会话（tmux -e、psmux）里也带上代理
+#[tokio::test]
+#[ignore = "requires tmux on macOS/Linux or psmux on Windows"]
+async fn persistent_session_gets_borrowed_proxy() {
+    use p2pcli_core::reverse::{ProxyKind, ReverseForward};
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let cfg = NodeConfig {
+        data_dir: temp_dir("rfs-host"), offline: true,
+        session_program: std::env::var_os("P2PCLI_TEST_SESSION_PROGRAM").map(std::path::PathBuf::from),
+        ..Default::default()
+    };
+    let host = Node::start(cfg, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("rfs-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+    let remote = Arc::new(guest.connect_addr(local_addr(&host), Some("abc234".into())).await.unwrap());
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = server.local_addr().unwrap().to_string();
+    let forward = ReverseForward::start(remote.clone(), 0, target, Some(ProxyKind::Http)).await.unwrap();
+    let (mut input, mut output) = remote.open_terminal(100, 30).await.unwrap();
+    #[cfg(windows)]
+    input.write(b"Write-Output ('proxy=' + $env:HTTPS_PROXY)\r").await.unwrap();
+    #[cfg(not(windows))]
+    input.write(b"printf 'proxy=%s\\n' \"$HTTPS_PROXY\"\r").await.unwrap();
+    read_until(&mut input, &mut output, &format!("proxy=http://127.0.0.1:{}", forward.remote_port)).await;
+    let id = output.session_id.clone();
+    input.close();
+    remote.end_terminal(id).await.unwrap();
+    drop(forward);
+    remote.close();
+    guest.shutdown().await;
+    host.shutdown().await;
+}
 
 /// Git 面板：经连接暂存、提交、看提交记录和领先数
 #[tokio::test]

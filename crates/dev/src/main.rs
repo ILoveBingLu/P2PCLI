@@ -129,6 +129,9 @@ enum Cmd {
         /// 跑完后再观察多少秒线路（看打洞有没有从中继切到直连）
         #[arg(long, default_value_t = 0)]
         watch: u64,
+        /// 跑之前把本机代理借给对方（主机:端口，写 socks5:// 开头是 SOCKS5），对方跑的命令走它
+        #[arg(long)]
+        borrow_proxy: Option<String>,
     },
 }
 
@@ -365,6 +368,7 @@ async fn main() -> Result<()> {
             password,
             run,
             watch,
+            borrow_proxy,
         } => {
             let started = Instant::now();
             let res = if normalize_code(&target).is_some() {
@@ -390,6 +394,17 @@ async fn main() -> Result<()> {
                 started.elapsed().as_millis(),
                 remote.path()
             );
+            let remote = Arc::new(remote);
+            let _lend = match borrow_proxy {
+                Some(proxy) => {
+                    let kind = if proxy.starts_with("socks5") { p2pcli_core::reverse::ProxyKind::Socks5 } else { p2pcli_core::reverse::ProxyKind::Http };
+                    let target = proxy.split("://").last().unwrap_or(&proxy).to_string();
+                    let f = p2pcli_core::reverse::ReverseForward::start(remote.clone(), 0, target, Some(kind)).await?;
+                    eprintln!("已把本机代理借给对方：对方的 127.0.0.1:{}", f.remote_port);
+                    Some(f)
+                }
+                None => None,
+            };
             let code = run_once(&remote, &run).await?;
             for i in 0..watch {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -425,6 +440,8 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
         color_tags: true,
         wide_gamut: false,
         yuv444,
+        // 只看不操作，剪贴板不互通
+        clipboard: false,
     }).await?;
     // 帧间隔：看稳不稳。整段的都留着，最后算分位数；每秒打印这一秒最长的和超过 25 毫秒的次数
     let mut last_frame: Option<Instant> = None;

@@ -21,7 +21,7 @@ use crate::files::Files;
 use crate::identity::DeviceInfo;
 use crate::proto::{COLLABORATION_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
 #[cfg(feature = "host")]
-use crate::proto::{AGENT_MESSAGE_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, Frame, write_data};
+use crate::proto::{AGENT_MESSAGE_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, REVERSE_FORWARD_V1, Frame, write_data};
 #[cfg(feature = "host")]
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
@@ -32,7 +32,7 @@ use crate::store::{TrustStore, write_private};
 /// 本机能回应对面的哪些能力。手机端（关掉 host）不开终端、不让对面碰本机的文件和程序，只剩 AI 协作消息
 fn serves(capability: &str) -> bool {
     #[cfg(feature = "host")]
-    return matches!(capability, COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2 | REMOTE_LSP_V1 | PORT_FORWARD_V1 | GIT_V1);
+    return matches!(capability, COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2 | REMOTE_LSP_V1 | PORT_FORWARD_V1 | GIT_V1 | REVERSE_FORWARD_V1);
     #[cfg(not(feature = "host"))]
     return capability == COLLABORATION_V1;
 }
@@ -163,6 +163,9 @@ pub struct SessionSummary {
 struct SessionEntry {
     conn: Connection,
     summary: SessionSummary,
+    /// 借网：这条连接借来的代理（对方电脑上的端口和环境变量），之后新开的终端、远程执行都带上
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
+    proxy: Option<(u16, Vec<(String, String)>)>,
 }
 
 #[derive(Default)]
@@ -406,6 +409,29 @@ impl Host {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// 这条连接借来的代理的环境变量（没借就是空）
+    #[cfg(feature = "host")]
+    fn proxy_env(&self, session: u64) -> Vec<(String, String)> {
+        self.sessions.lock().unwrap().get(&session).and_then(|e| e.proxy.as_ref()).map(|(_, env)| env.clone()).unwrap_or_default()
+    }
+
+    #[cfg(feature = "host")]
+    fn set_proxy(&self, session: u64, proxy: Option<(u16, Vec<(String, String)>)>) {
+        if let Some(e) = self.sessions.lock().unwrap().get_mut(&session) {
+            e.proxy = proxy;
+        }
+    }
+
+    /// 借网停了：还是这个端口的话清掉
+    #[cfg(feature = "host")]
+    fn clear_proxy(&self, session: u64, port: u16) {
+        if let Some(e) = self.sessions.lock().unwrap().get_mut(&session)
+            && e.proxy.as_ref().is_some_and(|(p, _)| *p == port)
+        {
+            e.proxy = None;
+        }
+    }
+
     /// 弹窗问主人收不收这批文件；没人点、对方走了都算不收
     pub async fn ask_files(&self, mut req: FileRequest, conn: &Connection) -> bool {
         req.id = self.next();
@@ -617,6 +643,7 @@ impl Host {
                     terminals: 0,
                     since: crate::store::now_secs(),
                 },
+                proxy: None,
             },
         );
         info!(session, remote = %remote.fmt_short(), %name, trusted, "已连接");
@@ -783,12 +810,39 @@ impl Host {
                     crate::ports::pipe(tcp, tokio::io::join(&mut recv, &mut send)).await?;
                 }
                 #[cfg(feature = "host")]
+                Msg::ReverseForward { port, proxy } => {
+                    let remote: EndpointId = owner.parse()?;
+                    let mut listening = None;
+                    let result = crate::reverse::serve(remote, port, &mut send, &mut recv, |port| {
+                        listening = Some(port);
+                        if let Some(kind) = proxy {
+                            info!(session, port, "对面把它的代理借给本机：这条连接之后新开的终端走它");
+                            self.set_proxy(session, Some((port, crate::reverse::proxy_env(kind, port))));
+                        }
+                    })
+                    .await;
+                    // 停了：借来的代理也不用了（同一条连接后来又借了别的就不动）
+                    if let Some(port) = listening
+                        && proxy.is_some()
+                    {
+                        self.clear_proxy(session, port);
+                    }
+                    result?;
+                }
+                #[cfg(feature = "host")]
+                Msg::ReverseConnect { token, id } => {
+                    let tcp = crate::reverse::take(owner.parse()?, token, id)?;
+                    write_msg(&mut send, &Msg::PortOpened).await?;
+                    crate::ports::pipe(tcp, tokio::io::join(&mut recv, &mut send)).await?;
+                }
+                #[cfg(feature = "host")]
                 Msg::Exec { command, cwd, timeout_secs } => {
                     info!(session, bytes = command.len(), "对面要在本机跑一条命令");
                     debug!(session, %command, "远程执行");
                     self.bump_terminals(session, 1);
                     self.delegate.event(HostEvent::TerminalOpened { session });
-                    let result = crate::exec::serve(&mut recv, &mut send, command, cwd, timeout_secs).await;
+                    let env = self.proxy_env(session);
+                    let result = crate::exec::serve(&mut recv, &mut send, command, cwd, timeout_secs, &env).await;
                     self.bump_terminals(session, -1);
                     self.delegate.event(HostEvent::TerminalClosed { session });
                     result?;
@@ -808,7 +862,7 @@ impl Host {
                 #[cfg(feature = "host")]
                 Msg::Open { cols, rows, session_id, persistent, control } => {
                     let attachment = if persistent {
-                        let (cmd, id) = self.terminals.attach(&owner, session_id.as_deref(), cols, rows).await?;
+                        let (cmd, id) = self.terminals.attach(&owner, session_id.as_deref(), cols, rows, &self.proxy_env(session)).await?;
                         // psmux 的控制模式没验证过，Windows 上照旧
                         let via = if control && !cfg!(windows) { Some(self.terminals.control_target(&owner, &id)?) } else { None };
                         Some((cmd, id, via))
@@ -821,7 +875,7 @@ impl Host {
                     let result = match attachment {
                         Some((_, id, Some(via))) => crate::tmux_control::serve_control(recv, &mut send, cols, rows, via, id).await,
                         Some((cmd, id, None)) => serve_session(recv, &mut send, cols, rows, cmd, id).await,
-                        None => serve_terminal(recv, &mut send, cols, rows).await,
+                        None => serve_terminal(recv, &mut send, cols, rows, &self.proxy_env(session)).await,
                     };
                     self.bump_terminals(session, -1);
                     self.delegate.event(HostEvent::TerminalClosed { session });
