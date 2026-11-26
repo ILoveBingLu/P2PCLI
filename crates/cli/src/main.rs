@@ -80,6 +80,14 @@ enum Cmd {
     },
     #[command(flatten)]
     Fs(fs::FsCmd),
+    /// 把标准输入输出接到另一台设备 localhost 的某个端口上，原样传字节。给 OpenSSH 当 ProxyCommand 用：
+    /// ssh -o ProxyCommand="p2pcli pipe 设备名 22" 用户名@设备名。提示只写标准错误
+    Pipe {
+        /// 设备名（可以只写一部分）、9 位设备码或公钥开头几位
+        device: String,
+        /// 对方电脑 localhost 上的端口，比如 sshd 的 22
+        port: u16,
+    },
     /// 作为 MCP 服务运行（stdio）：让 Cursor、Claude Desktop、Cline 这类 AI 直接操作别的设备。
     /// 在 AI 的 MCP 设置里填命令 p2pcli、参数 mcp
     Mcp,
@@ -116,6 +124,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Cmd::Collab(options) => return collab::run(options, &dir, cli.json).await,
         Cmd::Fs(cmd) => return fs::run(cmd, &dir, cli.json).await,
         Cmd::Mcp => mcp::run(&dir).await?,
+        Cmd::Pipe { device, port } => pipe(&dir, &device, port).await?,
         Cmd::Devices => {
             let devices = ask(&dir, Request::Devices, |r| match r {
                 Reply::Devices { devices } => Some(devices),
@@ -162,6 +171,26 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// 标准输入输出接到对方电脑的端口上，直到一边关掉。标准输出只放对方端口来的字节
+async fn pipe(dir: &Path, device: &str, port: u16) -> Result<()> {
+    let mut hinted = false;
+    let (mut stream, relay) = control::open_pipe(dir, device, port, |message| {
+        // 对方可能要点同意：提示一次就好，免得刷屏
+        if !hinted {
+            eprintln!("p2pcli：{message}…");
+            hinted = true;
+        }
+    })
+    .await?;
+    if relay {
+        eprintln!("p2pcli：现在走的是中继，会比较慢；直连接通后会自动切过去");
+    }
+    let mut stdio = tokio::io::join(tokio::io::stdin(), tokio::io::stdout());
+    // 一边读到头就把另一边关掉；对方断开、本机这头关掉都正常结束
+    let _ = tokio::io::copy_bidirectional(&mut stdio, &mut stream).await;
+    Ok(())
 }
 
 /// 发一个请求，取第一条想要的回复；软件回了错误就报错

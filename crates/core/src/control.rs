@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
@@ -74,6 +74,8 @@ pub enum Request {
     ListEntries { target: String, path: String },
     /// 编辑器的其他文件操作：找文件、搜内容、新建目录、改名、移到废纸篓
     Edit { target: String, request: crate::remote_ops::EditRequest },
+    /// 接到对方电脑 localhost 的某个端口：回 PipeOpened 以后这条控制连接上就是原样的字节（给 OpenSSH 的 ProxyCommand 用）
+    Pipe { target: String, port: u16 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +89,8 @@ pub enum Reply {
     Transfers { transfers: Vec<Transfer> },
     /// 还在连对方（对方可能要点同意），每秒报一次，命令行好给出提示
     Status { message: String },
+    /// 端口接通了，之后是原样的字节。relay：现在走的是中继（直连优先，中继只是兜底，会比较慢）
+    PipeOpened { relay: bool },
     /// 命令的一段输出，原始字节的 base64
     ExecOut { stderr: bool, data: String },
     /// 命令结束了
@@ -287,6 +291,20 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, node: NodeSource) 
             let reply = remote.edit(request).await.map(|reply| Reply::EditDone { reply });
             send(&mut w, &reply_or_error(reply)).await?
         }
+        Request::Pipe { target, port } => {
+            let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
+            // SSH、IDE 是持续流量：直连优先，还在中继上的话先等一会儿直连
+            let path = remote.wait_direct(crate::path::DIRECT_WAIT).await;
+            let tunnel = match remote.open_port(port).await {
+                Ok(t) => t,
+                Err(e) => return send(&mut w, &Reply::Error { message: format!("{e:#}") }).await,
+            };
+            send(&mut w, &Reply::PipeOpened { relay: path.kind == crate::path::PathKind::Relay }).await?;
+            // reader 里可能已经缓存了命令行紧跟着发来的字节，整个 BufReader 一起接上
+            if let Err(e) = tunnel.pipe_with(tokio::io::join(&mut reader, &mut w)).await {
+                tracing::debug!(port, "管道断开：{e:#}");
+            }
+        }
     }
     let _ = w.shutdown().await;
     Ok(())
@@ -468,6 +486,39 @@ pub async fn request_while(data_dir: &Path, req: &Request, mut on_reply: impl Fn
         }
     }
     Ok(())
+}
+
+/// 开一条到对方电脑 localhost:port 的管道（给 `p2pcli pipe` 用）：发请求，等到 PipeOpened，
+/// 之后返回的流上就是原样的字节。on_status 收到“正在连接”之类的提示；relay 告诉调用方现在走的是不是中继
+pub async fn open_pipe(
+    data_dir: &Path,
+    target: &str,
+    port: u16,
+    mut on_status: impl FnMut(&str),
+) -> Result<(impl AsyncRead + AsyncWrite + Unpin, bool)> {
+    let stream = connect(data_dir).await?;
+    let (r, mut w) = tokio::io::split(stream);
+    let mut line = serde_json::to_vec(&Request::Pipe { target: target.to_string(), port })?;
+    line.push(b'\n');
+    w.write_all(&line).await?;
+    w.flush().await?;
+    let mut reader = BufReader::new(r);
+    loop {
+        let mut text = String::new();
+        if reader.read_line(&mut text).await? == 0 {
+            bail!("P2PCLI 没有回结果");
+        }
+        if text.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str(&text).context("P2PCLI 回的消息看不懂，命令行和 P2PCLI 的版本可能不一致")? {
+            // 读完这一行就停：后面紧跟着的已经是对方端口发来的字节，留在 reader 的缓存里一起交出去
+            Reply::PipeOpened { relay } => return Ok((tokio::io::join(reader, w), relay)),
+            Reply::Status { message } => on_status(&message),
+            Reply::Error { message } => bail!(message),
+            other => bail!("意外的回复：{other:?}"),
+        }
+    }
 }
 
 fn not_running() -> anyhow::Error {

@@ -2184,6 +2184,52 @@ async fn git_panel_ops_over_connection() {
 }
 
 /// 命令行直接读写对方电脑上的文件（p2pcli cat/write/edit/ls/find/grep/mv）：走控制口和真的连接
+/// 控制口的管道（p2pcli pipe）：接到对方电脑 localhost 的端口上原样传字节。
+/// 服务一连上就先发一行（像 sshd 的握手信息），紧跟在 PipeOpened 后面的字节也不能丢
+#[tokio::test]
+async fn control_socket_pipes_to_remote_port() {
+    use p2pcli_core::control;
+    use p2pcli_core::store::RecentDevice;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (host, _delegate, guest, remote) = paired_pair("ctlpipe").await;
+    guest.recent.upsert(RecentDevice { code: "123456781".into(), endpoint_id: host.id().to_string(), name: "管道机".into(), platform: "macos".into(), sort_at: 0, last_used: 0 }).unwrap();
+    guest.adopt_remote(remote.clone());
+    let data_dir = std::env::temp_dir().join(format!("p2pcli-ctlpipe-{}", std::process::id()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let node = guest.clone();
+    control::serve(&data_dir, Arc::new(move || node.clone())).await.unwrap();
+
+    // “对方电脑上的服务”：先发握手信息，再把收到的原样发回去
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = server.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = server.accept().await {
+            tokio::spawn(async move {
+                s.write_all(b"SSH-2.0-test\r\n").await.unwrap();
+                let mut buf = vec![0u8; 64 * 1024];
+                while let Ok(n) = s.read(&mut buf).await { if n == 0 || s.write_all(&buf[..n]).await.is_err() { break; } }
+            });
+        }
+    });
+
+    let (mut pipe, relay) = control::open_pipe(&data_dir, "管道机", port, |_| {}).await.unwrap();
+    assert!(!relay, "本机回环是直连");
+    let payload: Vec<u8> = (0..1_500_000u32).map(|i| (i % 251) as u8).collect();
+    let (mut r, mut w) = tokio::io::split(&mut pipe);
+    let send = async { w.write_all(&payload).await.unwrap(); w.shutdown().await.unwrap(); };
+    let mut back = Vec::new();
+    let recv = async { r.read_to_end(&mut back).await.unwrap(); };
+    tokio::time::timeout(Duration::from_secs(30), async { tokio::join!(send, recv) }).await.unwrap();
+    assert!(back.starts_with(b"SSH-2.0-test\r\n"), "握手信息丢了");
+    assert_eq!(&back[14..], &payload[..]);
+
+    // 没有服务的端口：说清楚
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let err = control::open_pipe(&data_dir, "管道机", closed, |_| {}).await.err().expect("没有服务的端口应该报错");
+    assert!(format!("{err:#}").contains("没有服务"), "{err:#}");
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
 #[tokio::test]
 async fn control_socket_reads_and_edits_remote_files() {
     use p2pcli_core::control::{self, Reply, Request};

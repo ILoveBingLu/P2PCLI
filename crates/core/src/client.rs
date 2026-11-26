@@ -786,13 +786,18 @@ pub enum Tunnel {
 impl Tunnel {
     /// 和本机这头的 TCP 连接原样对拷，直到一边关掉
     pub async fn pipe(self, tcp: tokio::net::TcpStream) -> Result<()> {
+        self.pipe_with(tcp).await
+    }
+
+    /// 和本机这头的任意字节流（TCP 连接、控制口）原样对拷，直到一边关掉
+    pub async fn pipe_with<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(self, io: S) -> Result<()> {
         match self {
             Tunnel::Quic(mut send, recv) => {
-                let result = crate::ports::pipe(tcp, tokio::io::join(recv, &mut send)).await;
+                let result = crate::ports::pipe(io, tokio::io::join(recv, &mut send)).await;
                 let _ = send.finish();
                 result
             }
-            Tunnel::Local(stream) => crate::ports::pipe(tcp, stream).await,
+            Tunnel::Local(stream) => crate::ports::pipe(io, stream).await,
         }
     }
 }
