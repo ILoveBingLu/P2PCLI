@@ -5,6 +5,7 @@ mod cli;
 mod links;
 mod permissions;
 mod screen;
+mod ssh;
 #[cfg(desktop)]
 mod update;
 mod logging;
@@ -2011,6 +2012,9 @@ pub fn run() {
             set_ai_hint_auto,
             ai_hint_apply,
             install_cli,
+            ssh::ssh_status,
+            ssh::ssh_add_include,
+            ssh::open_in_editor,
             kick,
             remove_trusted,
             forget_recent,

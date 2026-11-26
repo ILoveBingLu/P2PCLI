@@ -18,6 +18,16 @@ pub fn open(url: &str) -> Result<(), String> {
     launch(url)
 }
 
+/// 用本机编辑器打开远程文件夹：只认 vscode://vscode-remote/ 和 cursor://vscode-remote/ 开头的链接
+pub fn open_external(url: &str) -> Result<(), String> {
+    let ok = ["vscode://vscode-remote/", "cursor://vscode-remote/"].iter().any(|p| url.starts_with(p))
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '<' | '>' | '`'));
+    if !ok {
+        return Err("不是编辑器的远程链接，不打开".into());
+    }
+    launch(url).map_err(|_| "打不开编辑器：确认本机装了 VS Code（或 Cursor）".into())
+}
+
 /// 打开本机端口上的网页（端口转发过来的开发服务器）
 pub fn open_localhost(port: u16, path: &str, https: bool) -> Result<(), String> {
     launch(&localhost_url(port, path, https)?)

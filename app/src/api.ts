@@ -693,6 +693,12 @@ export const api = {
   forwardPort: (connId: number, remotePort: number, localPort?: number) => invoke<ForwardView>("forward_port", { connId, remotePort, localPort: localPort ?? null }),
   stopForward: (id: number) => invoke<void>("stop_forward", { id }),
   portForwards: () => invoke<ForwardView[]>("port_forwards"),
+  /** SSH：~/.ssh/config 里有没有 Include 了 P2PCLI 维护的 p2pcli_hosts */
+  sshStatus: () => invoke<{ include: boolean; config_path: string; hosts_path: string }>("ssh_status"),
+  sshAddInclude: () => invoke<{ include: boolean; config_path: string; hosts_path: string }>("ssh_add_include"),
+  /** 用本机 VS Code / Cursor（Remote-SSH）打开对方电脑上的文件夹；还没 Include 时报 ssh_include_missing */
+  openInEditor: (connId: number, path: string, editor: "vscode" | "cursor") =>
+    invoke<{ alias: string; path: string }>("open_in_editor", { connId, path, editor }),
   reverseInfo: (connId: number) => invoke<{ supported: boolean; proxy: string | null }>("reverse_info", { connId }),
   reverseForward: (connId: number, target: string, proxy: ProxyKind | null, remotePort?: number) =>
     invoke<ReverseView>("reverse_forward", { connId, target, proxy, remotePort: remotePort ?? null }),

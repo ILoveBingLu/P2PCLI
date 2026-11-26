@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Cable, Copy, FileUp, FolderUp, Globe, History, House, LoaderCircle, Monitor, Pencil, Plus, Radar, RefreshCw, Square, Trash2 } from "lucide-react";
+import { ArrowUpRight, Cable, Code2, Copy, FileUp, FolderUp, Globe, History, House, LoaderCircle, Monitor, Pencil, Plus, Radar, RefreshCw, Square, Trash2 } from "lucide-react";
 import { api, pathLabel, type DeviceStatus, type ForwardView, type NearbyDevice, type Overview, type PathInfo, type ReverseView, type TerminalSession, type TerminalSessionSnapshot } from "../api";
 import { lendProxy } from "../lib/lending";
 import { PortForwardsDialog } from "./PortForwards";
+import { OpenInEditorDialog } from "./OpenInEditorDialog";
 import { writeClipboardText } from "../lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -160,8 +161,10 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         } }]
       : [];
   // 借网、端口转发：要一条连上的连接。没连上就先连，连上以后接着做
-  const pendingAction = useRef<{ endpointId: string; name: string; kind: "lend" | "ports"; at: number } | null>(null);
+  type DeviceAction = "lend" | "ports" | "editor";
+  const pendingAction = useRef<{ endpointId: string; name: string; kind: DeviceAction; at: number } | null>(null);
   const [portsTarget, setPortsTarget] = useState<{ connId: number; name: string } | null>(null);
+  const [editorTarget, setEditorTarget] = useState<{ connId: number; name: string } | null>(null);
   /** 这台设备已经连上的连接（正在看它的会话页，或者开着的终端标签） */
   const openTarget = (endpointId: string): SessionTarget | undefined =>
     sessionTarget?.info.endpoint_id === endpointId ? sessionTarget : tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.state === "open");
@@ -171,8 +174,9 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
     if (sessionTarget?.info.endpoint_id === endpointId) conns.add(sessionTarget.connId);
     return reverses.find((r) => r.proxy && conns.has(r.conn_id));
   };
-  const runAction = (kind: "lend" | "ports", target: SessionTarget, name: string) => {
+  const runAction = (kind: DeviceAction, target: SessionTarget, name: string) => {
     if (kind === "ports") return setPortsTarget({ connId: target.connId, name });
+    if (kind === "editor") return setEditorTarget({ connId: target.connId, name });
     void lendProxy(target.connId, name).then(onForwardsChanged);
   };
   useEffect(() => {
@@ -188,10 +192,10 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
     pendingAction.current = null;
     runAction(pending.kind, target, pending.name);
   });
-  const networkActions = (endpointId: string, name: string, connect: () => void, disabled: boolean): MenuAction[] => {
+  const networkActions = (endpointId: string, name: string, platform: string, connect: () => void, disabled: boolean): MenuAction[] => {
     const lending = lendingFor(endpointId);
     const target = openTarget(endpointId);
-    const act = (kind: "lend" | "ports") => {
+    const act = (kind: DeviceAction) => {
       if (target) return runAction(kind, target, name);
       pendingAction.current = { endpointId, name, kind, at: Date.now() };
       connect();
@@ -202,6 +206,10 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
           onAction: () => void api.stopReverse(lending.id).then(() => { onForwardsChanged(); toast.success(t("已停止借网")); }) }
         : { id: "lend", label: t("把本机代理借给这台设备"), icon: <Globe className="size-4" />, separated: true, disabled, onAction: () => act("lend") },
       { id: "ports", label: t("端口转发…"), icon: <Cable className="size-4" />, disabled, onAction: () => act("ports") },
+      // 用本机 VS Code / Cursor 经 SSH 打开：只有电脑能开 SSH 服务
+      ...(["macos", "windows", "linux"].includes(platform)
+        ? [{ id: "editor", label: t("用本机 VS Code 打开…"), icon: <Code2 className="size-4" />, disabled, onAction: () => act("editor") }]
+        : []),
     ];
   };
   const sendActions = (endpointId: string, disabled: boolean): MenuAction[] => [
@@ -233,7 +241,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       actions = [
         ...actions,
         ...controlAction(device, target, () => connectDevice(device), !target && (busy || offline)),
-        ...networkActions(endpointId, deviceLabel(device), () => connectDevice(device), !target && (busy || offline)),
+        ...networkActions(endpointId, deviceLabel(device), device.platform, () => connectDevice(device), !target && (busy || offline)),
         { id: "remark", label: deviceRemark(device).trim() ? t("修改备注") : t("添加备注"), icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }) },
         ...sendActions(endpointId, !target && offline),
         { id: "copy", label: t("复制设备码"), icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
@@ -253,7 +261,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         ? [{ id: "new", label: t("新建会话"), icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
         : [{ id: "connect", label: t("连接"), icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
       actions.push(...controlAction(device, target, () => onConnectLan(device), !target && (busy || !device.online)));
-      actions.push(...networkActions(endpointId, deviceLabel(device), () => onConnectLan(device), !target && (busy || !device.online)));
+      actions.push(...networkActions(endpointId, deviceLabel(device), device.platform, () => onConnectLan(device), !target && (busy || !device.online)));
       actions.push({
           id: "remark",
           label: deviceRemark(device) ? t("修改备注") : t("添加备注"),
@@ -287,6 +295,10 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
           forwards={forwards.filter((f) => f.conn_id === portsTarget.connId)}
           reverses={reverses.filter((f) => f.conn_id === portsTarget.connId)}
           onChanged={onForwardsChanged} />
+      )}
+      {editorTarget && (
+        <OpenInEditorDialog open onOpenChange={(next) => !next && setEditorTarget(null)}
+          connId={editorTarget.connId} deviceName={editorTarget.name} />
       )}
       <div className="connection-sidebar-inner">
         <CollaborationSidebarStatus />
