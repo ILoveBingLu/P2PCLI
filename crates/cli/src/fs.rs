@@ -224,14 +224,14 @@ pub async fn run(cmd: FsCmd, dir: &Path, json: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn saved(reply: Reply) -> Option<(p2pcli_core::remote_fs::FileMeta, usize)> {
+pub(crate) fn saved(reply: Reply) -> Option<(p2pcli_core::remote_fs::FileMeta, usize)> {
     match reply {
         Reply::Saved { meta, replaced } => Some((meta, replaced)),
         _ => None,
     }
 }
 
-async fn edit(dir: &Path, target: String, request: EditRequest) -> Result<EditReply> {
+pub(crate) async fn edit(dir: &Path, target: String, request: EditRequest) -> Result<EditReply> {
     ask(dir, Request::Edit { target, request }, |r| match r {
         Reply::EditDone { reply } => Some(reply),
         _ => None,
@@ -239,7 +239,7 @@ async fn edit(dir: &Path, target: String, request: EditRequest) -> Result<EditRe
 }
 
 /// ~/a/b/c → [~/a, ~/a/b, ~/a/b/c]；/a/b → [/a, /a/b]；C:\a\b → [C:\a, C:\a\b]
-fn ancestors(path: &str) -> Vec<String> {
+pub(crate) fn ancestors(path: &str) -> Vec<String> {
     let sep = if path.contains('\\') && !path.contains('/') { '\\' } else { '/' };
     let parts: Vec<&str> = path.split(['/', '\\']).collect();
     let mut out = Vec::new();
@@ -256,7 +256,7 @@ fn ancestors(path: &str) -> Vec<String> {
 
 /// 按名字找文件：带通配符时按通配符（* 不跨目录，** 跨目录，? 一个字），不带 / 的只看文件名；
 /// 不带通配符时不分大小写按包含找
-fn name_matches(pattern: &str, rel: &str) -> bool {
+pub(crate) fn name_matches(pattern: &str, rel: &str) -> bool {
     let target = if pattern.contains('/') { rel } else { rel.rsplit('/').next().unwrap_or(rel) };
     if !pattern.contains(['*', '?']) {
         return target.to_lowercase().contains(&pattern.to_lowercase());

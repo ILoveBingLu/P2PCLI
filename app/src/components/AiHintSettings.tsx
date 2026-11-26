@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { BookOpen, Check, Download, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
+import { BookOpen, Check, Copy, Download, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
 import { Checkbox, Description } from "@heroui/react";
-import { api, type AiHintState, type AiHintStatus } from "../api";
+import { api, type AiHintState, type AiHintStatus, type CliStatus } from "../api";
+import { writeClipboardText } from "@/lib/clipboard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -157,6 +158,37 @@ export function AiHintSettings() {
       )}
 
       <p className="detail-note">{t("已经开着的 AI 窗口要重开才会读到。")}</p>
+
+      <McpSettings />
+    </div>
+  );
+}
+
+/** 给讲 MCP 的 AI（Cursor、Claude Desktop、Cline 等）的配置：命令是 p2pcli，参数是 mcp */
+function McpSettings() {
+  const [cli, setCli] = useState<CliStatus | null>(null);
+  useEffect(() => {
+    void api.cliStatus().then(setCli).catch(() => {});
+  }, []);
+  // 图形界面的 AI 拿不到终端的 PATH，配置里写完整路径
+  const command = cli?.installed && cli.path ? cli.path : "p2pcli";
+  const config = JSON.stringify({ mcpServers: { p2pcli: { command, args: ["mcp"] } } }, null, 2);
+  const claudeCode = `claude mcp add --scope user p2pcli -- ${/\s/.test(command) ? JSON.stringify(command) : command} mcp`;
+  const copy = (text: string) => void writeClipboardText(text).then(() => toast.success(t("已复制"))).catch((e) => toast.error(String(e)));
+  return (
+    <div className="flex flex-col gap-2">
+      <strong className="text-sm">{t("给 Cursor、Claude Desktop、Cline 等用（MCP）")}</strong>
+      <p className="detail-note">
+        {t("这些 AI 用 MCP 接工具，不读上面的使用说明。把下面的配置加进它们的 MCP 设置（mcpServers），它们就能直接列设备、在别的电脑上跑命令、读写和搜索文件、传文件。要 P2PCLI 开着。")}
+      </p>
+      {cli && !cli.installed && (
+        <p className="detail-note">{t("命令行工具 p2pcli 还没装好：先到「设置 → 文件传输」里安装，配置里用的是它的完整路径。")}</p>
+      )}
+      <pre className="overflow-x-auto rounded-md bg-muted-surface px-3 py-2 text-xs leading-relaxed">{config}</pre>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" onClick={() => copy(config)}><Copy data-icon="inline-start" />{t("复制 MCP 配置")}</Button>
+        <Button variant="ghost" size="sm" onClick={() => copy(claudeCode)} title={claudeCode}><Copy data-icon="inline-start" />{t("复制 Claude Code 的添加命令")}</Button>
+      </div>
     </div>
   );
 }

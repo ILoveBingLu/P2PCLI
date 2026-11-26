@@ -1303,5 +1303,10 @@
   "线路：{{path}}": "Connection: {{path}}",
   "中继只是兜底，转发和借网能用但会比较慢；直连接通后自动切过去": "Relays are only a fallback. Forwarding and proxy sharing work but will be slower; it switches to a direct connection automatically once one is available",
   "剪贴板里的内容正在经中继传，会比较慢；直连接通后会自动切过去": "Clipboard content is going through a relay and will be slower; it switches to a direct connection automatically once one is available",
-  " · 经中继，较慢": " · via relay, slower"
+  " · 经中继，较慢": " · via relay, slower",
+  "给 Cursor、Claude Desktop、Cline 等用（MCP）": "For Cursor, Claude Desktop, Cline and others (MCP)",
+  "这些 AI 用 MCP 接工具，不读上面的使用说明。把下面的配置加进它们的 MCP 设置（mcpServers），它们就能直接列设备、在别的电脑上跑命令、读写和搜索文件、传文件。要 P2PCLI 开着。": "These AIs use MCP for tools and don't read the instructions above. Add the config below to their MCP settings (mcpServers) and they can list devices, run commands on other computers, read, write and search files, and transfer files. P2PCLI must be running.",
+  "命令行工具 p2pcli 还没装好：先到「设置 → 文件传输」里安装，配置里用的是它的完整路径。": "The p2pcli command-line tool isn't installed yet. Install it under Settings → File transfer first; the config uses its full path.",
+  "复制 MCP 配置": "Copy MCP config",
+  "复制 Claude Code 的添加命令": "Copy Claude Code add command"
 }

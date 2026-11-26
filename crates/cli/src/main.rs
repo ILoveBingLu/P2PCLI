@@ -15,6 +15,7 @@ use p2pcli_core::presence::PresenceState;
 
 mod collab;
 mod fs;
+mod mcp;
 mod worker;
 
 /// 等对方同意超过这么久才提示，配对过的设备一般马上就收
@@ -79,6 +80,9 @@ enum Cmd {
     },
     #[command(flatten)]
     Fs(fs::FsCmd),
+    /// 作为 MCP 服务运行（stdio）：让 Cursor、Claude Desktop、Cline 这类 AI 直接操作别的设备。
+    /// 在 AI 的 MCP 设置里填命令 p2pcli、参数 mcp
+    Mcp,
     /// 看最近收到的文件
     Inbox {
         /// 最多列几条
@@ -111,6 +115,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     match cli.cmd {
         Cmd::Collab(options) => return collab::run(options, &dir, cli.json).await,
         Cmd::Fs(cmd) => return fs::run(cmd, &dir, cli.json).await,
+        Cmd::Mcp => mcp::run(&dir).await?,
         Cmd::Devices => {
             let devices = ask(&dir, Request::Devices, |r| match r {
                 Reply::Devices { devices } => Some(devices),
@@ -350,33 +355,38 @@ fn print_devices(devices: &[KnownDevice]) {
         return;
     }
     for d in devices {
-        let state = match d.state {
-            Some(PresenceState::Online) => match &d.path {
-                Some(p) => match p.rtt_ms {
-                    Some(ms) => format!("在线 · {} · {ms} ms", p.kind.label()),
-                    None => format!("在线 · {}", p.kind.label()),
-                },
-                None => "在线".into(),
-            },
-            Some(PresenceState::Offline) => "离线".into(),
-            Some(PresenceState::OldVersion) => "在线，但版本太旧，要先更新".into(),
-            Some(PresenceState::Checking) | None => "状态未知".into(),
-        };
-        let mut line = format!("{}  {}  {state}", d.name, platform(&d.platform));
-        if d.lan {
-            line.push_str(" · 局域网");
-        }
-        match d.paired {
-            Some(true) => line.push_str("  发文件直接收"),
-            Some(false) => line.push_str("  发文件可能要对方同意"),
-            None => {}
-        }
-        if let Some(code) = &d.code {
-            line.push_str(&format!("  设备码 {code}"));
-        }
-        line.push_str(&format!("  公钥 {}", &d.endpoint_id[..8.min(d.endpoint_id.len())]));
-        println!("{line}");
+        println!("{}", device_line(d));
     }
+}
+
+/// 一台设备一行：名字、系统、在线和线路、发文件要不要同意、设备码、公钥开头
+pub(crate) fn device_line(d: &KnownDevice) -> String {
+    let state = match d.state {
+        Some(PresenceState::Online) => match &d.path {
+            Some(p) => match p.rtt_ms {
+                Some(ms) => format!("在线 · {} · {ms} ms", p.kind.label()),
+                None => format!("在线 · {}", p.kind.label()),
+            },
+            None => "在线".into(),
+        },
+        Some(PresenceState::Offline) => "离线".into(),
+        Some(PresenceState::OldVersion) => "在线，但版本太旧，要先更新".into(),
+        Some(PresenceState::Checking) | None => "状态未知".into(),
+    };
+    let mut line = format!("{}  {}  {state}", d.name, platform(&d.platform));
+    if d.lan {
+        line.push_str(" · 局域网");
+    }
+    match d.paired {
+        Some(true) => line.push_str("  发文件直接收"),
+        Some(false) => line.push_str("  发文件可能要对方同意"),
+        None => {}
+    }
+    if let Some(code) = &d.code {
+        line.push_str(&format!("  设备码 {code}"));
+    }
+    line.push_str(&format!("  公钥 {}", &d.endpoint_id[..8.min(d.endpoint_id.len())]));
+    line
 }
 
 fn print_inbox(items: &[InboxItem], root: &str) {
@@ -408,7 +418,7 @@ fn platform(p: &str) -> &str {
     }
 }
 
-fn size(bytes: u64) -> String {
+pub(crate) fn size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
     if bytes < 1024 {
         return format!("{bytes} B");
