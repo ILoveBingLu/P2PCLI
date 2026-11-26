@@ -1308,5 +1308,17 @@
   "这些 AI 用 MCP 接工具，不读上面的使用说明。把下面的配置加进它们的 MCP 设置（mcpServers），它们就能直接列设备、在别的电脑上跑命令、读写和搜索文件、传文件。要 P2PCLI 开着。": "These AIs use MCP for tools and don't read the instructions above. Add the config below to their MCP settings (mcpServers) and they can list devices, run commands on other computers, read, write and search files, and transfer files. P2PCLI must be running.",
   "命令行工具 p2pcli 还没装好：先到「设置 → 文件传输」里安装，配置里用的是它的完整路径。": "The p2pcli command-line tool isn't installed yet. Install it under Settings → File transfer first; the config uses its full path.",
   "复制 MCP 配置": "Copy MCP config",
-  "复制 Claude Code 的添加命令": "Copy Claude Code add command"
+  "复制 Claude Code 的添加命令": "Copy Claude Code add command",
+  "让本机的 AI 能和你的其他设备互动：在别的电脑上跑命令、读写和搜索文件、发文件过去、把文件拉回来。按 AI 的种类有两种接法，下面分别设置。": "Let the AIs on this computer work with your other devices: run commands on other computers, read, write and search files, and send or pull files. There are two ways to connect them depending on the kind of AI; set them up below.",
+  "给 Claude Code、Codex 等命令行 AI（使用说明）": "For command-line AIs like Claude Code and Codex (instructions)",
+  "给本机的命令行 AI 放一份 p2pcli 使用说明，它们新开的会话就知道怎么用，不用你再教。只写 AI 自己技能目录里一个叫 p2pcli 的文件夹，不改你的 CLAUDE.md、AGENTS.md，也不碰别人放的同名技能。": "Puts p2pcli instructions where the command-line AIs on this computer look for skills, so new sessions know how to use it without you teaching them. Only a folder named p2pcli in each AI's own skills directory is written; your CLAUDE.md and AGENTS.md are not changed, and skills with the same name from others are left alone.",
+  "给 Cursor、Claude Desktop、Cline 等（MCP）": "For Cursor, Claude Desktop, Cline and others (MCP)",
+  "这些 AI 用 MCP 接工具，不读下面的使用说明。把这份配置加进它们的 MCP 设置（mcpServers），它们就能直接列设备、在别的电脑上跑命令、读写和搜索文件、传文件。要 P2PCLI 开着。": "These AIs use MCP for tools and don't read the instructions below. Add this config to their MCP settings (mcpServers) and they can list devices, run commands on other computers, read, write and search files, and transfer files. P2PCLI must be running.",
+  "已停止借网": "Stopped sharing your proxy",
+  "把本机代理借给这台设备": "Share your proxy with this device",
+  "端口转发…": "Port forwarding…",
+  "正在把本机代理借给这台设备，右键可以停止": "Your proxy is shared with this device; right-click to stop",
+  "借网中": "Sharing proxy",
+  "已把本机代理借给 {{name}}：对方电脑上新开的终端走 127.0.0.1:{{port}}": "Your proxy is now shared with {{name}}: new terminals there use 127.0.0.1:{{port}}",
+  "借网没成功：{{error}}。本机代理不在常用端口的话，在「设置 → 代理设置」里填代理地址，或者在「端口转发」里手动填": "Couldn't share your proxy: {{error}}. If your proxy isn't on the usual port, enter its address under Settings → Proxy, or fill it in under Port forwarding"
 }

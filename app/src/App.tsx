@@ -261,6 +261,8 @@ export default function App() {
     void api.portForwards().then((list) => setForwards((old) => JSON.stringify(old) === JSON.stringify(list) ? old : list)).catch(() => {});
     void api.reverseForwards().then((list) => setReverses((old) => JSON.stringify(old) === JSON.stringify(list) ? old : list)).catch(() => {});
   }, []);
+  // 打开时先读一次：侧边栏要标出正在借网的设备
+  useEffect(() => { refreshForwards(); }, [refreshForwards]);
   useEffect(() => {
     if (!forwards.length && !reverses.length) return;
     const timer = window.setInterval(refreshForwards, 3000);
@@ -827,6 +829,9 @@ export default function App() {
         paths={paths}
         activeKey={activeKey}
         sessionTarget={sessionTarget}
+        forwards={forwards}
+        reverses={reverses}
+        onForwardsChanged={refreshForwards}
         onOpenSession={(target, id) => addTab(target.connId, target.info, target.code, id)}
         onShowSessions={(target) => {
           if (sessionTarget && sessionTarget.connId !== target.connId && !tabs.some((tab) => tab.connId === sessionTarget.connId))

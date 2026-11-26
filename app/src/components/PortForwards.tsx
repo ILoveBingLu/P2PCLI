@@ -1,11 +1,12 @@
 // 端口转发：把对方电脑上跑着的服务（开发服务器、接口、数据库后台）接到本机，用本机浏览器打开；
 // 反过来，把本机的端口接到对方电脑上（反向转发），借网给没有代理的对方也是它
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Popover } from "@heroui/react";
 import { Cable, Copy, ExternalLink, Globe, LoaderCircle, RefreshCw, Square } from "lucide-react";
 import { api, pathLabel, type ForwardView, type ListeningPort, type PathInfo, type ProxyKind, type ReverseView } from "../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { t, tr } from "@/i18n";
@@ -23,7 +24,7 @@ function proxyKind(text: string): ProxyKind {
   return /^socks5h?:\/\//i.test(text.trim()) ? "socks5" : "http";
 }
 
-export function PortForwards({ connId, deviceName, forwards, reverses, onChanged }: {
+type PanelProps = {
   connId: number;
   deviceName: string;
   /** 这台设备正在转发的端口 */
@@ -31,8 +32,41 @@ export function PortForwards({ connId, deviceName, forwards, reverses, onChanged
   /** 这台设备上正在进行的反向转发（含借网） */
   reverses: ReverseView[];
   onChanged: () => void;
-}) {
+};
+
+/** 终端旁边的端口转发按钮：点开是面板 */
+export function PortForwards(props: PanelProps) {
+  const { forwards, reverses } = props;
   const [open, setOpen] = useState(false);
+  return (
+    <Popover isOpen={open} onOpenChange={setOpen}>
+      <Button variant="ghost" size="icon-sm" className="terminal-ports-toggle terminal-dock-button" data-active={forwards.length + reverses.length > 0 || undefined}
+        aria-label={t("端口转发")} title={forwards.length ? t("端口转发（{{count}} 个正在转发）", { count: forwards.length }) : t("端口转发：在本机打开对方电脑上的网页服务")}>
+        <Cable />
+        {forwards.length + reverses.length > 0 && <span className="terminal-ports-count">{forwards.length + reverses.length}</span>}
+      </Button>
+      <Popover.Content placement="left" offset={10} className="w-[24rem] max-w-[calc(100vw-24px)]">
+        <Popover.Dialog aria-label={t("端口转发")} className="ports-panel">
+          <PortForwardsPanel {...props} active={open} heading={<Popover.Heading className="ports-title">{t("端口转发")}</Popover.Heading>} />
+        </Popover.Dialog>
+      </Popover.Content>
+    </Popover>
+  );
+}
+
+/** 不开终端标签也能用：从设备的右键菜单打开的端口转发、反向转发、借网 */
+export function PortForwardsDialog({ open, onOpenChange, ...props }: PanelProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="ports-panel ports-dialog">
+        <PortForwardsPanel {...props} active={open} heading={<DialogTitle className="ports-title">{t("端口转发")}</DialogTitle>} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 端口转发面板的内容：正向转发、对方电脑上的服务、反向转发、借网。active 为假时不扫端口、不刷新 */
+function PortForwardsPanel({ active, heading, connId, deviceName, forwards, reverses, onChanged }: PanelProps & { active: boolean; heading: ReactNode }) {
   const [ports, setPorts] = useState<ListeningPort[] | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -61,13 +95,13 @@ export function PortForwards({ connId, deviceName, forwards, reverses, onChanged
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     let stop = false;
     const tick = () => void api.pathInfo(connId).then((p) => { if (!stop) setPath(p); }).catch(() => {});
     tick();
     const timer = window.setInterval(tick, 2000);
     return () => { stop = true; window.clearInterval(timer); };
-  }, [open, connId]);
+  }, [active, connId]);
 
   /** 开始转发以后：还在中继上就提醒一句（开始前后端已经等过几秒直连） */
   const warnIfRelay = () => void api.pathInfo(connId).then((p) => {
@@ -76,7 +110,7 @@ export function PortForwards({ connId, deviceName, forwards, reverses, onChanged
   }).catch(() => {});
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     void api.reverseInfo(connId).then((info) => {
       setReverseInfo(info);
       setProxyText((old) => old || (info.proxy ? `http://${info.proxy}` : "http://127.0.0.1:7890"));
@@ -86,7 +120,7 @@ export function PortForwards({ connId, deviceName, forwards, reverses, onChanged
     // 开着时刷新连接数
     const timer = window.setInterval(onChanged, 2000);
     return () => window.clearInterval(timer);
-  }, [open, connId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, connId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const start = async (port: number, openAfter: boolean) => {
     setBusy(port);
@@ -137,16 +171,9 @@ export function PortForwards({ connId, deviceName, forwards, reverses, onChanged
   const found = (ports ?? []).filter((p) => !forwarded.has(p.port));
 
   return (
-    <Popover isOpen={open} onOpenChange={setOpen}>
-      <Button variant="ghost" size="icon-sm" className="terminal-ports-toggle terminal-dock-button" data-active={forwards.length + reverses.length > 0 || undefined}
-        aria-label={t("端口转发")} title={forwards.length ? t("端口转发（{{count}} 个正在转发）", { count: forwards.length }) : t("端口转发：在本机打开对方电脑上的网页服务")}>
-        <Cable />
-        {forwards.length + reverses.length > 0 && <span className="terminal-ports-count">{forwards.length + reverses.length}</span>}
-      </Button>
-      <Popover.Content placement="left" offset={10} className="w-[24rem] max-w-[calc(100vw-24px)]">
-        <Popover.Dialog aria-label={t("端口转发")} className="ports-panel">
+    <>
           <div className="ports-head">
-            <Popover.Heading className="ports-title">{t("端口转发")}</Popover.Heading>
+            {heading}
             <span className="ports-device truncate">{deviceName}</span>
           </div>
           <p className="ports-note">{t("把对方电脑上 localhost 的端口接到本机，用本机浏览器打开对方跑着的开发服务器。只在本机能访问，经 P2P 加密传输。")}</p>
@@ -253,8 +280,6 @@ export function PortForwards({ connId, deviceName, forwards, reverses, onChanged
               )}
             </section>
           )}
-        </Popover.Dialog>
-      </Popover.Content>
-    </Popover>
+    </>
   );
 }

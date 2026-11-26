@@ -83,9 +83,18 @@ export function AiHintSettings() {
     <div className="flex flex-col gap-5">
       <Alert>
         <AlertDescription>
-          {t("让本机的 AI 能和你的其他设备互动：在别的电脑上跑命令、发文件过去、把文件拉回来。做法是给本机的 AI 放一份 p2pcli 使用说明，\n          它们新开的会话就知道怎么用，不用你再教。只写 AI 自己技能目录里一个叫 p2pcli 的文件夹，不改你的 CLAUDE.md、AGENTS.md，也不碰别人放的同名技能。")}
+          {t("让本机的 AI 能和你的其他设备互动：在别的电脑上跑命令、读写和搜索文件、发文件过去、把文件拉回来。按 AI 的种类有两种接法，下面分别设置。")}
         </AlertDescription>
       </Alert>
+
+      <McpSettings />
+
+      <div className="flex flex-col gap-1">
+        <strong className="text-sm">{t("给 Claude Code、Codex 等命令行 AI（使用说明）")}</strong>
+        <p className="detail-note">
+          {t("给本机的命令行 AI 放一份 p2pcli 使用说明，它们新开的会话就知道怎么用，不用你再教。只写 AI 自己技能目录里一个叫 p2pcli 的文件夹，不改你的 CLAUDE.md、AGENTS.md，也不碰别人放的同名技能。")}
+        </p>
+      </div>
 
       <Checkbox isSelected={status.auto} onChange={(on) => void setAuto(on)} isDisabled={working}>
         <Checkbox.Content className="gap-3 text-sm">
@@ -158,8 +167,6 @@ export function AiHintSettings() {
       )}
 
       <p className="detail-note">{t("已经开着的 AI 窗口要重开才会读到。")}</p>
-
-      <McpSettings />
     </div>
   );
 }
@@ -176,10 +183,10 @@ function McpSettings() {
   const claudeCode = `claude mcp add --scope user p2pcli -- ${/\s/.test(command) ? JSON.stringify(command) : command} mcp`;
   const copy = (text: string) => void writeClipboardText(text).then(() => toast.success(t("已复制"))).catch((e) => toast.error(String(e)));
   return (
-    <div className="flex flex-col gap-2">
-      <strong className="text-sm">{t("给 Cursor、Claude Desktop、Cline 等用（MCP）")}</strong>
+    <div className="flex flex-col gap-2 rounded-md border border-border px-3 py-3">
+      <strong className="text-sm">{t("给 Cursor、Claude Desktop、Cline 等（MCP）")}</strong>
       <p className="detail-note">
-        {t("这些 AI 用 MCP 接工具，不读上面的使用说明。把下面的配置加进它们的 MCP 设置（mcpServers），它们就能直接列设备、在别的电脑上跑命令、读写和搜索文件、传文件。要 P2PCLI 开着。")}
+        {t("这些 AI 用 MCP 接工具，不读下面的使用说明。把这份配置加进它们的 MCP 设置（mcpServers），它们就能直接列设备、在别的电脑上跑命令、读写和搜索文件、传文件。要 P2PCLI 开着。")}
       </p>
       {cli && !cli.installed && (
         <p className="detail-note">{t("命令行工具 p2pcli 还没装好：先到「设置 → 文件传输」里安装，配置里用的是它的完整路径。")}</p>

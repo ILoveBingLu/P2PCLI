@@ -1,7 +1,9 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Accordion } from "@heroui/react";
-import { ArrowUpRight, Copy, FileUp, FolderUp, History, House, LoaderCircle, Monitor, Pencil, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
-import { api, pathLabel, type DeviceStatus, type NearbyDevice, type Overview, type PathInfo, type TerminalSession, type TerminalSessionSnapshot } from "../api";
+import { ArrowUpRight, Cable, Copy, FileUp, FolderUp, Globe, History, House, LoaderCircle, Monitor, Pencil, Plus, Radar, RefreshCw, Square, Trash2 } from "lucide-react";
+import { api, pathLabel, type DeviceStatus, type ForwardView, type NearbyDevice, type Overview, type PathInfo, type ReverseView, type TerminalSession, type TerminalSessionSnapshot } from "../api";
+import { lendProxy } from "../lib/lending";
+import { PortForwardsDialog } from "./PortForwards";
 import { writeClipboardText } from "../lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +22,7 @@ const EXPANDED_DEVICES_KEY = "p2pcli.sidebar.expanded-devices";
 /** 本机那一行第一次出现时默认展开，之后听用户的 */
 const LOCAL_SEEDED_KEY = "p2pcli.sidebar.local-seeded";
 
-export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onSessionsLocalChange, onPendingOpen, onPendingClear }: {
+export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, nearbyReveal, onScanNearby, tabs, paths, activeKey, sessionTarget, forwards, reverses, onForwardsChanged, onConnect, onConnectLan, onRefresh, onOpenSession, onShowSessions, onSelectTab, onSessionEnded, onSessionsChanged, onSessionsLocalChange, onPendingOpen, onPendingClear }: {
   ov: Overview | null;
   liveSessions: Record<number, TerminalSessionSnapshot>;
   busy: boolean;
@@ -32,6 +34,10 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   paths: Record<number, PathInfo>;
   activeKey: number | null;
   sessionTarget: SessionTarget | null;
+  /** 端口转发、反向转发（借网）：设备的右键菜单里也能开、能停 */
+  forwards: ForwardView[];
+  reverses: ReverseView[];
+  onForwardsChanged: () => void;
   onConnect: (code: string) => void;
   /** 局域网里的设备按公钥连，不经过牵线服务器 */
   onConnectLan: (device: NearbyDevice) => void;
@@ -153,6 +159,51 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
           openRemoteControl({ endpoint_id: device.endpoint_id, name: deviceLabel(device), platform: device.platform });
         } }]
       : [];
+  // 借网、端口转发：要一条连上的连接。没连上就先连，连上以后接着做
+  const pendingAction = useRef<{ endpointId: string; name: string; kind: "lend" | "ports"; at: number } | null>(null);
+  const [portsTarget, setPortsTarget] = useState<{ connId: number; name: string } | null>(null);
+  /** 这台设备已经连上的连接（正在看它的会话页，或者开着的终端标签） */
+  const openTarget = (endpointId: string): SessionTarget | undefined =>
+    sessionTarget?.info.endpoint_id === endpointId ? sessionTarget : tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.state === "open");
+  /** 正在把本机代理借给这台设备的那个反向转发（这台设备的任意一条连接上） */
+  const lendingFor = (endpointId: string) => {
+    const conns = new Set(tabs.filter((tab) => tab.info.endpoint_id === endpointId).map((tab) => tab.connId));
+    if (sessionTarget?.info.endpoint_id === endpointId) conns.add(sessionTarget.connId);
+    return reverses.find((r) => r.proxy && conns.has(r.conn_id));
+  };
+  const runAction = (kind: "lend" | "ports", target: SessionTarget, name: string) => {
+    if (kind === "ports") return setPortsTarget({ connId: target.connId, name });
+    void lendProxy(target.connId, name).then(onForwardsChanged);
+  };
+  useEffect(() => {
+    const pending = pendingAction.current;
+    if (!pending) return;
+    // 那次没连上：过了一分钟就不再等，免得以后手动连上时突然借网
+    if (Date.now() - pending.at > 60_000) {
+      pendingAction.current = null;
+      return;
+    }
+    const target = openTarget(pending.endpointId);
+    if (!target) return;
+    pendingAction.current = null;
+    runAction(pending.kind, target, pending.name);
+  });
+  const networkActions = (endpointId: string, name: string, connect: () => void, disabled: boolean): MenuAction[] => {
+    const lending = lendingFor(endpointId);
+    const target = openTarget(endpointId);
+    const act = (kind: "lend" | "ports") => {
+      if (target) return runAction(kind, target, name);
+      pendingAction.current = { endpointId, name, kind, at: Date.now() };
+      connect();
+    };
+    return [
+      lending
+        ? { id: "lend-stop", label: t("停止借网"), icon: <Square className="size-4" />, separated: true,
+          onAction: () => void api.stopReverse(lending.id).then(() => { onForwardsChanged(); toast.success(t("已停止借网")); }) }
+        : { id: "lend", label: t("把本机代理借给这台设备"), icon: <Globe className="size-4" />, separated: true, disabled, onAction: () => act("lend") },
+      { id: "ports", label: t("端口转发…"), icon: <Cable className="size-4" />, disabled, onAction: () => act("ports") },
+    ];
+  };
   const sendActions = (endpointId: string, disabled: boolean): MenuAction[] => [
     { id: "send-files", label: t("发送文件…"), icon: <FileUp className="size-4" />, disabled, separated: true, onAction: () => void sendTo(endpointId, false) },
     { id: "send-folder", label: t("发送文件夹…"), icon: <FolderUp className="size-4" />, disabled, onAction: () => void sendTo(endpointId, true) },
@@ -182,6 +233,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       actions = [
         ...actions,
         ...controlAction(device, target, () => connectDevice(device), !target && (busy || offline)),
+        ...networkActions(endpointId, deviceLabel(device), () => connectDevice(device), !target && (busy || offline)),
         { id: "remark", label: deviceRemark(device).trim() ? t("修改备注") : t("添加备注"), icon: <Pencil className="size-4" />, onAction: () => setRemarkTarget({ endpointId, name: device.name, remark: deviceRemark(device) }) },
         ...sendActions(endpointId, !target && offline),
         { id: "copy", label: t("复制设备码"), icon: <Copy className="size-4" />, onAction: () => void copyCode(device.code) },
@@ -201,6 +253,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
         ? [{ id: "new", label: t("新建会话"), icon: <Plus className="size-4" />, onAction: () => onOpenSession(target) }]
         : [{ id: "connect", label: t("连接"), icon: <ArrowUpRight className="size-4" />, disabled: busy || !device.online, onAction: () => onConnectLan(device) }];
       actions.push(...controlAction(device, target, () => onConnectLan(device), !target && (busy || !device.online)));
+      actions.push(...networkActions(endpointId, deviceLabel(device), () => onConnectLan(device), !target && (busy || !device.online)));
       actions.push({
           id: "remark",
           label: deviceRemark(device) ? t("修改备注") : t("添加备注"),
@@ -228,6 +281,13 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
           toast.success(t("设备备注已保存"));
         }}
       />
+      {portsTarget && (
+        <PortForwardsDialog open onOpenChange={(next) => !next && setPortsTarget(null)}
+          connId={portsTarget.connId} deviceName={portsTarget.name}
+          forwards={forwards.filter((f) => f.conn_id === portsTarget.connId)}
+          reverses={reverses.filter((f) => f.conn_id === portsTarget.connId)}
+          onChanged={onForwardsChanged} />
+      )}
       <div className="connection-sidebar-inner">
         <CollaborationSidebarStatus />
         <Accordion allowsMultipleExpanded expandedKeys={expandedSections}
@@ -363,6 +423,11 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                         {lanOnline.has(device.endpoint_id) && (
                           <span className="lan-mark" title={t("在同一个局域网里，连接不经过牵线服务器")}>
                             <House aria-hidden="true" /><span className="sr-only">{t("局域网")}</span>
+                          </span>
+                        )}
+                        {lendingFor(device.endpoint_id) && (
+                          <span className="lan-mark lend-mark" title={t("正在把本机代理借给这台设备，右键可以停止")}>
+                            <Globe aria-hidden="true" /><span className="sr-only">{t("借网中")}</span>
                           </span>
                         )}
                         <PresenceLabel status={status} connected={!!pathTarget} path={pathTarget ? paths[pathTarget.connId] : undefined} />
