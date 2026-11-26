@@ -1848,6 +1848,20 @@ pub fn run() {
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
+            // Windows 的习惯：左键点托盘直接打开主窗口，右键才出菜单（Mac 菜单栏左键就该弹菜单，不动）
+            #[cfg(target_os = "windows")]
+            {
+                tray = tray.show_menu_on_left_click(false).on_tray_icon_event(|tray, ev| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = ev
+                    {
+                        show_main(tray.app_handle());
+                    }
+                });
+            }
             if let Err(e) = tray.build(app) {
                 warn!("托盘图标创建失败：{e}");
             }
