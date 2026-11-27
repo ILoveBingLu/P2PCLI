@@ -9,11 +9,11 @@ use objc2::AllocAnyThread;
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{CGDirectDisplayID, CGImage, kCGColorSpaceSRGB};
-use objc2_foundation::{NSArray, NSDictionary, NSError};
-use objc2_screen_capture_kit::{SCContentFilter, SCScreenshotManager, SCStreamConfiguration};
+use objc2_foundation::{NSDictionary, NSError};
+use objc2_screen_capture_kit::{SCScreenshotManager, SCStreamConfiguration};
 use p2pcli_core::screen::Screenshot;
 
-use super::capture::{SendRetained, find_display, pixel_size, wait};
+use super::capture::{SendRetained, pixel_size, wait};
 
 /// 按宽度上限等比缩小
 fn fit(w: u32, h: u32, max_width: u32) -> (u32, u32) {
@@ -25,7 +25,7 @@ fn fit(w: u32, h: u32, max_width: u32) -> (u32, u32) {
 
 pub(crate) fn capture(display: &str, max_width: u32) -> Result<Screenshot> {
     let id: CGDirectDisplayID = display.parse().map_err(|_| anyhow!("屏幕编号不对"))?;
-    let target = find_display(id)?;
+    let filter = super::capture::content_filter(id)?;
     let (pw, ph) = pixel_size(id);
     let (w, h) = fit(pw, ph, max_width);
     let config = unsafe { SCStreamConfiguration::new() };
@@ -36,7 +36,6 @@ pub(crate) fn capture(display: &str, max_width: u32) -> Result<Screenshot> {
         config.setScalesToFit(true);
         config.setColorSpaceName(kCGColorSpaceSRGB);
     }
-    let filter = unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &target, &NSArray::new()) };
     let image = wait(Duration::from_secs(10), |tx| {
         let block = block2::RcBlock::new(move |image: *mut CGImage, error: *mut NSError| {
             let result = match NonNull::new(image) {

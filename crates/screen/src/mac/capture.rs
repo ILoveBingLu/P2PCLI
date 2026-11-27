@@ -6,7 +6,8 @@
 //!
 //! 抓到的画面交给 [`super::flow`]：单独的编码线程边排边编，不等上一帧编完。
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -21,7 +22,7 @@ use objc2_core_graphics::{
 use objc2_core_media::{CMSampleBuffer, CMTime};
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol};
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCDisplay, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamOutput,
+    SCContentFilter, SCDisplay, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamOutput, SCWindow,
     SCStreamOutputType,
 };
 use p2pcli_core::host::BoxFuture;
@@ -132,8 +133,8 @@ pub(crate) fn wait<T: Send + 'static>(timeout: Duration, start: impl FnOnce(std:
 pub(crate) struct SendRetained<T>(pub(crate) T);
 unsafe impl<T> Send for SendRetained<T> {}
 
-pub(crate) fn find_display(id: CGDirectDisplayID) -> Result<Retained<SCDisplay>> {
-    let content = wait(Duration::from_secs(5), |tx| {
+fn shareable_content() -> Result<Retained<SCShareableContent>> {
+    Ok(wait(Duration::from_secs(5), |tx| {
         let block = block2::RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
             let result = if content.is_null() {
                 let message = unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string()).unwrap_or_default();
@@ -146,12 +147,72 @@ pub(crate) fn find_display(id: CGDirectDisplayID) -> Result<Retained<SCDisplay>>
         unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
     })?
     .map_err(|e| anyhow!("读不到可以抓的屏幕：{e}"))?
-    .0;
+    .0)
+}
+
+pub(crate) fn find_display(id: CGDirectDisplayID) -> Result<Retained<SCDisplay>> {
+    let content = shareable_content()?;
+    find_in(&content, id)
+}
+
+fn find_in(content: &SCShareableContent, id: CGDirectDisplayID) -> Result<Retained<SCDisplay>> {
     let displays = unsafe { content.displays() };
     displays
         .iter()
         .find(|d| unsafe { d.displayID() } == id)
         .ok_or_else(|| anyhow!("找不到这块屏幕，可能已经拔掉了"))
+}
+
+/// 抓屏时排除掉的窗口（隐私屏的遮挡窗口）：远程画面和截图里没有它们，看到的是底下的桌面
+static EXCLUDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// 正在跑的抓屏：排除的窗口变了要更新它们的过滤
+static STREAMS: Mutex<Vec<(u64, CGDirectDisplayID, SendRetained<Retained<SCStream>>)>> = Mutex::new(Vec::new());
+static NEXT_STREAM: AtomicU64 = AtomicU64::new(1);
+
+/// 抓这块屏幕、排除掉隐私屏窗口的过滤
+pub(crate) fn content_filter(id: CGDirectDisplayID) -> Result<Retained<SCContentFilter>> {
+    let content = shareable_content()?;
+    let display = find_in(&content, id)?;
+    let excluded = EXCLUDED.lock().unwrap().clone();
+    let windows: Vec<Retained<SCWindow>> = if excluded.is_empty() {
+        Vec::new()
+    } else {
+        unsafe { content.windows() }.iter().filter(|w| excluded.contains(&unsafe { w.windowID() })).collect()
+    };
+    let windows = NSArray::from_retained_slice(&windows);
+    Ok(unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &windows) })
+}
+
+/// 抓屏时多排除、少排除一些窗口，正在跑的抓屏都换上新的过滤（等它们换好再返回）。
+/// 窗口要已经在屏幕上（系统才列得出来）
+pub(crate) fn set_excluded(add: &[u32], remove: &[u32]) {
+    {
+        let mut ex = EXCLUDED.lock().unwrap();
+        ex.retain(|id| !remove.contains(id));
+        ex.extend(add.iter().filter(|id| !remove.contains(id)));
+    }
+    let streams: Vec<(CGDirectDisplayID, SendRetained<Retained<SCStream>>)> =
+        STREAMS.lock().unwrap().iter().map(|(_, id, s)| (*id, SendRetained(s.0.clone()))).collect();
+    for (id, stream) in streams {
+        let filter = match content_filter(id) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(display = id, "抓屏换过滤失败：{e:#}");
+                continue;
+            }
+        };
+        let done = wait(Duration::from_secs(3), |tx| {
+            let block = block2::RcBlock::new(move |error: *mut NSError| {
+                let _ = tx.send(unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string()));
+            });
+            unsafe { stream.0.updateContentFilter_completionHandler(&filter, Some(&block)) };
+        });
+        match done {
+            Ok(None) => {}
+            Ok(Some(e)) => warn!(display = id, "抓屏换过滤失败：{e}"),
+            Err(e) => warn!(display = id, "抓屏换过滤失败：{e:#}"),
+        }
+    }
 }
 
 /// 长边超过这么多（5K、6K 屏的原生分辨率）要先试开一下编码器：H.265 硬件编码器才编得了，开不了就缩到这么大
@@ -166,6 +227,8 @@ fn fit(w: u32, h: u32, max_long_edge: u32) -> (u32, u32) {
 }
 
 pub struct MacCapture {
+    /// 在 [`STREAMS`] 里的编号
+    key: u64,
     stream: Retained<SCStream>,
     _sink: Retained<Sink>,
     _queue: DispatchRetained<DispatchQueue>,
@@ -179,7 +242,7 @@ unsafe impl Sync for MacCapture {}
 impl MacCapture {
     pub fn start(opts: CaptureOptions) -> Result<Self> {
         let id: CGDirectDisplayID = opts.display.parse().context("屏幕编号不对")?;
-        let display = find_display(id)?;
+        let filter = content_filter(id)?;
         let (pw, ph) = pixel_size(id);
         let (mut width, mut height) = fit(pw, ph, opts.max_long_edge);
         let p3 = opts.wide_gamut;
@@ -216,10 +279,6 @@ impl MacCapture {
             // 编码器里最多两帧，这里存着最新的和上一次编的，系统那边还要有空闲的缓冲
             config.setQueueDepth(6);
         }
-        let filter = unsafe {
-            SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &NSArray::new())
-        };
-
         let color = ColorFormat { full_range: opts.full_range, primaries: if p3 { Primaries::P3 } else { Primaries::Bt709 }, ..Default::default() };
         let pipe = Pipe { encoder, fps: opts.fps, codec: opts.codec, p3 };
         let frames = Frames::start(pipe, color, opts.bitrate, PIPELINED)?;
@@ -246,12 +305,15 @@ impl MacCapture {
             bail!("抓屏开不起来：{e}");
         }
         info!(display = id, width, height, fps = opts.fps, "开始抓屏");
-        Ok(MacCapture { stream, _sink: sink, _queue: queue, frames })
+        let key = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
+        STREAMS.lock().unwrap().push((key, id, SendRetained(stream.clone())));
+        Ok(MacCapture { key, stream, _sink: sink, _queue: queue, frames })
     }
 }
 
 impl Drop for MacCapture {
     fn drop(&mut self) {
+        STREAMS.lock().unwrap().retain(|(k, _, _)| *k != self.key);
         unsafe { self.stream.stopCaptureWithCompletionHandler(None) };
         self.frames.close();
         debug!("停止抓屏");

@@ -62,6 +62,8 @@ impl Injector {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState);
         // 默认注入一个事件后本机的键鼠会被压住 0.25 秒；对面在操作时本机的人也要能动
         CGEventSource::set_local_events_suppression_interval(source.as_deref(), 0.0);
+        // 打上标记：隐私屏拦本机键鼠时认它放行
+        CGEventSource::set_user_data(source.as_deref(), crate::privacy::INPUT_TAG as i64);
         Injector { source, keys: HashSet::new(), buttons: [false; 5], flags: CGEventFlags(0), last: CGPoint::new(0.0, 0.0), click: None }
     }
 

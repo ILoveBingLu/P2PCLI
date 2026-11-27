@@ -314,7 +314,57 @@ pub trait ScreenBackend: Send + Sync + 'static {
     fn screenshot(&self, _display: &str, _max_width: u32) -> Result<Screenshot> {
         bail!("这台电脑还不支持截屏")
     }
+    /// 能开隐私屏
+    fn privacy_supported(&self) -> bool {
+        false
+    }
+    /// 盖上隐私屏：本机每块屏幕盖上 style 的画面，远程画面和截图里没有它（看到的是底下的桌面）；
+    /// block_input 时拦住本机的键盘鼠标，只有远程注入的能用。返回的东西丢掉就撤掉，丢的时候不阻塞。
+    /// 开的时候会阻塞，别在异步任务里直接调
+    fn start_privacy(&self, _style: &PrivacyStyle, _block_input: bool) -> Result<Box<dyn std::any::Any + Send>> {
+        bail!("这台电脑还不支持隐私屏")
+    }
 }
+
+/// 隐私屏盖上时被连方屏幕上显示什么（被连方的主人在设置里选）
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PrivacyStyle {
+    #[serde(default)]
+    pub background: PrivacyBackground,
+    /// 中间显示一个大时钟
+    #[serde(default)]
+    pub clock: bool,
+    /// 屏幕中间的一行字，空就不写
+    #[serde(default)]
+    pub message: String,
+}
+
+impl PrivacyStyle {
+    /// 默认样式：黑底，写着谁在操作
+    pub fn new(viewer: &str) -> Self {
+        PrivacyStyle { message: privacy_message(viewer), ..Default::default() }
+    }
+}
+
+/// 默认的那行字
+pub fn privacy_message(viewer: &str) -> String {
+    format!("这台电脑正在被「{viewer}」远程操作，屏幕已隐藏")
+}
+
+/// 隐私屏的背景
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PrivacyBackground {
+    #[default]
+    Black,
+    /// 内置的渐变色，0 到 [`PRIVACY_PRESETS`] - 1
+    Preset { index: u8 },
+    /// 主人自己选的图片，铺满屏幕
+    Image { path: std::path::PathBuf },
+}
+
+/// 内置渐变背景有几种
+pub const PRIVACY_PRESETS: u8 = 3;
 
 /// 一路正在抓的画面。丢掉就停止
 pub trait ScreenCapture: Send + Sync {
@@ -474,6 +524,9 @@ pub struct ScreenStarted {
     /// 被连方能传声音：观看方开一条 [`crate::proto::Msg::ScreenAudio`] 流带上这个号来收。0 是没有声音
     #[serde(default, skip_serializing_if = "is_zero")]
     pub audio_token: u64,
+    /// 观看方可以开隐私屏（被连方主人允许、能操作、本机做得到）。为假时观看方不发 [`ViewerMsg::Privacy`]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub privacy: bool,
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -496,6 +549,8 @@ pub enum ViewerMsg {
     ClipOffer { offer: crate::screen_clip::ClipOffer },
     /// 打开、关掉快捷键转换。只在 [`ScreenStarted::translate_keys`] 为真时发
     TranslateKeys { on: bool },
+    /// 打开、关掉隐私屏。只在 [`ScreenStarted::privacy`] 为真时发；被连方回 [`HostMsg::Privacy`]
+    Privacy { on: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -536,6 +591,13 @@ pub enum HostMsg {
     ClipOffer { offer: crate::screen_clip::ClipOffer },
     /// 被连方这边有程序要粘贴观看方剪贴板里的内容：观看方开一条 Put 流送来
     ClipWant { req: u64, offer: u64, what: crate::screen_clip::ClipWhat },
+    /// 隐私屏现在盖没盖着。观看方开关以后回，画面暂停时被连方自己撤掉、恢复后盖回去时也发。
+    /// note 是没开成或者被撤掉的原因
+    Privacy {
+        on: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     /// 出错了，画面结束
     Error { message: String },
 }
@@ -974,6 +1036,32 @@ impl Drop for Running {
     }
 }
 
+/// 盖上或撤掉隐私屏；没盖成返回原因
+async fn set_privacy(backend: &Arc<dyn ScreenBackend>, style: &PrivacyStyle, on: bool, guard: &mut Option<Box<dyn std::any::Any + Send>>) -> Option<String> {
+    if !on {
+        if guard.take().is_some() {
+            info!("撤掉隐私屏");
+        }
+        return None;
+    }
+    if guard.is_some() {
+        return None;
+    }
+    let (backend, style) = (backend.clone(), style.clone());
+    match tokio::task::spawn_blocking(move || backend.start_privacy(&style, true)).await {
+        Ok(Ok(g)) => {
+            info!("盖上隐私屏");
+            *guard = Some(g);
+            None
+        }
+        Ok(Err(e)) => {
+            warn!("隐私屏没盖上：{e:#}");
+            Some(format!("{e:#}"))
+        }
+        Err(e) => Some(format!("{e}")),
+    }
+}
+
 /// 被连方：把画面发给观看方，收它的确认和键鼠事件。返回时画面结束。
 /// `control` 为假时键鼠事件一律丢掉。`stop` 被通知就结束（本机的人点了断开）
 #[allow(clippy::too_many_arguments)]
@@ -983,6 +1071,7 @@ pub async fn serve<S, R>(
     open: ScreenOpen,
     control: bool,
     control_note: Option<String>,
+    privacy: Option<PrivacyStyle>,
     mut send: S,
     mut recv: R,
     stop: Arc<Notify>,
@@ -1059,10 +1148,15 @@ where
                 input_v2: control && backend.input_v2(),
                 translate_keys: control && open.keyboard.is_some(),
                 audio_token: host_audio.as_ref().map_or(0, |a| a.token()),
+                privacy: privacy.is_some(),
             },
         },
     )
     .await?;
+    // 隐私屏：观看方想不想盖、现在盖没盖着。画面暂停（走了中继）时撤掉，免得本机的人被锁在黑屏外面，对面又看不到
+    let privacy = privacy.filter(|_| control);
+    let mut privacy_want = false;
+    let mut privacy_guard: Option<Box<dyn std::any::Any + Send>> = None;
 
     // 收：确认和换屏、换画质交给主循环；键鼠事件直接注入，不排在编码后面
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<ViewerMsg>();
@@ -1325,6 +1419,16 @@ where
                     need_key = true;
                     last_config = None;
                 }
+                Some(ViewerMsg::Privacy { on }) => {
+                    let Some(style) = &privacy else { continue };
+                    privacy_want = on;
+                    let note = if on && paused.is_some() {
+                        Some("画面暂停着，恢复后再盖上隐私屏".to_string())
+                    } else {
+                        set_privacy(&backend, style, on, &mut privacy_guard).await
+                    };
+                    let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Privacy { on: privacy_guard.is_some(), note } })).await;
+                }
                 Some(ViewerMsg::Input { .. } | ViewerMsg::ClipOffer { .. } | ViewerMsg::TranslateKeys { .. }) => {}
                 None => break Ok(()),
             },
@@ -1346,6 +1450,12 @@ where
                     }
                     paused = now_path;
                     set_audio_paused(paused.is_some());
+                    if let Some(style) = privacy.as_ref().filter(|_| privacy_want) {
+                        let on = paused.is_none();
+                        let note = set_privacy(&backend, style, on, &mut privacy_guard).await;
+                        let note = note.or_else(|| (!on).then(|| "画面暂停了，先撤掉隐私屏，恢复后自动盖回".to_string()));
+                        let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Privacy { on: privacy_guard.is_some(), note } })).await;
+                    }
                 }
                 if let Some((min_rtt, link_bps)) = link_info(&conn) {
                     rate.set_link(min_rtt, link_bps);

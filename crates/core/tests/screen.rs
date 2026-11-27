@@ -62,6 +62,18 @@ struct Fake {
     /// 能抓声音；抓的时候是真（停了变回假）
     audio: bool,
     audio_running: Arc<std::sync::atomic::AtomicBool>,
+    /// 能开隐私屏；盖着的时候记着样式和拦不拦本机键鼠（撤掉变回空）
+    privacy: bool,
+    privacy_on: Arc<Mutex<Option<(p2pcli_core::screen::PrivacyStyle, bool)>>>,
+}
+
+/// 假的隐私屏：丢掉就撤掉
+struct FakePrivacy(Arc<Mutex<Option<(p2pcli_core::screen::PrivacyStyle, bool)>>>);
+
+impl Drop for FakePrivacy {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap() = None;
+    }
 }
 
 /// 假的抓声音：一个线程每 10 毫秒送 10 毫秒的 440 Hz 正弦波，丢掉就停
@@ -156,6 +168,13 @@ impl ScreenBackend for FakeBackend {
     }
     fn input_v2(&self) -> bool {
         self.0.input_v2
+    }
+    fn privacy_supported(&self) -> bool {
+        self.0.privacy
+    }
+    fn start_privacy(&self, style: &p2pcli_core::screen::PrivacyStyle, block_input: bool) -> Result<Box<dyn std::any::Any + Send>> {
+        *self.0.privacy_on.lock().unwrap() = Some((style.clone(), block_input));
+        Ok(Box::new(FakePrivacy(self.0.privacy_on.clone())))
     }
     fn audio_supported(&self) -> bool {
         self.0.audio
@@ -286,7 +305,7 @@ impl Node2 {
 #[tokio::test(flavor = "multi_thread")]
 async fn view_and_control_over_direct_link() {
     let fake = Arc::new(Fake::default());
-    let (n, delegate) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, delegate) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     assert!(n.remote.supports_screen());
 
     let (started, mut input, mut output) =
@@ -376,7 +395,7 @@ async fn view_and_control_over_direct_link() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stops_sending_without_acks() {
     let fake = Arc::new(Fake::default());
-    let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
     let (started, _input, mut output) =
         n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     // 对方不给操作
@@ -399,14 +418,14 @@ async fn stops_sending_without_acks() {
 async fn denied_or_unsupported() {
     // 被连方拒绝
     let fake = Arc::new(Fake::default());
-    let (n, _) = pair(ScreenDecision { allow: false, control: false }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: false, control: false, privacy: false }, Some(fake.clone())).await;
     let err = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Smooth, control: false, codecs: vec![], ..Default::default() }).await.err().unwrap();
     assert!(format!("{err:#}").contains("denied"), "{err:#}");
     assert_eq!(fake.produced.load(Ordering::Relaxed), 0);
     n.shutdown().await;
 
     // 被连方没有抓屏实现：不报能力，观看方不开
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, None).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, None).await;
     assert!(!n.remote.supports_screen());
     assert!(n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Smooth, control: false, codecs: vec![], ..Default::default() }).await.is_err());
     n.shutdown().await;
@@ -416,7 +435,7 @@ async fn denied_or_unsupported() {
 #[tokio::test(flavor = "multi_thread")]
 async fn cursor_is_sent_separately() {
     let fake = Arc::new(Fake { cursor: true, ..Default::default() });
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let (_, mut input, mut output) =
         n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     let (mut shapes, mut moves) = (0, 0);
@@ -442,7 +461,7 @@ async fn cursor_is_sent_separately() {
 
     // 读不了指针的被连方：指针照旧画进画面
     let fake = Arc::new(Fake::default());
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     assert_eq!(*fake.show_cursor.lock().unwrap(), Some(true));
     n.shutdown().await;
@@ -454,7 +473,7 @@ async fn cursor_is_sent_separately() {
 async fn extra_input_only_when_supported() {
     use p2pcli_core::screen::{HostMsg, MouseButton};
     let fake = Arc::new(Fake { input_v2: true, ..Default::default() });
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let (started, mut input, mut output) =
         n.remote.open_screen(ScreenOpen { quality: Quality::Balanced, control: true, ..Default::default() }).await.unwrap();
     assert!(started.input_v2);
@@ -491,14 +510,14 @@ async fn extra_input_only_when_supported() {
 
     // 只给看：不开
     let fake = Arc::new(Fake { input_v2: true, ..Default::default() });
-    let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
     let (started, _input, _output) = n.remote.open_screen(ScreenOpen { quality: Quality::Balanced, control: true, ..Default::default() }).await.unwrap();
     assert!(!started.input_v2);
     n.shutdown().await;
 
     // 被连方不认得（老版本）：不开
     let fake = Arc::new(Fake::default());
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let (started, _input, _output) = n.remote.open_screen(ScreenOpen { quality: Quality::Balanced, control: true, ..Default::default() }).await.unwrap();
     assert!(!started.input_v2);
     n.shutdown().await;
@@ -518,7 +537,7 @@ async fn shortcuts_are_translated_on_host() {
     let injected = |fake: &Fake| fake.inputs.lock().unwrap().iter().map(|(_, ev)| ev.clone()).collect::<Vec<_>>();
 
     let fake = Arc::new(Fake::default());
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let (started, mut input, _output) = n
         .remote
         .open_screen(ScreenOpen { control: true, keyboard: Some(viewer), translate_keys: true, ..Default::default() })
@@ -551,7 +570,7 @@ async fn shortcuts_are_translated_on_host() {
 
     // 老版本的观看方不报键盘习惯：不转换
     let fake = Arc::new(Fake::default());
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let (started, mut input, _output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
     assert!(!started.translate_keys);
     for ev in copy.clone() {
@@ -571,7 +590,7 @@ async fn shortcuts_are_translated_on_host() {
 async fn audio_streams_and_stops() {
     use p2pcli_core::screen_audio::{CHANNELS, Decoder, FRAME};
     let fake = Arc::new(Fake { audio: true, ..Default::default() });
-    let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
     let (started, _input, _output) = n.remote.open_screen(ScreenOpen { audio: true, ..Default::default() }).await.unwrap();
     assert_ne!(started.audio_token, 0, "能抓能放该给号");
     let mut rx = n.remote.open_screen_audio(started.audio_token).await.unwrap();
@@ -604,7 +623,7 @@ async fn audio_streams_and_stops() {
     // 观看方不能放（老版本）、被连方不能抓：都没有号
     for (viewer, host) in [(false, true), (true, false)] {
         let fake = Arc::new(Fake { audio: host, ..Default::default() });
-        let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake)).await;
+        let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake)).await;
         let (started, _input, _output) = n.remote.open_screen(ScreenOpen { audio: viewer, ..Default::default() }).await.unwrap();
         assert_eq!(started.audio_token, 0, "viewer={viewer} host={host}");
         n.shutdown().await;
@@ -617,7 +636,7 @@ async fn codec_is_negotiated() {
     use p2pcli_core::screen::VideoCodec;
     for (codecs, want) in [(vec![], VideoCodec::H264), (vec![VideoCodec::H264], VideoCodec::H264), (vec![VideoCodec::H265, VideoCodec::H264], VideoCodec::H265)] {
         let fake = Arc::new(Fake::default());
-        let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+        let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
         let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: false, codecs, ..Default::default() }).await.unwrap();
         assert_eq!(*fake.codec.lock().unwrap(), Some(want));
         n.shutdown().await;
@@ -636,7 +655,7 @@ async fn color_is_negotiated() {
         (true, true, (true, Primaries::P3)),
     ] {
         let fake = Arc::new(Fake::default());
-        let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+        let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
         let (_, _input, mut output) = n
             .remote
             .open_screen(ScreenOpen { quality: Quality::Balanced, color_tags, wide_gamut, ..Default::default() })
@@ -669,7 +688,7 @@ async fn yuv444_is_negotiated() {
         (false, true, h265.clone(), Quality::Sharp, false),
     ] {
         let fake = Arc::new(Fake::default());
-        let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+        let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
         let (_, _input, mut output) = n
             .remote
             .open_screen(ScreenOpen { quality, color_tags, chroma444, codecs: codecs.clone(), ..Default::default() })
@@ -694,7 +713,7 @@ async fn clipboard_is_shared_while_controlling() {
     let host_clip = Arc::new(FakeClip { order: order.clone(), ..Default::default() });
     host_clip.copy(ClipContent { formats: vec![("text".into(), Some(b"host old".to_vec()))], files: vec![] });
     let fake = Arc::new(Fake { clip: Some(host_clip.clone()), order: order.clone(), ..Default::default() });
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let (started, mut input, mut output) = n.remote.open_screen(ScreenOpen { control: true, clipboard: true, ..Default::default() }).await.unwrap();
     assert!(started.clipboard);
     assert_ne!(started.clip_token, 0);
@@ -808,14 +827,14 @@ async fn clipboard_is_shared_while_controlling() {
 
     // 只给看：不互通
     let fake = Arc::new(Fake { clip: Some(Arc::new(FakeClip::default())), ..Default::default() });
-    let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
     let (started, _input, _output) = n.remote.open_screen(ScreenOpen { control: true, clipboard: true, ..Default::default() }).await.unwrap();
     assert!(!started.clipboard);
     n.shutdown().await;
 
     // 观看方没要（老版本）：不互通
     let fake = Arc::new(Fake { clip: Some(Arc::new(FakeClip::default())), ..Default::default() });
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     let (started, _input, _output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
     assert!(!started.clipboard);
     n.shutdown().await;
@@ -825,7 +844,7 @@ async fn clipboard_is_shared_while_controlling() {
 #[tokio::test(flavor = "multi_thread")]
 async fn screenshot_needs_approval_and_arrives_whole() {
     let fake = Arc::new(Fake::default());
-    let (n, delegate) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (n, delegate) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
     assert!(n.remote.supports_screenshot());
     let (shot, display, relay) = n.remote.screenshot(Some("2".into()), 800).await.unwrap();
     assert_eq!(display, "2");
@@ -844,14 +863,73 @@ async fn screenshot_needs_approval_and_arrives_whole() {
 
     // 对方不同意
     let fake = Arc::new(Fake::default());
-    let (n, _) = pair(ScreenDecision { allow: false, control: false }, Some(fake)).await;
+    let (n, _) = pair(ScreenDecision { allow: false, control: false, privacy: false }, Some(fake)).await;
     let err = n.remote.screenshot(None, 800).await.err().unwrap();
     assert!(format!("{err:#}").contains("denied"), "{err:#}");
     n.shutdown().await;
 
     // 对方没有远程画面实现：不报能力，直接说
-    let (n, _) = pair(ScreenDecision { allow: true, control: true }, None).await;
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, None).await;
     assert!(!n.remote.supports_screenshot());
     assert!(n.remote.screenshot(None, 800).await.is_err());
     n.shutdown().await;
+}
+
+/// 隐私屏：主人允许、能操作时观看方能开；开了以后本机按主人选的样式盖上、拦住本机键鼠，
+/// 关掉或者观看方走了就撤掉。主人没允许、只给看、本机做不到时都不给开
+#[tokio::test(flavor = "multi_thread")]
+async fn privacy_screen_on_and_off() {
+    use p2pcli_core::screen::{PrivacyStyle, ScreenInput, ScreenOutput};
+    async fn privacy_reply(output: &mut ScreenOutput<iroh::endpoint::RecvStream>, input: &mut ScreenInput<iroh::endpoint::SendStream>) -> (bool, Option<String>) {
+        loop {
+            match timeout(Duration::from_secs(5), output.next()).await.unwrap().unwrap().unwrap() {
+                ScreenEvent::Host(HostMsg::Privacy { on, note }) => return (on, note),
+                ScreenEvent::Frame { seq, .. } => input.send(&ViewerMsg::Ack { seq }).await.unwrap(),
+                _ => {}
+            }
+        }
+    }
+    let fake = Arc::new(Fake { privacy: true, ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: true }, Some(fake.clone())).await;
+    let (started, mut input, mut output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
+    assert!(started.privacy);
+    input.send(&ViewerMsg::Privacy { on: true }).await.unwrap();
+    assert_eq!(privacy_reply(&mut output, &mut input).await, (true, None));
+    let (style, block) = fake.privacy_on.lock().unwrap().clone().expect("要盖上");
+    assert!(block, "要拦住本机键鼠");
+    // 默认样式：写着谁在操作（测试里两边都叫本机的名字）
+    assert_eq!(style.background, PrivacyStyle::default().background);
+    assert!(style.message.contains("远程操作"), "{}", style.message);
+    input.send(&ViewerMsg::Privacy { on: false }).await.unwrap();
+    assert_eq!(privacy_reply(&mut output, &mut input).await, (false, None));
+    assert!(fake.privacy_on.lock().unwrap().is_none(), "关掉要撤掉");
+    // 再开，然后观看方直接走掉：被连方要撤掉
+    input.send(&ViewerMsg::Privacy { on: true }).await.unwrap();
+    assert_eq!(privacy_reply(&mut output, &mut input).await, (true, None));
+    drop(input);
+    drop(output);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while fake.privacy_on.lock().unwrap().is_some() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(fake.privacy_on.lock().unwrap().is_none(), "观看方走了要撤掉");
+    n.shutdown().await;
+
+    // 主人没允许、只给看、本机做不到：都不给开
+    for (decision, supported, control) in [
+        (ScreenDecision { allow: true, control: true, privacy: false }, true, true),
+        (ScreenDecision { allow: true, control: false, privacy: true }, true, true),
+        (ScreenDecision { allow: true, control: true, privacy: true }, false, true),
+        (ScreenDecision { allow: true, control: true, privacy: true }, true, false),
+    ] {
+        let fake = Arc::new(Fake { privacy: supported, ..Default::default() });
+        let (n, _) = pair(decision, Some(fake.clone())).await;
+        let (started, mut input, _output) = n.remote.open_screen(ScreenOpen { control, ..Default::default() }).await.unwrap();
+        assert!(!started.privacy, "{decision:?} 能开={supported} 要操作={control}");
+        // 不守规矩的观看方硬发：也不盖
+        input.send(&ViewerMsg::Privacy { on: true }).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(fake.privacy_on.lock().unwrap().is_none());
+        n.shutdown().await;
+    }
 }

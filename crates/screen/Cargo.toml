@@ -12,6 +12,9 @@ tracing.workspace = true
 tokio = { workspace = true }
 # 指针图案用 base64 装进 JSON
 base64 = "0.22"
+# 隐私屏：读主人选的背景图片、按屏幕大小铺满；时钟读本地时间
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # macOS：ScreenCaptureKit 抓屏（画面留在 GPU 的 IOSurface 里）→ VideoToolbox 硬件 H.264 编码；CGEvent 注入键鼠
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -28,7 +31,9 @@ objc2-screen-capture-kit = "0.3"
 # 读整个系统当前的鼠标指针样子
 # 剪贴板互通：NSPasteboard、粘贴时才传的数据提供者，TIFF 换 PNG
 # 快捷键转换：看前台程序是不是终端（NSWorkspace）
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSGraphicsContext", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSWorkspace", "NSRunningApplication", "objc2-core-graphics", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSGraphicsContext", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSWorkspace", "NSRunningApplication", "objc2-core-graphics", "objc2-core-foundation",
+    # 隐私屏：每块屏幕盖一个窗口，上面有背景图、时钟和一行字
+    "NSWindow", "NSResponder", "NSView", "NSScreen", "NSColor", "NSFont", "NSTextField", "NSControl", "NSText", "NSImageView", "NSCell", "NSGraphics", "NSAnimation", "NSFontDescriptor", "NSLayoutConstraint"] }
 block2 = "0.6"
 dispatch2 = "0.3"
 # 4:4:4：在 GPU 上把 BGRA 画面排成三倍高的灰度图

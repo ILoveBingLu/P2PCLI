@@ -131,11 +131,13 @@ pub struct ScreenRequest {
     pub control: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScreenDecision {
     pub allow: bool,
     /// 允许操作键盘鼠标
     pub control: bool,
+    /// 允许对方开隐私屏（本机屏幕盖住、本机键鼠拦住）。只在能操作时有用
+    pub privacy: bool,
 }
 
 /// 界面层实现：弹窗问主人、显示谁连着本机
@@ -148,7 +150,11 @@ pub trait HostDelegate: Send + Sync + 'static {
     }
     /// 有设备要看本机画面，问主人（或按设置直接决定）；没有界面的默认不给看
     fn approve_screen(&self, _req: ScreenRequest) -> BoxFuture<ScreenDecision> {
-        Box::pin(async { ScreenDecision { allow: false, control: false } })
+        Box::pin(async { ScreenDecision::default() })
+    }
+    /// 隐私屏盖上时本机屏幕上显示什么（主人在设置里选的）。viewer 是在看的那台设备的名字
+    fn privacy_style(&self, viewer: &str) -> crate::screen::PrivacyStyle {
+        crate::screen::PrivacyStyle::new(viewer)
     }
 }
 
@@ -1019,10 +1025,12 @@ impl Host {
                     Err(e) => (false, Some(format!("{e:#}"))),
                 }
             };
-            Ok(Some((backend, id, name, control, control_note)))
+            // 隐私屏：主人允许、能操作、本机做得到才开放；样式现在就取好
+            let privacy = (decision.privacy && control && backend.privacy_supported()).then(|| self.delegate.privacy_style(&name));
+            Ok(Some((backend, id, name, control, control_note, privacy)))
         }
         .await;
-        let (backend, id, name, control, control_note) = match prepared {
+        let (backend, id, name, control, control_note, privacy) = match prepared {
             Ok(Some(p)) => p,
             Ok(None) => return,
             Err(e) => {
@@ -1039,7 +1047,7 @@ impl Host {
         self.screens.lock().unwrap().insert(id, (summary.clone(), stop.clone()));
         info!(session, control, "对方开始查看本机画面");
         self.delegate.event(HostEvent::ScreenStarted { viewer: summary });
-        if let Err(e) = crate::screen::serve(conn, backend, open, control, control_note, send, recv, stop).await {
+        if let Err(e) = crate::screen::serve(conn, backend, open, control, control_note, privacy, send, recv, stop).await {
             warn!(session, "远程画面结束：{e:#}");
         }
         self.screens.lock().unwrap().remove(&id);
