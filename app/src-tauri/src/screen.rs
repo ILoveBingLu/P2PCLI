@@ -31,7 +31,7 @@ const EV_AUDIO: u8 = 3;
 
 impl UiDelegate {
     pub(crate) fn approve_screen_request(&self, req: ScreenRequest) -> BoxFuture<ScreenDecision> {
-        let deny = ScreenDecision { allow: false, control: false };
+        let deny = ScreenDecision { allow: false, control: false, privacy: false };
         let Some(state) = self.app.try_state::<AppState>() else {
             return Box::pin(async move { deny });
         };

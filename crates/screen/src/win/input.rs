@@ -30,6 +30,9 @@ pub struct Injector {
     last: (i32, i32),
 }
 
+/// 注入的键鼠都打上这个标记：隐私屏拦本机键鼠时认它放行
+const TAG: usize = crate::privacy::INPUT_TAG as usize;
+
 fn send(inputs: &[INPUT]) {
     unsafe {
         SendInput(inputs, std::mem::size_of::<INPUT>() as i32);
@@ -103,10 +106,7 @@ fn button_flags(b: MouseButton, down: bool) -> (MOUSE_EVENT_FLAGS, i32) {
 }
 
 impl Injector {
-    /// 注入的键鼠都打上这个标记：隐私屏拦本机键鼠时认它放行
-const TAG: usize = crate::privacy::INPUT_TAG as usize;
-
-/// 屏幕上的 0~1 → SendInput 的绝对坐标（整个虚拟桌面映射到 0~65535）
+    /// 屏幕上的 0~1 → SendInput 的绝对坐标（整个虚拟桌面映射到 0~65535）
     fn absolute(&mut self, display: &str, x: f64, y: f64) -> Result<(i32, i32)> {
         let m = super::find_monitor(display)?;
         let w = (m.rect.right - m.rect.left).max(1);
