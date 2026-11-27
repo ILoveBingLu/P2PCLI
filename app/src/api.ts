@@ -810,6 +810,8 @@ export const api = {
   setScreenPrivacy: (privacy: PrivacySettings) => invoke<ScreenSettings>("set_screen_privacy", { privacy }),
   /** 弹选择框选背景图片；没选是 null */
   screenPrivacyPickImage: () => invoke<ScreenSettings | null>("screen_privacy_pick_image"),
+  /** 背景小样：内置主题按顺序，再加自己选的图片 */
+  screenPrivacyThumbnails: () => invoke<{ presets: string[]; image: string | null }>("screen_privacy_thumbnails"),
   /** 按现在的设置在本机盖 5 秒看看 */
   screenPrivacyPreview: () => invoke<void>("screen_privacy_preview"),
   screenRequestPermission: (capture: boolean) => invoke<ScreenSettings>("screen_request_permission", { capture }),

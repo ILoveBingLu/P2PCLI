@@ -296,6 +296,33 @@ pub(crate) async fn screen_privacy_pick_image() -> Result<Option<ScreenSettingsV
     Err(crate::MOBILE_UNSUPPORTED.into())
 }
 
+/// 隐私屏背景的小样（PNG 的 data URL）：内置主题按顺序，再加自己选的图片（没选是空）
+#[derive(Serialize)]
+pub(crate) struct PrivacyThumbnails {
+    presets: Vec<String>,
+    image: Option<String>,
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn screen_privacy_thumbnails(state: State<'_, AppState>) -> Result<PrivacyThumbnails, String> {
+    let image = privacy_image_path(&state);
+    tokio::task::spawn_blocking(move || {
+        let url = |bg: &PrivacyBackground| p2pcli_screen::privacy_thumbnail(bg, 240, 135).ok();
+        let presets = (0..p2pcli_core::screen::PRIVACY_PRESETS).filter_map(|index| url(&PrivacyBackground::Preset { index })).collect();
+        let image = image.is_file().then(|| url(&PrivacyBackground::Image { path: image })).flatten();
+        PrivacyThumbnails { presets, image }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub(crate) async fn screen_privacy_thumbnails() -> Result<PrivacyThumbnails, String> {
+    Ok(PrivacyThumbnails { presets: Vec::new(), image: None })
+}
+
 /// 预览隐私屏：按现在的设置在本机盖 5 秒（不拦键鼠），自己看看效果
 #[cfg(desktop)]
 #[tauri::command]

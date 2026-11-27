@@ -25,6 +25,14 @@ pub use mac::encode as mac_encode;
 #[cfg(windows)]
 mod win;
 
+/// 隐私屏背景的小样（PNG 的 data URL），设置页里给人挑
+#[cfg(any(target_os = "macos", windows))]
+pub fn privacy_thumbnail(background: &p2pcli_core::screen::PrivacyBackground, width: u32, height: u32) -> anyhow::Result<String> {
+    use base64::Engine;
+    let png = privacy::thumbnail(background, width, height)?;
+    Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
+}
+
 /// 看一张图片能不能当隐私屏背景（读得出来、是认得的格式）
 pub fn check_privacy_image(path: &std::path::Path) -> anyhow::Result<()> {
     let (w, h) = image::ImageReader::open(path)?.with_guessed_format()?.into_dimensions().map_err(|e| anyhow::anyhow!("这不是认得的图片（支持 PNG、JPG、BMP、WebP、GIF）：{e}"))?;

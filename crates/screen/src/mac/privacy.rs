@@ -17,7 +17,7 @@ use objc2::rc::Retained;
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSFont, NSImage, NSImageScaling, NSImageView, NSScreen, NSTextAlignment,
-    NSTextField, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSShadow, NSTextField, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, CGFloat, CGPoint, CGRect, CGSize, kCFRunLoopCommonModes, kCFRunLoopDefaultMode};
 use objc2_core_graphics::{
@@ -82,6 +82,12 @@ fn label(text: &str, size: CGFloat, weight: CGFloat, mono: bool, wrap_width: Opt
     let font = if mono { NSFont::monospacedDigitSystemFontOfSize_weight(size, weight) } else { NSFont::systemFontOfSize_weight(size, weight) };
     l.setFont(Some(&font));
     l.setAlignment(NSTextAlignment::Center);
+    // 柔和的阴影：浅色背景、图片上白字也看得清
+    let shadow = NSShadow::new();
+    shadow.setShadowColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.55)));
+    shadow.setShadowBlurRadius((size * 0.18).max(3.0));
+    shadow.setShadowOffset(CGSize::new(0.0, -(size * 0.03).max(1.0)));
+    l.setShadow(Some(&shadow));
     if let Some(w) = wrap_width {
         l.setPreferredMaxLayoutWidth(w);
     }

@@ -357,14 +357,14 @@ pub fn privacy_message(viewer: &str) -> String {
 pub enum PrivacyBackground {
     #[default]
     Black,
-    /// 内置的渐变色，0 到 [`PRIVACY_PRESETS`] - 1
+    /// 内置的背景主题，0 到 [`PRIVACY_PRESETS`] - 1
     Preset { index: u8 },
     /// 主人自己选的图片，铺满屏幕
     Image { path: std::path::PathBuf },
 }
 
-/// 内置渐变背景有几种
-pub const PRIVACY_PRESETS: u8 = 3;
+/// 内置背景主题有几种（深海、暮色、森林、极光、星空、日落、晨雾、石墨、樱花、海湾）
+pub const PRIVACY_PRESETS: u8 = 10;
 
 /// 一路正在抓的画面。丢掉就停止
 pub trait ScreenCapture: Send + Sync {

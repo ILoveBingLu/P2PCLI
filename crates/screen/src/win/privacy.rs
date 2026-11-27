@@ -231,6 +231,14 @@ fn text(dc: HDC, s: &[u16], height: i32, weight: i32, width: i32, center_y: i32,
     let mut r = RECT { left: margin, top: 0, right: width - margin, bottom: 0 };
     unsafe { DrawTextW(dc, &mut buf, &mut r, flags | DT_CALCRECT) };
     let h = r.bottom - r.top;
+    // 先在右下错开一点画一层深色当阴影，浅色背景上白字也看得清
+    let off = (height / 28).max(1);
+    let mut shadow = RECT { left: margin + off, top: center_y - h / 2 + off, right: width - margin + off, bottom: center_y + h / 2 + 1 + off };
+    unsafe {
+        SetTextColor(dc, COLORREF(0x0014_1414));
+        DrawTextW(dc, &mut buf.clone(), &mut shadow, flags);
+        SetTextColor(dc, COLORREF(0x00FF_FFFF));
+    }
     let mut r = RECT { left: margin, top: center_y - h / 2, right: width - margin, bottom: center_y + h / 2 + 1 };
     unsafe { DrawTextW(dc, &mut buf, &mut r, flags) };
     unsafe {

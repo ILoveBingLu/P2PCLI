@@ -1425,5 +1425,12 @@
   "预览 5 秒": "Preview for 5 seconds",
   "要先允许别的设备查看并操作本机，才能开隐私屏。": "Allow other devices to view and control this computer first to use the privacy screen.",
   "隐私屏开着：对方电脑的屏幕被盖住，那边的键盘鼠标也被拦住，只有你能操作。断开时自动撤掉。点一下撤掉": "Privacy screen is on: their screen is covered and their keyboard and mouse are blocked, so only you can control it. It is removed when you disconnect. Click to remove it",
-  "隐私屏：盖住对方电脑的屏幕、拦住那边的键盘鼠标，旁边的人看不到你在做什么，你这边照常看和操作": "Privacy screen: cover their screen and block their keyboard and mouse so people nearby can't see what you're doing, while you keep seeing and controlling it as usual"
+  "隐私屏：盖住对方电脑的屏幕、拦住那边的键盘鼠标，旁边的人看不到你在做什么，你这边照常看和操作": "Privacy screen: cover their screen and block their keyboard and mouse so people nearby can't see what you're doing, while you keep seeing and controlling it as usual",
+  "极光": "Aurora",
+  "星空": "Starry night",
+  "日落": "Sunset",
+  "晨雾": "Morning mist",
+  "石墨": "Graphite",
+  "樱花": "Sakura",
+  "海湾": "Bay"
 }

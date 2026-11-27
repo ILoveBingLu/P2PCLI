@@ -88,19 +88,22 @@ export function ScreenSettings() {
   );
 }
 
-/** 内置渐变背景，和被控端画的一样（左上到右下） */
-const PRESETS: [string, string][] = [
-  ["rgb(15,32,39)", "rgb(44,83,100)"],
-  ["rgb(40,22,78)", "rgb(176,78,96)"],
-  ["rgb(12,52,50)", "rgb(86,150,104)"],
-];
+/** 内置背景主题的名字，顺序和被控端画的一致 */
+const presetNames = () => [t("深海"), t("暮色"), t("森林"), t("极光"), t("星空"), t("日落"), t("晨雾"), t("石墨"), t("樱花"), t("海湾")];
 
 /** 隐私屏：谁能开、盖上时本机屏幕上显示什么，可以预览 */
 function PrivacySection({ s, onChange }: { s: ScreenSettingsView; onChange: (s: ScreenSettingsView) => void }) {
   const p = s.privacy;
   const [message, setMessage] = useState(p.message);
   const [busy, setBusy] = useState(false);
+  const [thumbs, setThumbs] = useState<{ presets: string[]; image: string | null } | null>(null);
   useEffect(() => setMessage(p.message), [p.message]);
+  // 小样由被控端按同样的算法画，看到的就是盖上以后的样子；换了图片要重画
+  useEffect(() => {
+    let alive = true;
+    api.screenPrivacyThumbnails().then((x) => alive && setThumbs(x)).catch(() => {});
+    return () => { alive = false; };
+  }, [s.privacy_has_image]);
   const disabled = !s.enabled || s.view_only;
 
   const save = async (next: Partial<PrivacySettings>) => {
@@ -116,7 +119,10 @@ function PrivacySection({ s, onChange }: { s: ScreenSettingsView; onChange: (s: 
   const pickImage = async () => {
     try {
       const next = await api.screenPrivacyPickImage();
-      if (next) onChange(next);
+      if (next) {
+        onChange(next);
+        setThumbs(await api.screenPrivacyThumbnails());
+      }
     } catch (e) {
       toast.error(String(e));
     }
@@ -130,9 +136,11 @@ function PrivacySection({ s, onChange }: { s: ScreenSettingsView; onChange: (s: 
     }
   };
 
-  const backgrounds: { id: string; label: string; style?: React.CSSProperties }[] = [
-    { id: "black", label: t("纯黑"), style: { background: "#000" } },
-    ...PRESETS.map(([a, b], i) => ({ id: `preset${i}`, label: [t("深海"), t("暮色"), t("森林")][i], style: { background: `linear-gradient(135deg, ${a}, ${b})` } })),
+  const names = presetNames();
+  const backgrounds: { id: string; label: string; image?: string }[] = [
+    { id: "black", label: t("纯黑") },
+    ...names.map((label, i) => ({ id: `preset${i}`, label, image: thumbs?.presets[i] })),
+    ...(s.privacy_has_image ? [{ id: "image", label: t("我的图片"), image: thumbs?.image ?? undefined }] : []),
   ];
   const current = p.background === "image" && !s.privacy_has_image ? "black" : (p.background || "black");
 
@@ -156,26 +164,25 @@ function PrivacySection({ s, onChange }: { s: ScreenSettingsView; onChange: (s: 
       </Select>
 
       {p.allow !== "off" && <>
-        <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label={t("隐私屏背景")}>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-2" role="radiogroup" aria-label={t("隐私屏背景")}>
           {backgrounds.map((b) => (
             <button key={b.id} type="button" role="radio" aria-checked={current === b.id} disabled={busy || disabled}
               title={b.label} onClick={() => void save({ background: b.id })}
-              className="flex h-12 w-20 items-end justify-center rounded-md pb-1 text-[11px] text-white/90 ring-offset-2 ring-offset-background disabled:opacity-50 data-[on]:ring-2 data-[on]:ring-primary"
-              data-on={current === b.id ? "" : undefined} style={b.style}>
-              {b.label}
+              className="group relative aspect-video overflow-hidden rounded-lg border border-white/10 bg-black ring-offset-2 ring-offset-background transition hover:brightness-110 disabled:opacity-50 data-[on]:ring-2 data-[on]:ring-primary"
+              data-on={current === b.id ? "" : undefined}>
+              {b.image && <img src={b.image} alt="" draggable={false} className="absolute inset-0 size-full object-cover" />}
+              {/* 小样上也画个缩小的时钟和那行字，一眼看出盖上后的样子 */}
+              <span className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 text-white [text-shadow:0_1px_3px_rgba(0,0,0,.6)]">
+                {!p.clock_off && <span className="text-base font-light leading-none tabular-nums">12:30</span>}
+                <span className="h-[3px] w-1/2 rounded-full bg-white/60" />
+              </span>
+              <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-1.5 pb-1 pt-3 text-left text-[11px] text-white/90">{b.label}</span>
             </button>
           ))}
-          {s.privacy_has_image && (
-            <button type="button" role="radio" aria-checked={current === "image"} disabled={busy || disabled}
-              title={t("自己选的图片")} onClick={() => void save({ background: "image" })}
-              className="flex h-12 w-20 flex-col items-center justify-center gap-0.5 rounded-md border bg-muted text-[11px] ring-offset-2 ring-offset-background disabled:opacity-50 data-[on]:ring-2 data-[on]:ring-primary"
-              data-on={current === "image" ? "" : undefined}>
-              <ImageIcon className="size-4" />{t("我的图片")}
-            </button>
-          )}
-          <Button variant="outline" size="sm" disabled={busy || disabled} onPress={() => void pickImage()}>
-            {s.privacy_has_image ? t("换一张图片…") : t("选图片…")}
-          </Button>
+          <button type="button" disabled={busy || disabled} onClick={() => void pickImage()} title={t("自己选的图片")}
+            className="flex aspect-video flex-col items-center justify-center gap-1 rounded-lg border border-dashed text-xs text-muted-foreground transition hover:bg-muted disabled:opacity-50">
+            <ImageIcon className="size-4" />{s.privacy_has_image ? t("换一张图片…") : t("选图片…")}
+          </button>
         </div>
 
         <Checkbox isSelected={!p.clock_off} onChange={(on) => void save({ clock_off: !on })} isDisabled={busy || disabled}>

@@ -166,7 +166,9 @@ fn find_in(content: &SCShareableContent, id: CGDirectDisplayID) -> Result<Retain
 /// 抓屏时排除掉的窗口（隐私屏的遮挡窗口）：远程画面和截图里没有它们，看到的是底下的桌面
 static EXCLUDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 /// 正在跑的抓屏：排除的窗口变了要更新它们的过滤
-static STREAMS: Mutex<Vec<(u64, CGDirectDisplayID, SendRetained<Retained<SCStream>>)>> = Mutex::new(Vec::new());
+/// 一路正在跑的抓屏：编号、抓哪块屏幕、系统的抓屏对象
+type LiveStream = (u64, CGDirectDisplayID, SendRetained<Retained<SCStream>>);
+static STREAMS: Mutex<Vec<LiveStream>> = Mutex::new(Vec::new());
 static NEXT_STREAM: AtomicU64 = AtomicU64::new(1);
 
 /// 抓这块屏幕、排除掉隐私屏窗口的过滤

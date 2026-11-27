@@ -2048,6 +2048,7 @@ pub fn run() {
             screen::set_screen_privacy,
             screen::screen_privacy_pick_image,
             screen::screen_privacy_preview,
+            screen::screen_privacy_thumbnails,
             screen::screen_request_permission,
             screen::screen_open_permission_settings,
             screen::screen_guide_done,
