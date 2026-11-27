@@ -21,6 +21,7 @@ pub(crate) mod clip;
 mod cursor;
 mod encode;
 mod input;
+mod privacy;
 pub(crate) mod shot;
 mod synthetic;
 mod yuv444;
@@ -154,5 +155,13 @@ impl ScreenBackend for WinBackend {
 
     fn screenshot(&self, display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
         shot::capture(find_monitor(display)?.rect, max_width)
+    }
+
+    fn privacy_supported(&self) -> bool {
+        true
+    }
+
+    fn start_privacy(&self, style: &p2pcli_core::screen::PrivacyStyle, block_input: bool) -> Result<Box<dyn std::any::Any + Send>> {
+        Ok(Box::new(privacy::WinPrivacy::start(style, block_input)?))
     }
 }

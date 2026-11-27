@@ -39,7 +39,7 @@ fn send(inputs: &[INPUT]) {
 fn mouse(dx: i32, dy: i32, data: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 { mi: MOUSEINPUT { dx, dy, mouseData: data as u32, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+        Anonymous: INPUT_0 { mi: MOUSEINPUT { dx, dy, mouseData: data as u32, dwFlags: flags, time: 0, dwExtraInfo: TAG } },
     }
 }
 
@@ -53,7 +53,7 @@ fn key(scan: u16, extended: bool, down: bool) -> INPUT {
     }
     INPUT {
         r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: TAG } },
     }
 }
 
@@ -62,7 +62,7 @@ fn unicode(unit: u16, down: bool) -> INPUT {
     let flags = if down { KEYEVENTF_UNICODE } else { KEYEVENTF_UNICODE | KEYEVENTF_KEYUP };
     INPUT {
         r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: unit, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: unit, dwFlags: flags, time: 0, dwExtraInfo: TAG } },
     }
 }
 
@@ -103,7 +103,10 @@ fn button_flags(b: MouseButton, down: bool) -> (MOUSE_EVENT_FLAGS, i32) {
 }
 
 impl Injector {
-    /// 屏幕上的 0~1 → SendInput 的绝对坐标（整个虚拟桌面映射到 0~65535）
+    /// 注入的键鼠都打上这个标记：隐私屏拦本机键鼠时认它放行
+const TAG: usize = crate::privacy::INPUT_TAG as usize;
+
+/// 屏幕上的 0~1 → SendInput 的绝对坐标（整个虚拟桌面映射到 0~65535）
     fn absolute(&mut self, display: &str, x: f64, y: f64) -> Result<(i32, i32)> {
         let m = super::find_monitor(display)?;
         let w = (m.rect.right - m.rect.left).max(1);
