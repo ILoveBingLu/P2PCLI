@@ -2,3 +2,5 @@
 /app/src-tauri/binaries/tmux-* binary
 /app/src-tauri/binaries/p2pcli-tmux-* binary
 /app/src-tauri/resources/session-tools/** text eol=lf
+# 编进程序、装给 AI 的使用说明：Windows 上签出也要是 LF，不然 SKILL.md 的开头认不出来
+/app/src-tauri/src/p2pcli-skill.md text eol=lf

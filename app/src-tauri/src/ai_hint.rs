@@ -256,7 +256,8 @@ mod tests {
         assert_eq!(states(&t), [State::Current, State::Missing]);
         let row = &rows(&t)[0];
         assert_eq!(row.ais, ["Claude Code"]);
-        assert_eq!(row.path, home.join(".claude/skills/p2pcli/SKILL.md").display().to_string());
+        // 一级一级拼：Windows 上写成 ".claude/skills/..." 会显示成混着 / 和 \ 的路径
+        assert_eq!(row.path, home.join(".claude").join("skills").join("p2pcli").join("SKILL.md").display().to_string());
 
         // 软件以前装的旧版本
         std::fs::write(t[0].file(), format!("---\nname: p2pcli\nmetadata:\n  {MARK}\n---\n旧版本")).unwrap();

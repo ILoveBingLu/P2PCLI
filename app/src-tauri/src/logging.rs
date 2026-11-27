@@ -75,7 +75,8 @@ mod tests {
             let mut next = LogWriter::open(&directory).unwrap();
             next.write_all(b"next run\n").unwrap();
             assert_eq!(std::fs::read(directory.join("p2pcli.log")).unwrap(), b"previous run\nnext run\n");
-            next.file.as_ref().unwrap().set_len(MAX_BYTES).unwrap();
+            // 追加方式打开的句柄在 Windows 上不能改长度，另开一个可写的
+            OpenOptions::new().write(true).open(directory.join("p2pcli.log")).unwrap().set_len(MAX_BYTES).unwrap();
             next.bytes = MAX_BYTES;
             next.write_all(b"failure evidence\n").unwrap();
             assert_eq!(std::fs::read(directory.join("p2pcli.log")).unwrap(), b"failure evidence\n");
