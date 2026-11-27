@@ -351,6 +351,8 @@ export interface ScreenStarted {
   clipboard?: boolean;
   /** 对方认得送文字、锁定鼠标这几种键鼠事件；老版本没有这项 */
   input_v2?: boolean;
+  /** 对方替我们转换快捷键（⌘ 和 Ctrl、行首行尾这些）：发原样的键；老版本没有这项，那时自己对调 ⌘ 和 Ctrl */
+  translate_keys?: boolean;
 }
 
 /** 对方在用的编码器 */
@@ -390,7 +392,9 @@ export type ScreenViewerMsg =
   | { t: "key_frame" }
   | { t: "switch"; display: string }
   | { t: "set_quality"; quality: ScreenQuality }
-  | { t: "input"; ev: ScreenInput };
+  | { t: "input"; ev: ScreenInput }
+  /** 只在对方 ScreenStarted.translate_keys 为真时发 */
+  | { t: "translate_keys"; on: boolean };
 
 export type ScreenHostMsg =
   | { t: "paused"; reason: "relay" | "connecting" }
@@ -783,7 +787,8 @@ export const api = {
   screenSetFullscreen: (on: boolean) => invoke<boolean>("screen_set_fullscreen", { on }),
   screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
   /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
-  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], yuv444: boolean, onEvent: (ev: ScreenStreamEvent) => void) => {
+  /** keyboard：本机键盘是 Mac 的还是 PC 的；translateKeys：一开始要不要让对方转换快捷键 */
+  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], yuv444: boolean, keyboard: "mac" | "pc", translateKeys: boolean, onEvent: (ev: ScreenStreamEvent) => void) => {
     const events = new Channel<ArrayBuffer>();
     const decoder = new TextDecoder();
     events.onmessage = (raw) => {
@@ -798,7 +803,7 @@ export const api = {
     // 认得解码配置里的范围、色域标记；屏幕是广色域就请对方按 P3 传
     const wideGamut = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches && supportsP3Video();
     return displayRefreshHz().then((refreshHz) =>
-      invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, clipboard: true, refreshHz, events }));
+      invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, clipboard: true, refreshHz, keyboard, translateKeys, events }));
   },
   /** clipboard：先看一眼本机剪贴板，变了就先把清单发过去，再发这批消息 */
   screenSend: (screenId: number, msgs: ScreenViewerMsg[], clipboard = false) => invoke<void>("screen_send", { screenId, msgs, clipboard }),

@@ -216,6 +216,9 @@ export default function ScreenWindow() {
   controlRef.current = control && !!started?.control;
   const swapRef = useRef(swapMeta);
   swapRef.current = swapMeta;
+  /** 对方替我们转换快捷键：键原样发，开关告诉对方；老版本的对方由本机对调 ⌘ 和 Ctrl */
+  const translateRef = useRef(false);
+  translateRef.current = !!started?.translate_keys;
   /** 现在互通剪贴板：自己开着、在操作、对方也同意 */
   const clipboardRef = useRef(false);
   clipboardRef.current = shareClipboard && controlRef.current && !!started?.clipboard;
@@ -546,7 +549,7 @@ export default function ScreenWindow() {
       try {
         const [codecs, yuv444] = await Promise.all([supportedCodecs(), supports444()]);
         if (cancelled) return;
-        const opened = await api.screenOpen(connId, quality, true, display, codecs, yuv444, onEvent);
+        const opened = await api.screenOpen(connId, quality, true, display, codecs, yuv444, isMac ? "mac" : "pc", swapRef.current, onEvent);
         if (cancelled) { void api.screenClose(opened.screen_id); return; }
         screenId.current = opened.screen_id;
         setStarted(opened.started);
@@ -703,7 +706,7 @@ export default function ScreenWindow() {
     const remoteMac = device?.platform === "macos";
     const mapCode = (code: string) => {
       // 两边系统不同时，⌘ 和 Ctrl 对调：在 Mac 上按 ⌘C 到 Windows 上就是 Ctrl+C，反过来也一样
-      if (!swapRef.current || isMac === remoteMac) return code;
+      if (translateRef.current || !swapRef.current || isMac === remoteMac) return code;
       const swap: Record<string, string> = { MetaLeft: "ControlLeft", MetaRight: "ControlRight", ControlLeft: "MetaLeft", ControlRight: "MetaRight" };
       return swap[code] ?? code;
     };
@@ -988,9 +991,17 @@ export default function ScreenWindow() {
         )}
         {live && canControl && platformsDiffer && (
           <Button variant="ghost" size="icon-sm" className="screen-tool" data-active={swapMeta ? "" : undefined}
-            title={swapMeta ? t("⌘ 和 Ctrl 已对调（按本机习惯用快捷键），点一下改回原样") : t("⌘ 和 Ctrl 按原样发送，点一下对调")}
-            aria-label={t("对调 ⌘ 和 Ctrl")}
-            onPress={() => setSwapMeta((v) => !v)}>
+            title={!started?.translate_keys
+              ? (swapMeta ? t("⌘ 和 Ctrl 已对调（按本机习惯用快捷键），点一下改回原样") : t("⌘ 和 Ctrl 按原样发送，点一下对调"))
+              : isMac
+                ? (swapMeta ? t("快捷键按 Mac 的习惯：⌘C 复制、⌘← 到行首、⌥← 按词跳、⌘Q 退出，对方换成 Windows 的按法；单按 ⌘ 是 Win 键，⌃ 点击是右键。点一下改成原样发送") : t("按键原样发送（⌘ 就是对方的 Win 键），点一下改成按 Mac 的习惯"))
+                : (swapMeta ? t("快捷键按 Windows 的习惯：Ctrl+C 复制、Home 到行首、Ctrl+← 按词跳，对方换成 Mac 的按法；对方前台是终端时 Ctrl 还是 Ctrl（Ctrl+C 中断），Ctrl+Shift+C/V 复制粘贴。点一下改成原样发送") : t("按键原样发送（Ctrl 就是 Mac 的 ⌃），点一下改成按 Windows 的习惯"))}
+            aria-label={started?.translate_keys ? t("按本机习惯用快捷键") : t("对调 ⌘ 和 Ctrl")}
+            onPress={() => {
+              const on = !swapMeta;
+              setSwapMeta(on);
+              if (started?.translate_keys) send({ t: "translate_keys", on });
+            }}>
             <Keyboard />
           </Button>
         )}

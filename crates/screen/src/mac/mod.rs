@@ -47,12 +47,35 @@ fn prompt_accessibility() -> bool {
 pub struct MacBackend {
     input: Mutex<input::Injector>,
     cursor: cursor::CursorReader,
+    /// 上次看的前台程序是不是终端、什么时候看的：一串快捷键里只问一次系统
+    terminal: Mutex<Option<(std::time::Instant, bool)>>,
 }
 
 impl MacBackend {
     pub fn new() -> Self {
-        MacBackend { input: Mutex::new(input::Injector::new()), cursor: cursor::CursorReader::default() }
+        MacBackend { input: Mutex::new(input::Injector::new()), cursor: cursor::CursorReader::default(), terminal: Mutex::new(None) }
     }
+}
+
+/// 常见终端程序的包名。前台是它们时，Windows 那边的 Ctrl 按 ⌃ 发（Ctrl+C 是中断）
+const TERMINALS: &[&str] = &[
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "org.alacritty",
+    "io.alacritty",
+    "com.mitchellh.ghostty",
+    "dev.warp.Warp-Stable",
+    "dev.warp.Warp",
+    "co.zeit.hyper",
+    "org.tabby",
+    "com.raphaelamorim.rio",
+];
+
+fn frontmost_bundle() -> Option<String> {
+    let app = objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    Some(app.bundleIdentifier()?.to_string())
 }
 
 impl ScreenBackend for MacBackend {
@@ -90,6 +113,18 @@ impl ScreenBackend for MacBackend {
         true
     }
 
+    fn frontmost_terminal(&self) -> bool {
+        let mut cache = self.terminal.lock().unwrap();
+        if let Some((at, yes)) = *cache
+            && at.elapsed() < std::time::Duration::from_millis(300)
+        {
+            return yes;
+        }
+        let yes = frontmost_bundle().is_some_and(|id| TERMINALS.contains(&id.as_str()));
+        *cache = Some((std::time::Instant::now(), yes));
+        yes
+    }
+
     fn cursor(&self, display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
         self.cursor.read(display)
     }
@@ -100,5 +135,18 @@ impl ScreenBackend for MacBackend {
 
     fn screenshot(&self, display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
         shot::capture(display, max_width)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// 能读出前台程序的包名（快捷键转换靠它判断是不是终端）。要有前台程序，默认不跑：
+    /// cargo test -p p2pcli-screen --lib -- --ignored frontmost
+    #[test]
+    #[ignore]
+    fn frontmost_app_is_readable() {
+        let id = super::frontmost_bundle();
+        println!("前台程序：{id:?}");
+        assert!(id.is_some());
     }
 }

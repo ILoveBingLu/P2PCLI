@@ -344,6 +344,10 @@ pub trait ScreenBackend: Send + Sync + 'static {
     fn clipboard(&self) -> Option<Arc<dyn crate::screen_clip::ClipPlatform>> {
         None
     }
+    /// 前台程序是不是终端：Windows 的人在 Mac 的终端里按 Ctrl+C 是想中断，不是复制。读不了就是假
+    fn frontmost_terminal(&self) -> bool {
+        false
+    }
     /// 认得 [`InputEvent`] 里后加的几种：送文字、相对移动、原地按键和滚轮。认得才告诉观看方，观看方才发
     /// （老版本的被连方读到认不得的事件会断开画面）
     fn input_v2(&self) -> bool {
@@ -465,6 +469,13 @@ pub struct ScreenOpen {
     /// 观看方屏幕的刷新率（Hz）：帧率不超过它，多了也显示不出来。0 是不知道（老版本不带），只看被连方的屏幕
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub refresh_hz: u32,
+    /// 观看方的键盘习惯（⌘ 还是 Ctrl 当命令键）。带了就由被连方按 [`crate::screen_keys`] 转换快捷键，
+    /// 观看方发原样的键；老版本不带，自己在观看方对调 ⌘ 和 Ctrl
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard: Option<crate::screen_keys::KeyboardKind>,
+    /// 一开始要不要转换快捷键（画面窗口里的开关）
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub translate_keys: bool,
 }
 
 /// 视频编码格式。H.265 同样画质码率省三到五成，同样码率更清楚；H.264 哪儿都能用，兜底
@@ -496,6 +507,9 @@ pub struct ScreenStarted {
     /// 能操作、被连方也认得 [`InputEvent`] 里后加的几种（送文字、锁定鼠标）。为假时观看方不发这几种
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_v2: bool,
+    /// 被连方在转换快捷键（观看方带了键盘习惯、能操作）：观看方发原样的键，开关用 [`ViewerMsg::TranslateKeys`]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub translate_keys: bool,
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -516,6 +530,8 @@ pub enum ViewerMsg {
     /// 观看方的剪贴板变了：被连方放进自己的剪贴板，排在后面的粘贴键读到的就是它。
     /// 只在 [`ScreenStarted::clipboard`] 为真时发
     ClipOffer { offer: crate::screen_clip::ClipOffer },
+    /// 打开、关掉快捷键转换。只在 [`ScreenStarted::translate_keys`] 为真时发
+    TranslateKeys { on: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1074,6 +1090,7 @@ where
                 clipboard: clip.is_some(),
                 clip_token: clip.as_ref().map_or(0, |c| c.token()),
                 input_v2: control && backend.input_v2(),
+                translate_keys: control && open.keyboard.is_some(),
             },
         },
     )
@@ -1086,6 +1103,11 @@ where
         let backend = backend.clone();
         let current_display = current_display.clone();
         let clip = clip.clone();
+        // 快捷键转换：观看方报了键盘习惯才做，两边同一种系统时它什么都不换
+        let mut keys = open
+            .keyboard
+            .filter(|_| control)
+            .map(|kind| crate::screen_keys::KeyTranslator::new(kind, crate::screen_keys::KeyboardKind::local(), open.translate_keys));
         tokio::spawn(async move {
             loop {
                 match read_json::<_, ViewerMsg>(&mut recv).await {
@@ -1109,8 +1131,21 @@ where
                             text.truncate(cut);
                         }
                         let display = current_display.lock().unwrap().clone();
-                        if let Err(e) = backend.inject(&display, &ev) {
-                            debug!("注入键鼠事件失败：{e:#}");
+                        let events = match keys.as_mut() {
+                            Some(keys) => keys.feed(ev, || backend.frontmost_terminal()),
+                            None => vec![ev],
+                        };
+                        for ev in &events {
+                            if let Err(e) = backend.inject(&display, ev) {
+                                debug!("注入键鼠事件失败：{e:#}");
+                            }
+                        }
+                    }
+                    Ok(Some(ViewerMsg::TranslateKeys { on })) => {
+                        let Some(keys) = keys.as_mut() else { continue };
+                        let display = current_display.lock().unwrap().clone();
+                        for ev in keys.set_enabled(on) {
+                            let _ = backend.inject(&display, &ev);
                         }
                     }
                     Ok(Some(msg)) => {
@@ -1315,7 +1350,7 @@ where
                     need_key = true;
                     last_config = None;
                 }
-                Some(ViewerMsg::Input { .. } | ViewerMsg::ClipOffer { .. }) => {}
+                Some(ViewerMsg::Input { .. } | ViewerMsg::ClipOffer { .. } | ViewerMsg::TranslateKeys { .. }) => {}
                 None => break Ok(()),
             },
             _ = tick.tick() => {

@@ -356,6 +356,8 @@ pub(crate) async fn screen_open(
     yuv444: Option<bool>,
     clipboard: Option<bool>,
     refresh_hz: Option<u32>,
+    keyboard: Option<p2pcli_core::screen_keys::KeyboardKind>,
+    translate_keys: Option<bool>,
     events: Channel<InvokeResponseBody>,
 ) -> Result<ScreenOpened, String> {
     let remote = state.remote(conn_id)?;
@@ -369,6 +371,8 @@ pub(crate) async fn screen_open(
         yuv444: yuv444.unwrap_or(false),
         clipboard: clipboard.unwrap_or(false),
         refresh_hz: refresh_hz.unwrap_or(0),
+        keyboard,
+        translate_keys: translate_keys.unwrap_or(false),
     };
     let (started, mut input, mut output) = remote.open_screen(open).await.map_err(|e| format!("{e:#}"))?;
     let screen_id = state.next();

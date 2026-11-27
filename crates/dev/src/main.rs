@@ -446,6 +446,8 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
         // 只看不操作，剪贴板不互通
         clipboard: false,
         refresh_hz: hz,
+        keyboard: None,
+        translate_keys: false,
     }).await?;
     // 帧间隔：看稳不稳。整段的都留着，最后算分位数；每秒打印这一秒最长的和超过 25 毫秒的次数
     let mut last_frame: Option<Instant> = None;

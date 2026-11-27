@@ -470,6 +470,67 @@ async fn extra_input_only_when_supported() {
     n.shutdown().await;
 }
 
+/// 快捷键转换在被连方做：观看方报了自己的键盘习惯（这里故意和被连方相反），⌘C / Ctrl+C 换成对方的复制；
+/// 关掉以后原样发；老版本的观看方不报，就不转换
+#[tokio::test(flavor = "multi_thread")]
+async fn shortcuts_are_translated_on_host() {
+    use p2pcli_core::screen_keys::KeyboardKind;
+    let host = KeyboardKind::local();
+    let viewer = if host == KeyboardKind::Mac { KeyboardKind::Pc } else { KeyboardKind::Mac };
+    // 观看方的“命令键”和对方的
+    let (theirs, ours) = if viewer == KeyboardKind::Mac { ("MetaLeft", "ControlLeft") } else { ("ControlLeft", "MetaLeft") };
+    let key = |code: &str, down: bool| InputEvent::Key { code: code.into(), down };
+    let copy = [key(theirs, true), key("KeyC", true), key("KeyC", false), key(theirs, false)];
+    let injected = |fake: &Fake| fake.inputs.lock().unwrap().iter().map(|(_, ev)| ev.clone()).collect::<Vec<_>>();
+
+    let fake = Arc::new(Fake::default());
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (started, mut input, _output) = n
+        .remote
+        .open_screen(ScreenOpen { control: true, keyboard: Some(viewer), translate_keys: true, ..Default::default() })
+        .await
+        .unwrap();
+    assert!(started.translate_keys);
+    for ev in copy.clone() {
+        input.send(&ViewerMsg::Input { ev }).await.unwrap();
+    }
+    let want = vec![key(ours, true), key("KeyC", true), key("KeyC", false), key(ours, false)];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while injected(&fake) != want && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(injected(&fake), want, "命令键要换成对方的");
+    // 关掉：先全松开，之后原样发
+    fake.inputs.lock().unwrap().clear();
+    input.send(&ViewerMsg::TranslateKeys { on: false }).await.unwrap();
+    for ev in copy.clone() {
+        input.send(&ViewerMsg::Input { ev }).await.unwrap();
+    }
+    let mut raw = vec![InputEvent::ReleaseAll];
+    raw.extend(copy.clone());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while injected(&fake) != raw && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(injected(&fake), raw, "关掉以后原样发");
+    n.shutdown().await;
+
+    // 老版本的观看方不报键盘习惯：不转换
+    let fake = Arc::new(Fake::default());
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (started, mut input, _output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
+    assert!(!started.translate_keys);
+    for ev in copy.clone() {
+        input.send(&ViewerMsg::Input { ev }).await.unwrap();
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while injected(&fake).len() < copy.len() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(injected(&fake), copy.to_vec());
+    n.shutdown().await;
+}
+
 /// 编码格式协商：观看方说能解 H.265 就请编码器用 H.265，没说（老版本）就是 H.264
 #[tokio::test(flavor = "multi_thread")]
 async fn codec_is_negotiated() {

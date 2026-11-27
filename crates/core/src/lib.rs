@@ -41,6 +41,7 @@ pub mod reverse;
 pub mod ssh_host;
 pub mod screen;
 pub mod screen_clip;
+pub mod screen_keys;
 pub mod store;
 pub mod sessions;
 mod session_diagnostics;
