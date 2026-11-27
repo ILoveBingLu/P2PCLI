@@ -17,7 +17,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_core_media::CMTime;
 use objc2_core_video::{CVImageBuffer, CVPixelBufferGetHeight, CVPixelBufferGetWidth};
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureStats, ColorFormat, EncodedFrame, Layout, VideoCodec};
+use p2pcli_core::screen::{CaptureStats, ColorFormat, EncodedFrame, EncoderInfo, Layout, VideoCodec};
 use tracing::{debug, warn};
 
 use super::encode::{Encoder, Reply};
@@ -96,6 +96,10 @@ pub(super) struct Frames {
     limits: Limits,
     /// 时间戳从这里算
     started: Instant,
+    /// 现在在用的编码器，观看方的诊断面板里显示
+    encoder: Mutex<Option<EncoderInfo>>,
+    /// 上面那个对应的格式和硬件与否，编码线程每帧拿它比一下，变了才更新
+    encoder_key: AtomicU8,
 }
 
 /// 编码线程自己用的：编码器、GPU 排画面、现在出哪种画面
@@ -123,6 +127,8 @@ impl Frames {
             color,
             limits,
             started: Instant::now(),
+            encoder: Mutex::new(None),
+            encoder_key: AtomicU8::new(0),
         });
         let worker = frames.clone();
         std::thread::Builder::new().name("p2pcli-encode".into()).spawn(move || {
@@ -209,6 +215,10 @@ impl Frames {
         }
     }
 
+    pub(super) fn encoder(&self) -> Option<EncoderInfo> {
+        self.encoder.lock().unwrap().clone()
+    }
+
     pub(super) fn stats(&self) -> CaptureStats {
         let mut s = self.state.lock().unwrap();
         let stats = s.stats;
@@ -290,6 +300,14 @@ impl Frames {
         if let Err(e) = Encoder::submit(&mut pipe.encoder, image, pts, pipe.fps, bitrate, key, pipe.codec, pipe.p3, reply) {
             // 编码器开不起来：reply 没被调，位置在这里还
             self.failed(e, mode);
+        }
+        // 编码器换了（格式、硬件还是软件）才更新，每帧只比一个数
+        if let Some(enc) = &pipe.encoder {
+            let key = 1 + (enc.codec == VideoCodec::H265) as u8 * 2 + enc.hardware as u8;
+            if self.encoder_key.swap(key, Ordering::Relaxed) != key {
+                let name = format!("VideoToolbox {}", if enc.codec == VideoCodec::H265 { "H.265" } else { "H.264" });
+                *self.encoder.lock().unwrap() = Some(EncoderInfo { name, hardware: enc.hardware });
+            }
         }
     }
 

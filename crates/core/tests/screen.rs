@@ -57,6 +57,8 @@ struct Fake {
     clip: Option<Arc<FakeClip>>,
     /// 注入键鼠、设剪贴板的先后
     order: Arc<Mutex<Vec<String>>>,
+    /// 认得后加的键鼠事件（送文字、锁定鼠标）
+    input_v2: bool,
 }
 
 /// 内存里的剪贴板
@@ -140,6 +142,9 @@ impl ScreenBackend for FakeBackend {
     fn clipboard(&self) -> Option<Arc<dyn ClipPlatform>> {
         self.0.clip.clone().map(|c| c as Arc<dyn ClipPlatform>)
     }
+    fn input_v2(&self) -> bool {
+        self.0.input_v2
+    }
     fn screenshot(&self, display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
         // 假的“PNG”：带上屏幕编号和宽度，测试里核对传对了
         let png: Vec<u8> = format!("PNG:{display}:{max_width}:").bytes().chain((0..2_500_000u32).map(|i| (i % 251) as u8)).collect();
@@ -186,6 +191,9 @@ impl ScreenCapture for FakeCapture {
     }
     fn set_bitrate(&self, bps: u32) {
         self.fake.bitrate.store(bps, Ordering::Relaxed);
+    }
+    fn encoder(&self) -> Option<p2pcli_core::screen::EncoderInfo> {
+        Some(p2pcli_core::screen::EncoderInfo { name: "假编码器".into(), hardware: true })
     }
     fn color(&self) -> p2pcli_core::screen::ColorFormat {
         // 像 Mac：要什么给什么
@@ -403,6 +411,62 @@ async fn cursor_is_sent_separately() {
     let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
     let _s = n.remote.open_screen(ScreenOpen { display: None, quality: Quality::Balanced, control: true, codecs: vec![], ..Default::default() }).await.unwrap();
     assert_eq!(*fake.show_cursor.lock().unwrap(), Some(true));
+    n.shutdown().await;
+}
+
+/// 送文字、锁定鼠标这几种键鼠事件：被连方认得、而且给操作时才告诉观看方；送的文字太长截掉。
+/// 每秒的统计里带着对方在用的编码器
+#[tokio::test(flavor = "multi_thread")]
+async fn extra_input_only_when_supported() {
+    use p2pcli_core::screen::{HostMsg, MouseButton};
+    let fake = Arc::new(Fake { input_v2: true, ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (started, mut input, mut output) =
+        n.remote.open_screen(ScreenOpen { quality: Quality::Balanced, control: true, ..Default::default() }).await.unwrap();
+    assert!(started.input_v2);
+    let long: String = "字".repeat(p2pcli_core::screen::MAX_TEXT_INPUT + 50);
+    for ev in [
+        InputEvent::Text { text: long },
+        InputEvent::RelativeMove { dx: 3.0, dy: -2.0 },
+        InputEvent::ButtonHere { button: MouseButton::Left, down: true },
+        InputEvent::ButtonHere { button: MouseButton::Left, down: false },
+        InputEvent::WheelHere { dx: 0.0, dy: 120.0 },
+    ] {
+        input.send(&ViewerMsg::Input { ev }).await.unwrap();
+    }
+    // 收画面、回确认，等统计（每秒一次）
+    let mut encoder = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(2500);
+    while let Ok(ev) = tokio::time::timeout_at(deadline, output.next()).await {
+        match ev.unwrap().unwrap() {
+            ScreenEvent::Frame { seq, .. } => input.send(&ViewerMsg::Ack { seq }).await.unwrap(),
+            ScreenEvent::Host(HostMsg::Stats { encoder: Some(e), .. }) => {
+                encoder = Some(e);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(encoder.map(|e| (e.name, e.hardware)), Some(("假编码器".to_string(), true)));
+    let got: Vec<InputEvent> = fake.inputs.lock().unwrap().iter().map(|(_, ev)| ev.clone()).collect();
+    let InputEvent::Text { text } = &got[0] else { panic!("第一个应该是文字：{got:?}") };
+    assert_eq!(text.chars().count(), p2pcli_core::screen::MAX_TEXT_INPUT, "太长的文字要截掉");
+    assert_eq!(got[1], InputEvent::RelativeMove { dx: 3.0, dy: -2.0 });
+    assert_eq!(got[4], InputEvent::WheelHere { dx: 0.0, dy: 120.0 });
+    n.shutdown().await;
+
+    // 只给看：不开
+    let fake = Arc::new(Fake { input_v2: true, ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+    let (started, _input, _output) = n.remote.open_screen(ScreenOpen { quality: Quality::Balanced, control: true, ..Default::default() }).await.unwrap();
+    assert!(!started.input_v2);
+    n.shutdown().await;
+
+    // 被连方不认得（老版本）：不开
+    let fake = Arc::new(Fake::default());
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    let (started, _input, _output) = n.remote.open_screen(ScreenOpen { quality: Quality::Balanced, control: true, ..Default::default() }).await.unwrap();
+    assert!(!started.input_v2);
     n.shutdown().await;
 }
 

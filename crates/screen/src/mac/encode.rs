@@ -21,7 +21,8 @@ use objc2_core_video::{
     kCVImageBufferTransferFunction_sRGB, kCVImageBufferYCbCrMatrix_ITU_R_709_2,
 };
 use objc2_video_toolbox::{
-    VTCompressionSession, VTEncodeInfoFlags, VTSessionSetProperty, kVTCompressionPropertyKey_AllowFrameReordering,
+    VTCompressionSession, VTEncodeInfoFlags, VTSessionCopyProperty, VTSessionSetProperty,
+    kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, kVTCompressionPropertyKey_AllowFrameReordering,
     kVTCompressionPropertyKey_AverageBitRate, kVTCompressionPropertyKey_ColorPrimaries,
     kVTCompressionPropertyKey_DataRateLimits, kVTCompressionPropertyKey_ExpectedFrameRate,
     kVTCompressionPropertyKey_MaxKeyFrameInterval, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
@@ -61,6 +62,10 @@ pub struct Encoder {
     width: usize,
     height: usize,
     bitrate: u32,
+    /// 实际用的格式（要 H.265 开不了时是 H.264）
+    pub(super) codec: VideoCodec,
+    /// 显卡硬件编码；假是系统的软件编码器
+    pub(super) hardware: bool,
 }
 
 unsafe impl Send for Encoder {}
@@ -143,12 +148,12 @@ impl Encoder {
                 if n > 0 {
                     warn!(step = n, "硬件编码器不支持低延迟模式，退一步用");
                 }
-                created = Some((unsafe { CFRetained::from_raw(p) }, n == 0));
+                created = Some((unsafe { CFRetained::from_raw(p) }, n == 0, n));
                 break;
             }
             last = status;
         }
-        let Some((session, low_latency)) = created else {
+        let Some((session, low_latency, step)) = created else {
             drop(unsafe { Box::from_raw(ctx) });
             bail!("开不了 {} 硬件编码器（{last}）", if hevc { "H.265" } else { "H.264" });
         };
@@ -175,7 +180,22 @@ impl Encoder {
             set(&session, kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_sRGB);
             set(&session, kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2);
         }
-        let mut enc = Encoder { session, ctx, width, height, bitrate: 0 };
+        // 前两种要求硬件编码器；最后一种“能用硬件就用”，问一下系统实际用的是不是硬件
+        let hardware = step < 2 || unsafe {
+            let mut value: *const CFType = ptr::null();
+            let status = VTSessionCopyProperty(
+                session.as_ref(),
+                kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+                None,
+                &mut value as *mut *const CFType as *mut c_void,
+            );
+            let used = status == 0 && kCFBooleanTrue.is_some_and(|t| ptr::eq(t as *const CFBoolean as *const c_void, value as *const c_void));
+            if !value.is_null() {
+                drop(CFRetained::from_raw(NonNull::new_unchecked(value as *mut CFType)));
+            }
+            used
+        };
+        let mut enc = Encoder { session, ctx, width, height, bitrate: 0, codec, hardware };
         enc.set_bitrate(bitrate);
         unsafe { enc.session.prepare_to_encode_frames() };
         info!(width, height, fps, bitrate, low_latency, codec = ?codec, "硬件编码器已就绪");

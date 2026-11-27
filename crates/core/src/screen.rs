@@ -344,6 +344,11 @@ pub trait ScreenBackend: Send + Sync + 'static {
     fn clipboard(&self) -> Option<Arc<dyn crate::screen_clip::ClipPlatform>> {
         None
     }
+    /// 认得 [`InputEvent`] 里后加的几种：送文字、相对移动、原地按键和滚轮。认得才告诉观看方，观看方才发
+    /// （老版本的被连方读到认不得的事件会断开画面）
+    fn input_v2(&self) -> bool {
+        false
+    }
     /// 截一张屏幕，宽度不超过 max_width（等比缩小），编成 PNG。会阻塞，别在异步任务里直接调
     fn screenshot(&self, _display: &str, _max_width: u32) -> Result<Screenshot> {
         bail!("这台电脑还不支持截屏")
@@ -365,6 +370,19 @@ pub trait ScreenCapture: Send + Sync {
     fn stats(&self) -> Option<CaptureStats> {
         None
     }
+    /// 现在在用的编码器。还没开起来、或者老实现不报就是空
+    fn encoder(&self) -> Option<EncoderInfo> {
+        None
+    }
+}
+
+/// 在用的编码器：观看方的诊断面板里显示，看得出对方是不是退回了软件编码
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncoderInfo {
+    /// 编码器的名字，比如“NVIDIA HEVC Encoder MFT”、“VideoToolbox H.265”
+    pub name: String,
+    /// 显卡硬件编码；假是软件编码（会卡、费 CPU）
+    pub hardware: bool,
 }
 
 /// 抓屏和编码的累计计数（从开始抓起算）
@@ -403,7 +421,19 @@ pub enum InputEvent {
     Key { code: String, down: bool },
     /// 窗口失焦时把按着的键和鼠标都松开，免得对面一直按着 Shift
     ReleaseAll,
+    // 下面几种只在 [`ScreenStarted::input_v2`] 为真时发
+    /// 直接把一段文字打进去，不经过对方的输入法（本机用中文输入法打好，对方没装也行）。换行按回车键发
+    Text { text: String },
+    /// 相对移动（像素，按对方屏幕算）：锁定鼠标玩游戏时用，游戏要的是移动量，不是位置
+    RelativeMove { dx: f64, dy: f64 },
+    /// 在指针现在的位置按下或松开，不先移过去（锁定鼠标时用）
+    ButtonHere { button: MouseButton, down: bool },
+    /// 在指针现在的位置滚动（锁定鼠标时用）
+    WheelHere { dx: f64, dy: f64 },
 }
+
+/// 一次送的文字最多这么多个字符，多了截掉
+pub const MAX_TEXT_INPUT: usize = 10_000;
 
 /// 开始看画面的请求
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -463,6 +493,9 @@ pub struct ScreenStarted {
     /// 剪贴板内容流（[`crate::screen_clip::ClipStreamReq`]）里带上，被连方按它找到这一路画面
     #[serde(default, skip_serializing_if = "is_zero")]
     pub clip_token: u64,
+    /// 能操作、被连方也认得 [`InputEvent`] 里后加的几种（送文字、锁定鼠标）。为假时观看方不发这几种
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub input_v2: bool,
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -508,6 +541,12 @@ pub enum HostMsg {
         fps: u32,
         #[serde(default, skip_serializing_if = "is_zero_u32")]
         target_fps: u32,
+        /// 在用的编码器
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoder: Option<EncoderInfo>,
+        /// 这一秒里每帧从画面到手到编好平均多少微秒，观看方拿它估延迟
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        encode_us: u32,
     },
     /// 指针挪了：相对当前屏幕的 0~1
     Cursor { x: f64, y: f64, visible: bool },
@@ -980,7 +1019,7 @@ where
         .or_else(|| displays.iter().find(|d| d.primary))
         .or(displays.first())
         .map(|d| d.id.clone())
-        .ok_or_else(|| anyhow!("本机没有可以抓的屏幕"))?;
+        .ok_or_else(|| anyhow!("对方电脑现在没有可用的显示器（没接显示器，或者显示器都关了），看不了画面"))?;
     let mut quality = open.quality;
 
     // 先把抓屏开起来，开不起来就按普通错误回给观看方，让它看到原因
@@ -1034,6 +1073,7 @@ where
                 control_note,
                 clipboard: clip.is_some(),
                 clip_token: clip.as_ref().map_or(0, |c| c.token()),
+                input_v2: control && backend.input_v2(),
             },
         },
     )
@@ -1059,9 +1099,14 @@ where
                             Ok(Ok(())) => {}
                         }
                     }
-                    Ok(Some(ViewerMsg::Input { ev })) => {
+                    Ok(Some(ViewerMsg::Input { mut ev })) => {
                         if !control {
                             continue;
+                        }
+                        if let InputEvent::Text { text } = &mut ev
+                            && let Some((cut, _)) = text.char_indices().nth(MAX_TEXT_INPUT)
+                        {
+                            text.truncate(cut);
                         }
                         let display = current_display.lock().unwrap().clone();
                         if let Err(e) = backend.inject(&display, &ev) {
@@ -1138,6 +1183,9 @@ where
     let mut last_config: Option<VideoConfig> = None;
     let mut frames_this_second = 0u32;
     let mut last_stats = Instant::now();
+    // 上一秒读到的抓屏计数，和两次诊断日志之间最慢的一帧
+    let mut last_capture: Option<CaptureStats> = None;
+    let mut slowest_us = 0u64;
     let mut diag = HostDiag::new(&conn);
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1245,6 +1293,7 @@ where
                         Err(e) => break Err(e),
                     }));
                     rate.set_fps(running.fps);
+                    last_capture = None;
                     display = want;
                     *current_display.lock().unwrap() = display.clone();
                     inflight.clear();
@@ -1261,6 +1310,7 @@ where
                         Err(e) => break Err(e),
                     }));
                     rate.set_fps(running.fps);
+                    last_capture = None;
                     inflight.clear();
                     need_key = true;
                     last_config = None;
@@ -1297,7 +1347,12 @@ where
                     diag.blocked += 1;
                 }
                 if diag.since.elapsed() >= HOST_DIAG_EVERY {
-                    diag.log(&conn, rate.bitrate, inflight.len(), running.capture.stats());
+                    // 每秒读计数时已经把“最慢的一帧”读走了，这里补回这一段里最慢的
+                    let capture = running.capture.stats().map(|mut s| {
+                        s.max_us = s.max_us.max(std::mem::take(&mut slowest_us));
+                        s
+                    });
+                    diag.log(&conn, rate.bitrate, inflight.len(), capture);
                 }
                 if let Some(b) = rate.tick(oldest) {
                     debug!(bitrate = b, "远程画面调码率");
@@ -1308,7 +1363,20 @@ where
                     let fps = (frames_this_second as f64 / secs).round() as u32;
                     frames_this_second = 0;
                     last_stats = Instant::now();
-                    let _ = out_tx.try_send(json(&Wire::Host { msg: HostMsg::Stats { bitrate: rate.bitrate, fps, target_fps: running.fps } }));
+                    // 这一秒里平均每帧编了多久：累计数的差
+                    let mut encode_us = 0;
+                    if let Some(now) = running.capture.stats() {
+                        slowest_us = slowest_us.max(now.max_us);
+                        if let Some(before) = last_capture
+                            && now.encoded_frames > before.encoded_frames
+                            && now.busy_us >= before.busy_us
+                        {
+                            encode_us = ((now.busy_us - before.busy_us) / (now.encoded_frames - before.encoded_frames)).min(u32::MAX as u64) as u32;
+                        }
+                        last_capture = Some(now);
+                    }
+                    let msg = HostMsg::Stats { bitrate: rate.bitrate, fps, target_fps: running.fps, encoder: running.capture.encoder(), encode_us };
+                    let _ = out_tx.try_send(json(&Wire::Host { msg }));
                 }
             }
             // 剪贴板：本机新复制的清单、要观看方剪贴板里的内容

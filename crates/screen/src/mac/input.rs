@@ -135,15 +135,7 @@ impl Injector {
             InputEvent::Move { x, y } => {
                 let at = Self::point(display, x, y)?;
                 self.last = at;
-                let (kind, button) = if self.buttons[0] {
-                    (CGEventType::LeftMouseDragged, CGMouseButton::Left)
-                } else if self.buttons[1] {
-                    (CGEventType::RightMouseDragged, CGMouseButton::Right)
-                } else if self.buttons[2..].iter().any(|b| *b) {
-                    (CGEventType::OtherMouseDragged, CGMouseButton::Center)
-                } else {
-                    (CGEventType::MouseMoved, CGMouseButton::Left)
-                };
+                let (kind, button) = self.move_kind();
                 self.mouse(kind, at, button, 0, 0);
             }
             InputEvent::Button { button, down, x, y } => {
@@ -190,8 +182,107 @@ impl Injector {
                 }
             }
             InputEvent::ReleaseAll => self.release_all(),
+            InputEvent::Text { ref text } => {
+                // 按着的修饰键会把字变成快捷键：先松开
+                self.release_all();
+                self.text(text);
+            }
+            InputEvent::RelativeMove { dx, dy } => {
+                // 指针在原来的位置挪一点，同时带上移动量：游戏读的是移动量
+                let mut at = Self::here();
+                at.x += dx;
+                at.y += dy;
+                if let Ok(id) = display.parse::<CGDirectDisplayID>() {
+                    let b = CGDisplayBounds(id);
+                    at.x = at.x.clamp(b.origin.x, b.origin.x + (b.size.width - 1.0).max(0.0));
+                    at.y = at.y.clamp(b.origin.y, b.origin.y + (b.size.height - 1.0).max(0.0));
+                }
+                self.last = at;
+                let (kind, button) = self.move_kind();
+                let ev = CGEvent::new_mouse_event(self.source.as_deref(), kind, at, button);
+                if let Some(ev) = &ev {
+                    CGEvent::set_integer_value_field(Some(ev), CGEventField::MouseEventDeltaX, dx.round() as i64);
+                    CGEvent::set_integer_value_field(Some(ev), CGEventField::MouseEventDeltaY, dy.round() as i64);
+                }
+                self.post(ev);
+            }
+            InputEvent::ButtonHere { button, down } => {
+                let at = Self::here();
+                self.last = at;
+                self.buttons[index(button)] = down;
+                let (kind, cg, number) = Self::button_kind(button, down);
+                self.mouse(kind, at, cg, number, 1);
+            }
+            InputEvent::WheelHere { dx, dy } => {
+                let ev = CGEvent::new_scroll_wheel_event2(
+                    self.source.as_deref(),
+                    CGScrollEventUnit::Pixel,
+                    2,
+                    (-dy).round() as i32,
+                    (-dx).round() as i32,
+                    0,
+                );
+                self.post(ev);
+            }
         }
         Ok(())
+    }
+
+    /// 指针现在在哪（全局坐标）
+    fn here() -> CGPoint {
+        CGEvent::new(None).map(|e| CGEvent::location(Some(&e))).unwrap_or(CGPoint::new(0.0, 0.0))
+    }
+
+    /// 移动用哪种事件：按着键时是拖动
+    fn move_kind(&self) -> (CGEventType, CGMouseButton) {
+        if self.buttons[0] {
+            (CGEventType::LeftMouseDragged, CGMouseButton::Left)
+        } else if self.buttons[1] {
+            (CGEventType::RightMouseDragged, CGMouseButton::Right)
+        } else if self.buttons[2..].iter().any(|b| *b) {
+            (CGEventType::OtherMouseDragged, CGMouseButton::Center)
+        } else {
+            (CGEventType::MouseMoved, CGMouseButton::Left)
+        }
+    }
+
+    /// 直接打字：每个键盘事件带一段 Unicode 文字（一次最多 20 个 UTF-16 码元），不经过键盘布局和输入法。
+    /// 回车、Tab 按真键发
+    fn text(&mut self, text: &str) {
+        let mut pending: Vec<u16> = Vec::new();
+        let flush = |this: &Self, pending: &mut Vec<u16>| {
+            for chunk in pending.chunks(20) {
+                for down in [true, false] {
+                    let ev = CGEvent::new_keyboard_event(this.source.as_deref(), 0, down);
+                    if let Some(ev) = &ev {
+                        unsafe { CGEvent::keyboard_set_unicode_string(Some(ev), chunk.len() as _, chunk.as_ptr()) };
+                        CGEvent::set_flags(Some(ev), CGEventFlags(0));
+                        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(ev));
+                    }
+                }
+            }
+            pending.clear();
+        };
+        for ch in text.replace("\r\n", "\n").chars() {
+            let real = match ch {
+                '\n' | '\r' => Some(0x24),
+                '\t' => Some(0x30),
+                _ => None,
+            };
+            if let Some(vk) = real {
+                flush(self, &mut pending);
+                self.key(vk, true);
+                self.key(vk, false);
+            } else {
+                let mut buf = [0u16; 2];
+                pending.extend_from_slice(ch.encode_utf16(&mut buf));
+                // 别把一对代理码元（表情之类）拆到两个事件里
+                if pending.len() >= 18 {
+                    flush(self, &mut pending);
+                }
+            }
+        }
+        flush(self, &mut pending);
     }
 
     fn release_all(&mut self) {
@@ -208,5 +299,28 @@ impl Injector {
             }
         }
         self.buttons = [false; 5];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 会真的挪本机的鼠标、要辅助功能权限，默认不跑：cargo test -p p2pcli-screen --lib -- --ignored relative_move
+    use super::*;
+
+    /// 相对移动真的挪了指针（往右挪再挪回来，贴着屏幕边时有一次挪不动）
+    #[test]
+    #[ignore]
+    fn relative_move_moves_pointer() {
+        let mut inj = Injector::new();
+        let display = objc2_core_graphics::CGMainDisplayID().to_string();
+        let start = Injector::here();
+        inj.inject(&display, &InputEvent::RelativeMove { dx: 40.0, dy: 0.0 }).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let mid = Injector::here();
+        inj.inject(&display, &InputEvent::RelativeMove { dx: -40.0, dy: 0.0 }).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let end = Injector::here();
+        println!("指针 {:?} → {:?} → {:?}", (start.x, start.y), (mid.x, mid.y), (end.x, end.y));
+        assert!((mid.x - start.x).abs() >= 1.0 || (end.x - mid.x).abs() >= 1.0, "相对移动没挪动指针");
     }
 }

@@ -296,6 +296,10 @@ impl ScreenCapture for MacCapture {
     fn stats(&self) -> Option<CaptureStats> {
         Some(self.frames.stats())
     }
+
+    fn encoder(&self) -> Option<p2pcli_core::screen::EncoderInfo> {
+        self.frames.encoder()
+    }
 }
 
 #[cfg(test)]

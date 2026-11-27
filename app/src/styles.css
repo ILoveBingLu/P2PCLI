@@ -3122,6 +3122,40 @@ html[data-mobile] [role="dialog"] {
 .screen-overlay > p { margin: 0; max-width: 460px; }
 .screen-overlay-note { font-size: 12px; color: var(--muted); }
 .screen-overlay-soft { background: rgb(0 0 0 / 0.6); }
+/* 拖文件进画面窗口时的提示：不挡拖放 */
+.screen-drop-hint { pointer-events: none; z-index: 15; border: 2px dashed var(--accent); }
+/* 送文字的小框：浮在画面右上角，打字用本机输入法，回车发过去 */
+.screen-text-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, calc(100% - 24px));
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+.screen-text-panel textarea {
+  width: 100%;
+  min-height: 72px;
+  max-height: 240px;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.screen-text-panel textarea:focus { border-color: var(--accent); }
+.screen-text-actions { display: flex; justify-content: flex-end; gap: 6px; }
 /* 全屏时工具栏浮在画面上方、平时收起来，鼠标碰到屏幕顶端才滑下来（逻辑在 ScreenWindow 里）。
    系统的窗口按钮全屏时都藏了（macOS 红绿灯、Windows 插件画的按钮），两边不用再留位置 */
 .screen-window[data-fullscreen] .screen-toolbar {

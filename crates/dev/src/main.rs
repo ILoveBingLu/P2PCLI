@@ -452,6 +452,7 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
     let mut gaps: Vec<f64> = Vec::new();
     let (mut sec_max, mut sec_slow) = (0f64, 0u32);
     let mut host_stats: Option<(u32, u32, u32)> = None;
+    let mut last_encoder = None;
     // 本机发出去的（确认）丢了多少：反方向丢包会让对方以为网络堵了
     let mut sent_lost = { let s = remote.stats(endpoint); (s.sent_packets, s.lost_packets) };
     // 单独的任务读画面：读一帧不能被超时打断，不然读了一半的字节就丢了，后面全错位
@@ -543,7 +544,13 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
                     }
                 }
             }
-            Some(ScreenEvent::Host(HostMsg::Stats { bitrate, fps, target_fps })) => host_stats = Some((fps, bitrate, target_fps)),
+            Some(ScreenEvent::Host(HostMsg::Stats { bitrate, fps, target_fps, encoder, encode_us })) => {
+                host_stats = Some((fps, bitrate, target_fps));
+                if encoder != last_encoder {
+                    eprintln!("对方编码器：{encoder:?}，这一秒每帧编 {:.1} ms", encode_us as f64 / 1000.0);
+                    last_encoder = encoder;
+                }
+            }
             // 指针的消息太多，不打印
             Some(ScreenEvent::Host(HostMsg::Cursor { .. } | HostMsg::CursorShape { .. })) => {}
             Some(ScreenEvent::Host(m)) => eprintln!("对方：{m:?}"),

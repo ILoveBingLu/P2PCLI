@@ -4,9 +4,10 @@
 // 画面只走直连：连接落到中继上时对方暂停发画面，终端照常能用，直连恢复后自动接着放。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, ClipboardCopy, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Shrink } from "lucide-react";
+import { ChevronDown, ClipboardCopy, Crosshair, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Send, Shrink, Type, Upload, X } from "lucide-react";
 import {
   api,
   type ScreenDisplay,
@@ -15,6 +16,7 @@ import {
   type RemoteInfo,
   type ScreenCodec,
   type ScreenCursorShape,
+  type ScreenEncoderInfo,
   type ScreenMouseButton,
   type ScreenQuality,
   type ScreenStarted,
@@ -145,7 +147,7 @@ export default function ScreenWindow() {
   const [started, setStarted] = useState<ScreenStarted | null>(null);
   const [display, setDisplay] = useState<string | null>(null);
   const [paused, setPaused] = useState<"relay" | "connecting" | null>(null);
-  const [stats, setStats] = useState<{ fps: number; bitrate: number; target?: number } | null>(null);
+  const [stats, setStats] = useState<{ fps: number; bitrate: number; target?: number; encoder?: ScreenEncoderInfo; encodeMs?: number } | null>(null);
   const [quality, setQuality] = useState<ScreenQuality>("balanced");
   const [control, setControl] = useState(true);
   const [swapMeta, setSwapMeta] = useState(true);
@@ -187,6 +189,27 @@ export default function ScreenWindow() {
   const queue = useRef<ScreenViewerMsg[]>([]);
   const pendingMove = useRef<ScreenInput | null>(null);
   const pendingWheel = useRef<{ dx: number; dy: number; x: number; y: number } | null>(null);
+  /** 锁定鼠标时攒着的相对移动和滚轮，和普通的移动一样按帧合并 */
+  const pendingRel = useRef<{ dx: number; dy: number } | null>(null);
+  const pendingWheelHere = useRef<{ dx: number; dy: number } | null>(null);
+  /** 鼠标锁定在画面里（玩游戏用）：发移动量，不发位置 */
+  const [locked, setLocked] = useState(false);
+  const lockedRef = useRef(false);
+  lockedRef.current = locked;
+  /** 送文字的小框 */
+  const [textOpen, setTextOpen] = useState(false);
+  const [textValue, setTextValue] = useState("");
+  /** 拖着文件进窗口时的提示 */
+  const [dropHint, setDropHint] = useState(false);
+  // 延迟和首帧：收到每帧的时间（按序号），本机从收到到画出来的平均耗时，对方同意以后多久出第一帧
+  const recvAt = useRef(new Map<number, number>());
+  const decodeMs = useRef<number | null>(null);
+  const [decodeShown, setDecodeShown] = useState<number | null>(null);
+  const liveAt = useRef<number | null>(null);
+  const firstFrameDone = useRef(false);
+  const [firstFrameMs, setFirstFrameMs] = useState<number | null>(null);
+  /** 对方同意了，过了一会儿还没收到第一帧：多半是对方显示器关了或在睡眠 */
+  const [noFrame, setNoFrame] = useState(false);
   const flushScheduled = useRef(false);
   const lastFlush = useRef(0);
   const controlRef = useRef(control);
@@ -245,6 +268,8 @@ export default function ScreenWindow() {
     const msgs = queue.current;
     if (pendingMove.current) { msgs.push({ t: "input", ev: pendingMove.current }); pendingMove.current = null; }
     if (pendingWheel.current) { msgs.push({ t: "input", ev: { k: "wheel", ...pendingWheel.current } }); pendingWheel.current = null; }
+    if (pendingRel.current) { msgs.push({ t: "input", ev: { k: "relative_move", ...pendingRel.current } }); pendingRel.current = null; }
+    if (pendingWheelHere.current) { msgs.push({ t: "input", ev: { k: "wheel_here", ...pendingWheelHere.current } }); pendingWheelHere.current = null; }
     queue.current = [];
     const clipboard = syncClipboard.current;
     syncClipboard.current = false;
@@ -287,6 +312,9 @@ export default function ScreenWindow() {
       const secs = (now - last) / 1000;
       if (screenId.current != null) {
         setRecv({ fps: Math.round(recvFrames.current / secs), mbps: recvBytes.current * 8 / secs / 1e6 });
+        setDecodeShown(decodeMs.current);
+        // 对方同意 5 秒了还一帧都没有：提示可能是显示器关着
+        if (!firstFrameDone.current && liveAt.current != null && now - liveAt.current > 5000) setNoFrame(true);
       }
       recvFrames.current = 0;
       recvBytes.current = 0;
@@ -316,6 +344,19 @@ export default function ScreenWindow() {
 
   const draw = useCallback((frame: VideoFrame) => {
     decodedCount.current += 1;
+    // 从收到这帧到画出来用了多久（平滑一下）；时间戳就是序号 × 1000
+    const now = performance.now();
+    const seq = Math.round(frame.timestamp / 1000);
+    const at = recvAt.current.get(seq);
+    if (at != null) {
+      recvAt.current.delete(seq);
+      decodeMs.current = decodeMs.current == null ? now - at : decodeMs.current * 0.9 + (now - at) * 0.1;
+    }
+    if (!firstFrameDone.current && liveAt.current != null) {
+      firstFrameDone.current = true;
+      setFirstFrameMs(Math.round(now - liveAt.current));
+      setNoFrame(false);
+    }
     const canvas = canvasRef.current;
     if (renderModeRef.current === "gl") {
       let gl = glRef.current;
@@ -429,6 +470,9 @@ export default function ScreenWindow() {
       return;
     }
     needKey.current = false;
+    recvAt.current.set(ev.seq, performance.now());
+    // 解码出错丢掉的帧不会画出来，别一直攒着
+    if (recvAt.current.size > 240) recvAt.current.delete(recvAt.current.keys().next().value!);
     try {
       d.decode(new EncodedVideoChunk({ type: ev.key ? "key" : "delta", timestamp: ev.seq * 1000, data: ev.data }));
     } catch {
@@ -464,7 +508,7 @@ export default function ScreenWindow() {
         if (ev.msg.t === "paused") setPaused(ev.msg.reason);
         else if (ev.msg.t === "resumed") setPaused(null);
         else if (ev.msg.t === "switched") setDisplay(ev.msg.display);
-        else if (ev.msg.t === "stats") setStats({ fps: ev.msg.fps, bitrate: ev.msg.bitrate, target: ev.msg.target_fps });
+        else if (ev.msg.t === "stats") setStats({ fps: ev.msg.fps, bitrate: ev.msg.bitrate, target: ev.msg.target_fps, encoder: ev.msg.encoder, encodeMs: ev.msg.encode_us ? ev.msg.encode_us / 1000 : undefined });
         else if (ev.msg.t === "cursor") setRemoteCursor({ x: ev.msg.x, y: ev.msg.y, visible: ev.msg.visible });
         else if (ev.msg.t === "cursor_shape") setLook(cursorLook(ev.msg.shape));
         return;
@@ -509,6 +553,12 @@ export default function ScreenWindow() {
         setDisplay(opened.started.display);
         if (opened.started.clipboard && !shareClipboard) void api.screenSetClipboard(opened.screen_id, false).catch(() => {});
         setPaused(null);
+        liveAt.current = performance.now();
+        firstFrameDone.current = false;
+        setFirstFrameMs(null);
+        setNoFrame(false);
+        decodeMs.current = null;
+        recvAt.current.clear();
         setPhase({ kind: "live" });
         // 画面拿到焦点，直接就能打字
         requestAnimationFrame(() => canvasRef.current?.focus());
@@ -564,7 +614,27 @@ export default function ScreenWindow() {
   // 换了画布（切到 4:4:4 时整块换掉）也要重新设
   useEffect(applyCursor, [applyCursor, look, remoteCursor?.visible, control, started, renderMode]);
 
+  /** 锁定鼠标时一个 CSS 像素算对方屏幕上几个像素：按画面显示的大小和对方屏幕的实际像素换算 */
+  const remotePerCss = () => {
+    const canvas = canvasRef.current;
+    const d = started?.displays.find((x) => x.id === display);
+    if (!canvas || !canvas.width) return 1;
+    const r = canvas.getBoundingClientRect();
+    const scale = Math.min(r.width / canvas.width, r.height / canvas.height);
+    const shownWidth = canvas.width * scale;
+    return shownWidth > 0 ? (d?.width ?? canvas.width) / shownWidth : 1;
+  };
+
   const onPointerMove = (e: React.PointerEvent) => {
+    if (lockedRef.current) {
+      if (!controlRef.current) return;
+      const k = remotePerCss();
+      const r = pendingRel.current ?? { dx: 0, dy: 0 };
+      r.dx += e.movementX * k; r.dy += e.movementY * k;
+      pendingRel.current = r;
+      send({ t: "input", ev: { k: "relative_move", ...r } }, true);
+      return;
+    }
     const p = pos(e);
     if (p && insideRef.current !== p.inside) {
       insideRef.current = p.inside;
@@ -576,6 +646,13 @@ export default function ScreenWindow() {
   };
   const onPointerButton = (e: React.PointerEvent, down: boolean) => {
     if (!controlRef.current) return;
+    if (lockedRef.current) {
+      const button = BUTTONS[e.button];
+      if (!button) return;
+      e.preventDefault();
+      send({ t: "input", ev: { k: "button_here", button, down } });
+      return;
+    }
     const p = pos(e);
     if (!p || (down && !p.inside)) return;
     const button = BUTTONS[e.button];
@@ -592,9 +669,16 @@ export default function ScreenWindow() {
     const onWheel = (e: WheelEvent) => {
       if (!controlRef.current) return;
       e.preventDefault();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1;
+      if (lockedRef.current) {
+        const w = pendingWheelHere.current ?? { dx: 0, dy: 0 };
+        w.dx += e.deltaX * unit; w.dy += e.deltaY * unit;
+        pendingWheelHere.current = w;
+        send({ t: "input", ev: { k: "wheel_here", ...w } }, true);
+        return;
+      }
       const p = pos(e);
       if (!p) return;
-      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1;
       const w = pendingWheel.current ?? { dx: 0, dy: 0, x: p.x, y: p.y };
       w.dx += e.deltaX * unit; w.dy += e.deltaY * unit; w.x = p.x; w.y = p.y;
       pendingWheel.current = w;
@@ -682,6 +766,83 @@ export default function ScreenWindow() {
     if (!control) releaseAll();
   }, [control, releaseAll]);
 
+  // ---------------------------------------------------------------- 锁定鼠标、送文字、拖文件
+
+  // 锁定鼠标：系统按 Esc 解锁，这里跟着系统的状态走
+  useEffect(() => {
+    const onChange = () => setLocked(!!canvasRef.current && document.pointerLockElement === canvasRef.current);
+    const onError = () => toast.error(t("这个窗口锁定不了鼠标"));
+    document.addEventListener("pointerlockchange", onChange);
+    document.addEventListener("pointerlockerror", onError);
+    return () => {
+      document.removeEventListener("pointerlockchange", onChange);
+      document.removeEventListener("pointerlockerror", onError);
+    };
+  }, []);
+  const canExtraInput = phase.kind === "live" && control && !!started?.control && !!started?.input_v2;
+  // 不能操作了（切到只看、对方断了）就解锁
+  useEffect(() => {
+    if (!canExtraInput && document.pointerLockElement) document.exitPointerLock();
+  }, [canExtraInput]);
+  const toggleLock = () => {
+    if (locked) { document.exitPointerLock(); return; }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.focus();
+    try {
+      const r = canvas.requestPointerLock() as unknown;
+      if (r instanceof Promise) r.then(() => toast.notice(t("鼠标锁定在画面里了，按 Esc 退出"))).catch(() => toast.error(t("这个窗口锁定不了鼠标")));
+      else toast.notice(t("鼠标锁定在画面里了，按 Esc 退出"));
+    } catch {
+      toast.error(t("这个窗口锁定不了鼠标"));
+    }
+  };
+
+  const sendText = () => {
+    const text = textValue;
+    if (!text || !canExtraInput) return;
+    send({ t: "input", ev: { k: "text", text } });
+    setTextValue("");
+    setTextOpen(false);
+    requestAnimationFrame(() => canvasRef.current?.focus());
+  };
+
+  // 拖文件进画面窗口：发给这台设备，发完告诉对方电脑上的路径
+  const deviceRef = useRef(device);
+  deviceRef.current = device;
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    const timers: number[] = [];
+    void getCurrentWebview().onDragDropEvent(async (event) => {
+      const e = event.payload;
+      const target = deviceRef.current;
+      if (e.type === "leave") return setDropHint(false);
+      if (e.type === "enter" || e.type === "over") return setDropHint(!!target);
+      setDropHint(false);
+      if (!target || !e.paths.length) return;
+      try {
+        const id = await api.sendFiles(target.endpointId, e.paths);
+        toast.notice(t("正在发给 {{name}}…", { name: target.name }));
+        // 发完了报一声：对方电脑上存在哪
+        const check = window.setInterval(() => {
+          void api.transfers().then((list) => {
+            const x = list.find((tr) => tr.id === id);
+            if (!x || x.finished_at == null) return;
+            window.clearInterval(check);
+            if (x.state === "done") toast.success(t("已发到 {{name}}：{{path}}", { name: target.name, path: x.paths.length > 1 ? (x.dir ?? x.paths[0]) : (x.paths[0] ?? x.dir ?? "") }));
+            else toast.error(t("没发成：{{error}}", { error: x.error ?? x.state }));
+          }).catch(() => {});
+        }, 1000);
+        timers.push(check);
+      } catch (error) {
+        toast.error(t("发不了：{{error}}", { error: String(error) }));
+      }
+    }).then((u) => { if (disposed) u(); else unlisten = u; }).catch(() => {});
+    return () => { disposed = true; unlisten?.(); timers.forEach((x) => window.clearInterval(x)); };
+  }, []);
+
   // ---------------------------------------------------------------- 工具栏
 
   const changeQuality = (q: ScreenQuality) => {
@@ -764,6 +925,7 @@ export default function ScreenWindow() {
   const platformsDiffer = !!device?.platform && (device.platform === "macos") !== isMac;
   const live = phase.kind === "live";
   const canControl = !!started?.control;
+  const latency = stats?.encodeMs != null && path?.rtt_ms != null && decodeShown != null ? stats.encodeMs + path.rtt_ms / 2 + decodeShown : null;
 
   return (
     <div className="screen-window" data-fullscreen={fullscreen ? "" : undefined} data-toolbar-shown={toolbarShown ? "" : undefined}>
@@ -792,6 +954,11 @@ export default function ScreenWindow() {
                 <Row label={t("编码")} value={decode ? `${codecName(decode.codec)} · ${decode.codec}` : "—"} mono />
                 <Row label={t("色彩")} value={decode ? (decode.yuv444 ? t("4:4:4 原色") : "4:2:0") : "—"} />
                 <Row label={t("解码")} value={decode ? (decode.hardware && !hwNote ? t("显卡硬件解码") : t("系统解码")) : "—"} />
+                <Row label={t("对方编码")} value={stats?.encoder ? `${stats.encoder.name} · ${stats.encoder.hardware ? t("硬件") : t("软件")}` : "—"}
+                  hint={t("对方用哪个编码器压画面。软件编码会卡、很费对方的 CPU，一般是对方显卡驱动有问题")} />
+                <Row label={t("延迟（估计）")} value={latency != null ? t("约 {{ms}} 毫秒", { ms: Math.round(latency) }) : "—"}
+                  hint={latency != null ? t("对方编码 {{e}} 毫秒 + 网络单程约 {{n}} 毫秒 + 本机解码显示 {{d}} 毫秒。不算对方屏幕刷新、抓屏和本机屏幕刷新的时间", { e: stats!.encodeMs!.toFixed(1), n: Math.round(path!.rtt_ms! / 2), d: decodeShown!.toFixed(1) }) : t("对方是老版本，或者还在统计")} />
+                <Row label={t("首帧")} value={firstFrameMs != null ? t("{{ms}} 毫秒", { ms: firstFrameMs }) : "—"} hint={t("对方同意以后，过了多久画面出来")} />
               </Section>
             ) : undefined} />
         )}
@@ -835,6 +1002,22 @@ export default function ScreenWindow() {
             <ClipboardCopy />
           </Button>
         )}
+        {canExtraInput && (
+          <Button variant="ghost" size="icon-sm" className="screen-tool" data-active={textOpen ? "" : undefined}
+            title={t("送一段文字过去：用本机的输入法打，对方没装中文输入法也能输入")}
+            aria-label={t("送文字")}
+            onPress={() => setTextOpen((v) => !v)}>
+            <Type />
+          </Button>
+        )}
+        {canExtraInput && (
+          <Button variant="ghost" size="icon-sm" className="screen-tool" data-active={locked ? "" : undefined}
+            title={locked ? t("鼠标锁定在画面里（玩游戏用），按 Esc 解锁") : t("把鼠标锁定在画面里：发移动量而不是位置，第一人称游戏转视角要用这个")}
+            aria-label={t("锁定鼠标")}
+            onPress={toggleLock}>
+            <Crosshair />
+          </Button>
+        )}
         <Button variant="ghost" size="icon-sm" className="screen-tool" title={`${fullscreen ? t("退出全屏") : t("全屏")}（${isMac ? "⌃⌘F" : "F11"}）`} aria-label={t("全屏")} onPress={() => void toggleFullscreen()}>
           {fullscreen ? <Shrink /> : <Expand />}
         </Button>
@@ -853,7 +1036,7 @@ export default function ScreenWindow() {
           onPointerUp={(e) => onPointerButton(e, false)}
           onPointerLeave={() => { insideRef.current = false; applyCursor(); }}
           onContextMenu={(e) => e.preventDefault()} />
-        {live && !(control && canControl) && look && remoteCursor?.visible && (() => {
+        {live && (!(control && canControl) || locked) && look && remoteCursor?.visible && (() => {
           // 只看时按对方报来的位置画它的指针（画面按比例缩放、四周有黑边，要换算）
           const canvas = canvasRef.current;
           if (!canvas || !canvas.width) return null;
@@ -865,6 +1048,34 @@ export default function ScreenWindow() {
           const top = r.top - stage.top + (r.height - h) / 2 + remoteCursor.y * h - look.hotY;
           return <img className="screen-remote-cursor" src={look.url} alt="" width={look.width} height={look.height} style={{ left, top }} />;
         })()}
+        {textOpen && canExtraInput && (
+          <div className="screen-text-panel" role="dialog" aria-label={t("送文字")}>
+            <textarea autoFocus value={textValue} maxLength={10000}
+              placeholder={t("在这里打字（可以用本机的输入法），回车发送，Shift + 回车换行")}
+              onChange={(e) => setTextValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { e.preventDefault(); setTextOpen(false); canvasRef.current?.focus(); }
+                else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); sendText(); }
+              }} />
+            <div className="screen-text-actions">
+              <Button variant="ghost" size="icon-sm" aria-label={t("关闭")} title={t("关闭")} onPress={() => setTextOpen(false)}><X /></Button>
+              <Button size="sm" isDisabled={!textValue} onPress={sendText}><Send data-icon="inline-start" />{t("发送")}</Button>
+            </div>
+          </div>
+        )}
+        {dropHint && device && (
+          <div className="screen-overlay screen-overlay-soft screen-drop-hint">
+            <Upload />
+            <p>{t("松开就发给 {{name}}", { name: device.name })}</p>
+          </div>
+        )}
+        {live && noFrame && !paused && (
+          <div className="screen-overlay screen-overlay-soft">
+            <Monitor />
+            <p>{t("还没收到对方的画面")}</p>
+            <p className="screen-overlay-note">{t("对方的显示器可能关着或在睡眠。在画面上动一下鼠标、按个键，通常就能把它叫醒")}</p>
+          </div>
+        )}
         {phase.kind !== "live" && (
           <div className="screen-overlay">
             {phase.kind === "waiting" && <><LoaderCircle className="animate-spin" /><p>{t("正在等这台设备连上…")}</p><p className="screen-overlay-note">{t("在主窗口里连上这台设备后，画面会自动打开")}</p></>}

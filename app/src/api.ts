@@ -349,6 +349,14 @@ export interface ScreenStarted {
   control_note?: string | null;
   /** 对方同意互通剪贴板；老版本没有这项 */
   clipboard?: boolean;
+  /** 对方认得送文字、锁定鼠标这几种键鼠事件；老版本没有这项 */
+  input_v2?: boolean;
+}
+
+/** 对方在用的编码器 */
+export interface ScreenEncoderInfo {
+  name: string;
+  hardware: boolean;
 }
 
 export interface ScreenVideoConfig {
@@ -371,7 +379,12 @@ export type ScreenInput =
   | { k: "button"; button: ScreenMouseButton; down: boolean; x: number; y: number }
   | { k: "wheel"; dx: number; dy: number; x: number; y: number }
   | { k: "key"; code: string; down: boolean }
-  | { k: "release_all" };
+  | { k: "release_all" }
+  // 下面几种只在对方 ScreenStarted.input_v2 为真时发
+  | { k: "text"; text: string }
+  | { k: "relative_move"; dx: number; dy: number }
+  | { k: "button_here"; button: ScreenMouseButton; down: boolean }
+  | { k: "wheel_here"; dx: number; dy: number };
 
 export type ScreenViewerMsg =
   | { t: "key_frame" }
@@ -383,7 +396,7 @@ export type ScreenHostMsg =
   | { t: "paused"; reason: "relay" | "connecting" }
   | { t: "resumed" }
   | { t: "switched"; display: string }
-  | { t: "stats"; bitrate: number; fps: number; target_fps?: number }
+  | { t: "stats"; bitrate: number; fps: number; target_fps?: number; encoder?: ScreenEncoderInfo; encode_us?: number }
   | { t: "cursor"; x: number; y: number; visible: boolean }
   | { t: "cursor_shape"; shape: ScreenCursorShape };
 

@@ -131,6 +131,10 @@ impl ScreenBackend for WinBackend {
         self.input.lock().unwrap().inject(display, ev)
     }
 
+    fn input_v2(&self) -> bool {
+        true
+    }
+
     fn cursor(&self, display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
         self.cursor.read(display)
     }

@@ -70,5 +70,11 @@ async fn main() -> anyhow::Result<()> {
         bytes as f64 * 8.0 / elapsed / 1e6,
         cap.color(),
     );
+    let stats = cap.stats().unwrap_or_default();
+    println!(
+        "编码器 {:?} | 平均每帧从画面到手到编好 {:.1} ms",
+        cap.encoder(),
+        stats.busy_us as f64 / stats.encoded_frames.max(1) as f64 / 1000.0
+    );
     Ok(())
 }

@@ -7,7 +7,7 @@ use anyhow::Result;
 use p2pcli_core::screen::{InputEvent, MouseButton};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-    KEYEVENTF_SCANCODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
@@ -55,6 +55,38 @@ fn key(scan: u16, extended: bool, down: bool) -> INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
     }
+}
+
+/// 一个 UTF-16 码元按“Unicode 键”发：不经过键盘布局和输入法，直接出这个字
+fn unicode(unit: u16, down: bool) -> INPUT {
+    let flags = if down { KEYEVENTF_UNICODE } else { KEYEVENTF_UNICODE | KEYEVENTF_KEYUP };
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: unit, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+    }
+}
+
+/// 回车、Tab 按真键发（有的程序不认 Unicode 的换行），别的字按 Unicode 发
+fn text_inputs(text: &str) -> Vec<INPUT> {
+    let mut inputs = Vec::new();
+    let mut real = |scan: u16, inputs: &mut Vec<INPUT>| {
+        inputs.push(key(scan, false, true));
+        inputs.push(key(scan, false, false));
+    };
+    for ch in text.replace("\r\n", "\n").chars() {
+        match ch {
+            '\n' | '\r' => real(0x1C, &mut inputs),
+            '\t' => real(0x0F, &mut inputs),
+            _ => {
+                let mut buf = [0u16; 2];
+                for &unit in ch.encode_utf16(&mut buf).iter() {
+                    inputs.push(unicode(unit, true));
+                    inputs.push(unicode(unit, false));
+                }
+            }
+        }
+    }
+    inputs
 }
 
 fn button_flags(b: MouseButton, down: bool) -> (MOUSE_EVENT_FLAGS, i32) {
@@ -142,6 +174,43 @@ impl Injector {
                     send(&[key(scan, extended, down)]);
                 }
             }
+            InputEvent::Text { ref text } => {
+                // 按着的修饰键会把字变成快捷键：先松开
+                self.inject(display, &InputEvent::ReleaseAll)?;
+                for chunk in text_inputs(text).chunks(200) {
+                    send(chunk);
+                }
+            }
+            InputEvent::RelativeMove { dx, dy } => {
+                // 不带 ABSOLUTE 就是相对移动；用 Raw Input 的游戏收到的就是这个移动量
+                let (x, y) = (dx.round() as i32, dy.round() as i32);
+                if x != 0 || y != 0 {
+                    send(&[mouse(x, y, 0, MOUSEEVENTF_MOVE)]);
+                }
+            }
+            InputEvent::ButtonHere { button, down } => {
+                let (flags, data) = button_flags(button, down);
+                self.buttons[button as usize] = down;
+                send(&[mouse(0, 0, data, flags)]);
+            }
+            InputEvent::WheelHere { dx, dy } => {
+                self.wheel.0 += -dy * WHEEL_PER_PIXEL;
+                self.wheel.1 += dx * WHEEL_PER_PIXEL;
+                let v = self.wheel.0.trunc() as i32;
+                let h = self.wheel.1.trunc() as i32;
+                self.wheel.0 -= v as f64;
+                self.wheel.1 -= h as f64;
+                let mut inputs = Vec::new();
+                if v != 0 {
+                    inputs.push(mouse(0, 0, v, MOUSEEVENTF_WHEEL));
+                }
+                if h != 0 {
+                    inputs.push(mouse(0, 0, h, MOUSEEVENTF_HWHEEL));
+                }
+                if !inputs.is_empty() {
+                    send(&inputs);
+                }
+            }
             InputEvent::ReleaseAll => {
                 let mut inputs: Vec<INPUT> = self.keys.drain().map(|(s, e)| key(s, e, false)).collect();
                 let all = [MouseButton::Left, MouseButton::Right, MouseButton::Middle, MouseButton::Back, MouseButton::Forward];
@@ -158,5 +227,36 @@ impl Injector {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 会真的挪本机的鼠标，默认不跑：cargo test -p p2pcli-screen --lib -- --ignored relative_move
+    use super::*;
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    fn at() -> POINT {
+        let mut p = POINT::default();
+        unsafe { GetCursorPos(&mut p).unwrap() };
+        p
+    }
+
+    /// 相对移动真的挪了指针（往右挪再挪回来，贴着屏幕边时有一次挪不动）
+    #[test]
+    #[ignore]
+    fn relative_move_moves_pointer() {
+        let mut inj = Injector::default();
+        let start = at();
+        inj.inject("", &InputEvent::RelativeMove { dx: 40.0, dy: 0.0 }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mid = at();
+        inj.inject("", &InputEvent::RelativeMove { dx: -40.0, dy: 0.0 }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let end = at();
+        println!("指针 {:?} → {:?} → {:?}", (start.x, start.y), (mid.x, mid.y), (end.x, end.y));
+        assert!(mid.x != start.x || end.x != mid.x, "相对移动没挪动指针");
+        assert_eq!(mid.y, start.y, "只往横向挪，纵向不该变");
     }
 }

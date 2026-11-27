@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use p2pcli_core::host::BoxFuture;
 use p2pcli_core::screen::{
-    CaptureOptions, CaptureStats, ColorFormat, EncodedFrame, Layout, Primaries, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config,
+    CaptureOptions, CaptureStats, ColorFormat, EncodedFrame, EncoderInfo, Layout, Primaries, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config,
     hvcc_config,
 };
 use tokio::sync::oneshot;
@@ -101,6 +101,8 @@ pub(super) struct Shared {
     pub max_us: AtomicU64,
     /// 送进编码器多少帧，测试里查有没有多编
     pub submitted: AtomicU64,
+    /// 现在在用的编码器，观看方的诊断面板里显示
+    pub encoder: Mutex<Option<EncoderInfo>>,
 }
 
 impl Shared {
@@ -192,6 +194,10 @@ impl ScreenCapture for WinCapture {
 
     fn stats(&self) -> Option<CaptureStats> {
         Some(self.shared.stats())
+    }
+
+    fn encoder(&self) -> Option<EncoderInfo> {
+        self.shared.encoder.lock().unwrap().clone()
     }
 }
 
@@ -715,6 +721,14 @@ impl State {
         Ok(Some(Staged { ts: self.ts(at), taken }))
     }
 
+    /// 换上新开的编码器，名字和是不是硬件记给观看方看
+    fn set_encoder(&mut self, enc: Encoder) {
+        // 名字是系统给编码器起的，像“NVIDIA HEVC Encoder MFT”，本身就带着格式
+        let name = if enc.name.is_empty() { format!("Media Foundation {:?}", enc.format) } else { enc.name.clone() };
+        *self.shared.encoder.lock().unwrap() = Some(EncoderInfo { name, hardware: enc.hardware });
+        self.encoder = Some(enc);
+    }
+
     /// 按输入尺寸建转换器和编码器。要 4:4:4 时先试三倍高的画面（只用硬件编码器，软件的编不动），
     /// 哪一步不行就退回 4:2:0，以后这一路不再试
     fn setup(&mut self, opts: &CaptureOptions, bitrate: u32) -> Result<()> {
@@ -736,7 +750,7 @@ impl State {
                 Ok((stacker, enc)) => {
                     info!(width = dst.0, height = dst.1 * 3, hardware = enc.hardware, "远程画面用 4:4:4");
                     self.converter = Some(Converter::Stacked(stacker));
-                    self.encoder = Some(enc);
+                    self.set_encoder(enc);
                     return Ok(());
                 }
                 Err(e) => {
@@ -766,7 +780,7 @@ impl State {
             None => Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate, opts.codec, opts.full_range, false)?,
         };
         debug!(hardware = enc.hardware, "编码器已换新");
-        self.encoder = Some(enc);
+        self.set_encoder(enc);
         Ok(())
     }
 
