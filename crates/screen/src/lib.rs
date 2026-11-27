@@ -25,6 +25,15 @@ pub use mac::encode as mac_encode;
 #[cfg(windows)]
 mod win;
 
+/// 看一张图片能不能当隐私屏背景（读得出来、是认得的格式）
+pub fn check_privacy_image(path: &std::path::Path) -> anyhow::Result<()> {
+    let (w, h) = image::ImageReader::open(path)?.with_guessed_format()?.into_dimensions().map_err(|e| anyhow::anyhow!("这不是认得的图片（支持 PNG、JPG、BMP、WebP、GIF）：{e}"))?;
+    if w == 0 || h == 0 || (w as u64) * (h as u64) > 100_000_000 {
+        anyhow::bail!("图片尺寸不对：{w}×{h}");
+    }
+    Ok(())
+}
+
 /// 本机剪贴板（远程控制时和对方互通）；这个系统还不支持就是空
 pub fn clipboard() -> Option<Arc<dyn p2pcli_core::screen_clip::ClipPlatform>> {
     #[cfg(target_os = "macos")]

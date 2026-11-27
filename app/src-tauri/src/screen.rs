@@ -2,8 +2,8 @@
 //! 画面只走直连，中继只给终端用；抓屏、编解码都用硬件，见 p2pcli-screen 和 core 的 screen 模块。
 
 use p2pcli_core::host::{BoxFuture, ScreenDecision, ScreenRequest};
-use p2pcli_core::screen::{HostMsg, Quality, ScreenEvent, ScreenOpen, ScreenStarted, ViewerMsg};
-use serde::Serialize;
+use p2pcli_core::screen::{HostMsg, PrivacyBackground, PrivacyStyle, Quality, ScreenEvent, ScreenOpen, ScreenStarted, ViewerMsg};
+use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -29,15 +29,66 @@ const EV_AUDIO: u8 = 3;
 
 // ---------------------------------------------------------------- 本机被看
 
+/// 谁能让本机盖上隐私屏
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrivacyAllow {
+    /// 只有受信设备（一般是自己的另一台电脑）
+    #[default]
+    Trusted,
+    /// 能操作本机的都能开（没配对过的设备要先在弹窗里点允许）
+    All,
+    Off,
+}
+
+/// 隐私屏的设置：谁能开、盖上时显示什么
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PrivacySettings {
+    #[serde(default)]
+    pub allow: PrivacyAllow,
+    /// 背景："black"、"preset0" ~ "preset2"（内置渐变）、"image"（自己选的图片，存在数据目录里）
+    #[serde(default)]
+    pub background: String,
+    /// 不显示时钟；默认显示
+    #[serde(default)]
+    pub clock_off: bool,
+    /// 自己写的那行字；空就用默认的（写着谁在操作）
+    #[serde(default)]
+    pub message: String,
+}
+
+/// 自己选的隐私屏图片拷到这里（格式按内容认，不看扩展名）
+fn privacy_image_path(state: &AppState) -> std::path::PathBuf {
+    state.data_dir.join("privacy-background")
+}
+
+/// 按设置拼出隐私屏的样式；viewer 是在看的设备的名字，默认那行字里用
+pub(crate) fn privacy_style(state: &AppState, viewer: &str) -> PrivacyStyle {
+    let p = state.settings.lock().unwrap().screen_privacy.clone();
+    let image = privacy_image_path(state);
+    let background = match p.background.as_str() {
+        "image" if image.is_file() => PrivacyBackground::Image { path: image },
+        s => match s.strip_prefix("preset").and_then(|n| n.parse::<u8>().ok()) {
+            Some(index) => PrivacyBackground::Preset { index: index.min(p2pcli_core::screen::PRIVACY_PRESETS - 1) },
+            None => PrivacyBackground::Black,
+        },
+    };
+    let message = match p.message.trim() {
+        "" => p2pcli_core::screen::privacy_message(viewer),
+        m => m.to_string(),
+    };
+    PrivacyStyle { background, clock: !p.clock_off, message }
+}
+
 impl UiDelegate {
     pub(crate) fn approve_screen_request(&self, req: ScreenRequest) -> BoxFuture<ScreenDecision> {
         let deny = ScreenDecision { allow: false, control: false, privacy: false };
         let Some(state) = self.app.try_state::<AppState>() else {
             return Box::pin(async move { deny });
         };
-        let (off, view_only) = {
+        let (off, view_only, privacy) = {
             let s = state.settings.lock().unwrap();
-            (s.screen_off, s.screen_view_only)
+            (s.screen_off, s.screen_view_only, s.screen_privacy.allow)
         };
         if off {
             info!("别的设备要看本机画面，设置里关掉了，直接拒绝");
@@ -45,7 +96,7 @@ impl UiDelegate {
         }
         // 受信设备（一般是自己的另一台电脑）直接放行，界面上照样亮“正在被查看”
         if req.trusted {
-            return Box::pin(async move { ScreenDecision { allow: true, control: !view_only } });
+            return Box::pin(async move { ScreenDecision { allow: true, control: !view_only, privacy: privacy != PrivacyAllow::Off } });
         }
         let (tx, rx) = oneshot::channel();
         self.pending_screens.lock().unwrap().insert(req.id, tx);
@@ -64,7 +115,7 @@ impl UiDelegate {
         let _ = self.app.emit("screen-request", ScreenRequestView { req, view_only });
         Box::pin(async move {
             let decision = rx.await.unwrap_or(deny);
-            ScreenDecision { allow: decision.allow, control: decision.control && !view_only }
+            ScreenDecision { allow: decision.allow, control: decision.control && !view_only, privacy: privacy == PrivacyAllow::All }
         })
     }
 }
@@ -80,7 +131,7 @@ struct ScreenRequestView {
 #[tauri::command]
 pub(crate) fn respond_screen(state: State<'_, AppState>, id: u64, allow: bool, control: bool) {
     if let Some(tx) = state.delegate.pending_screens.lock().unwrap().remove(&id) {
-        let _ = tx.send(ScreenDecision { allow, control });
+        let _ = tx.send(ScreenDecision { allow, control, privacy: false });
     }
 }
 
@@ -96,6 +147,11 @@ pub(crate) struct ScreenSettingsView {
     supported: bool,
     enabled: bool,
     view_only: bool,
+    /// 这个系统能不能开隐私屏
+    privacy_supported: bool,
+    privacy: PrivacySettings,
+    /// 选过自己的图片
+    privacy_has_image: bool,
     /// macOS 的录屏、辅助功能权限
     capture_permission: bool,
     control_permission: bool,
@@ -132,6 +188,9 @@ fn screen_settings_view(state: &AppState) -> ScreenSettingsView {
         supported,
         enabled: !s.screen_off,
         view_only: s.screen_view_only,
+        privacy_supported: privacy_supported(),
+        privacy: s.screen_privacy.clone(),
+        privacy_has_image: privacy_image_path(state).is_file(),
         capture_permission,
         control_permission,
         capture_needs_restart,
@@ -166,6 +225,98 @@ pub(crate) async fn set_screen_settings(state: State<'_, AppState>, enabled: boo
         }
     }
     Ok(screen_settings_view(&state))
+}
+
+#[cfg(desktop)]
+fn privacy_supported() -> bool {
+    p2pcli_screen::backend().is_some_and(|b| b.privacy_supported())
+}
+
+#[cfg(mobile)]
+fn privacy_supported() -> bool {
+    false
+}
+
+/// 保存设置（拿着 config_gate 调）
+fn save_settings(state: &AppState, s: crate::Settings) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(&s).map_err(|e| e.to_string())?;
+    p2pcli_core::store::write_private(&settings_path(&state.data_dir), &bytes).map_err(|e| format!("保存设置失败：{e:#}"))?;
+    *state.settings.lock().unwrap() = s;
+    Ok(())
+}
+
+/// 改隐私屏设置：谁能开、背景、要不要时钟、那行字
+#[tauri::command]
+pub(crate) async fn set_screen_privacy(state: State<'_, AppState>, privacy: PrivacySettings) -> Result<ScreenSettingsView, String> {
+    let _gate = state.config_gate.lock().await;
+    let mut s = state.settings.lock().unwrap().clone();
+    let mut privacy = privacy;
+    privacy.message = privacy.message.trim().chars().take(200).collect();
+    s.screen_privacy = privacy;
+    save_settings(&state, s)?;
+    Ok(screen_settings_view(&state))
+}
+
+/// 选一张图片当隐私屏背景：拷进数据目录（原图挪走、删掉都不影响），背景换成它。没选就是 None
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn screen_privacy_pick_image(app: AppHandle, state: State<'_, AppState>) -> Result<Option<ScreenSettingsView>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("选一张图片当隐私屏背景")
+        .add_filter("图片", &["png", "jpg", "jpeg", "bmp", "webp", "gif"])
+        .pick_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    let Some(picked) = rx.await.map_err(|e| e.to_string())? else { return Ok(None) };
+    let src = picked.into_path().map_err(|e| e.to_string())?;
+    let size = tokio::fs::metadata(&src).await.map_err(|e| format!("读不了这张图片：{e}"))?.len();
+    if size > 50 * 1024 * 1024 {
+        return Err("图片太大了（超过 50 MB），换一张小一点的".into());
+    }
+    let check = src.clone();
+    tokio::task::spawn_blocking(move || p2pcli_screen::check_privacy_image(&check))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))?;
+    let dest = privacy_image_path(&state);
+    tokio::fs::copy(&src, &dest).await.map_err(|e| format!("图片存不下来：{e}"))?;
+    let _gate = state.config_gate.lock().await;
+    let mut s = state.settings.lock().unwrap().clone();
+    s.screen_privacy.background = "image".into();
+    save_settings(&state, s)?;
+    Ok(Some(screen_settings_view(&state)))
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub(crate) async fn screen_privacy_pick_image() -> Result<Option<ScreenSettingsView>, String> {
+    Err(crate::MOBILE_UNSUPPORTED.into())
+}
+
+/// 预览隐私屏：按现在的设置在本机盖 5 秒（不拦键鼠），自己看看效果
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn screen_privacy_preview(state: State<'_, AppState>) -> Result<(), String> {
+    let backend = p2pcli_screen::backend().ok_or("这台电脑不支持隐私屏")?;
+    let style = privacy_style(&state, "某台设备");
+    let guard = tokio::task::spawn_blocking(move || backend.start_privacy(&style, false))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))?;
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        drop(guard);
+    });
+    Ok(())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub(crate) async fn screen_privacy_preview() -> Result<(), String> {
+    Err(crate::MOBILE_UNSUPPORTED.into())
 }
 
 /// 弹系统的授权提示（macOS）：capture 为真是录屏，否则是辅助功能

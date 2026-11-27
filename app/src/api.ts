@@ -316,10 +316,27 @@ export interface ScreenRequest {
   view_only: boolean;
 }
 
+/** 谁能让本机盖上隐私屏：只有受信设备、能操作的都能、谁都不能 */
+export type PrivacyAllow = "trusted" | "all" | "off";
+
+export interface PrivacySettings {
+  allow: PrivacyAllow;
+  /** "black"、"preset0" ~ "preset2"、"image" */
+  background: string;
+  clock_off: boolean;
+  /** 自己写的那行字，空是默认的（写着谁在操作） */
+  message: string;
+}
+
 export interface ScreenSettings {
   supported: boolean;
   enabled: boolean;
   view_only: boolean;
+  /** 这台电脑能开隐私屏 */
+  privacy_supported: boolean;
+  privacy: PrivacySettings;
+  /** 选过自己的背景图片 */
+  privacy_has_image: boolean;
   capture_permission: boolean;
   control_permission: boolean;
   /** 录屏是这次打开以后才允许的，要重开 P2PCLI 才生效 */
@@ -355,6 +372,8 @@ export interface ScreenStarted {
   translate_keys?: boolean;
   /** 对方能传声音；0 或者没有是不能（老版本、系统不支持） */
   audio_token?: number;
+  /** 能让对方盖上隐私屏；老版本没有这项 */
+  privacy?: boolean;
 }
 
 /** 对方在用的编码器 */
@@ -396,7 +415,9 @@ export type ScreenViewerMsg =
   | { t: "set_quality"; quality: ScreenQuality }
   | { t: "input"; ev: ScreenInput }
   /** 只在对方 ScreenStarted.translate_keys 为真时发 */
-  | { t: "translate_keys"; on: boolean };
+  | { t: "translate_keys"; on: boolean }
+  /** 只在对方 ScreenStarted.privacy 为真时发 */
+  | { t: "privacy"; on: boolean };
 
 export type ScreenHostMsg =
   | { t: "paused"; reason: "relay" | "connecting" }
@@ -404,7 +425,9 @@ export type ScreenHostMsg =
   | { t: "switched"; display: string }
   | { t: "stats"; bitrate: number; fps: number; target_fps?: number; encoder?: ScreenEncoderInfo; encode_us?: number }
   | { t: "cursor"; x: number; y: number; visible: boolean }
-  | { t: "cursor_shape"; shape: ScreenCursorShape };
+  | { t: "cursor_shape"; shape: ScreenCursorShape }
+  /** 隐私屏现在盖没盖着；note 是没盖成或被撤掉的原因 */
+  | { t: "privacy"; on: boolean; note?: string };
 
 /** 对方指针的样子：RGBA（base64），热点按图片像素，scale 是图片像素和屏幕点的比例 */
 export interface ScreenCursorShape {
@@ -784,6 +807,11 @@ export const api = {
   /** 远程画面：本机被看时的设置 */
   screenSettings: () => invoke<ScreenSettings>("screen_settings"),
   setScreenSettings: (enabled: boolean, viewOnly: boolean) => invoke<ScreenSettings>("set_screen_settings", { enabled, viewOnly }),
+  setScreenPrivacy: (privacy: PrivacySettings) => invoke<ScreenSettings>("set_screen_privacy", { privacy }),
+  /** 弹选择框选背景图片；没选是 null */
+  screenPrivacyPickImage: () => invoke<ScreenSettings | null>("screen_privacy_pick_image"),
+  /** 按现在的设置在本机盖 5 秒看看 */
+  screenPrivacyPreview: () => invoke<void>("screen_privacy_preview"),
   screenRequestPermission: (capture: boolean) => invoke<ScreenSettings>("screen_request_permission", { capture }),
   /** 直接打开系统设置里录屏或辅助功能那一页（macOS） */
   screenOpenPermissionSettings: (capture: boolean) => invoke<void>("screen_open_permission_settings", { capture }),

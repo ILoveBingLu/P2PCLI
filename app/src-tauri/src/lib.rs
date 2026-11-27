@@ -109,6 +109,9 @@ struct Settings {
     /// macOS 第一次打开时的录屏、辅助功能权限引导已经点过“以后再说”或“完成”
     #[serde(default)]
     screen_guide_done: bool,
+    /// 隐私屏：谁能开、盖上时显示什么
+    #[serde(default)]
+    screen_privacy: screen::PrivacySettings,
 }
 
 fn settings_path(dir: &Path) -> PathBuf {
@@ -258,6 +261,13 @@ impl HostDelegate for UiDelegate {
 
     fn approve_screen(&self, req: p2pcli_core::host::ScreenRequest) -> BoxFuture<p2pcli_core::host::ScreenDecision> {
         self.approve_screen_request(req)
+    }
+
+    fn privacy_style(&self, viewer: &str) -> p2pcli_core::screen::PrivacyStyle {
+        match self.app.try_state::<AppState>() {
+            Some(state) => screen::privacy_style(&state, viewer),
+            None => p2pcli_core::screen::PrivacyStyle::new(viewer),
+        }
     }
 }
 
@@ -1623,6 +1633,7 @@ async fn save_settings(
         screen_view_only: cur.screen_view_only,
         inbox_dir: cur.inbox_dir,
         screen_guide_done: cur.screen_guide_done,
+        screen_privacy: cur.screen_privacy,
     };
     if let Some(proxy) = &s.proxy {
         p2pcli_core::proxy::parse_proxy(proxy).map_err(|e| format!("{e:#}"))?;
@@ -2034,6 +2045,9 @@ pub fn run() {
             screen::stop_screen_share,
             screen::screen_settings,
             screen::set_screen_settings,
+            screen::set_screen_privacy,
+            screen::screen_privacy_pick_image,
+            screen::screen_privacy_preview,
             screen::screen_request_permission,
             screen::screen_open_permission_settings,
             screen::screen_guide_done,

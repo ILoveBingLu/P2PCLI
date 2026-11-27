@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, ClipboardCopy, Crosshair, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Send, Shrink, Type, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { ChevronDown, ClipboardCopy, Crosshair, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Send, Shield, ShieldCheck, Shrink, Type, Upload, Volume2, VolumeX, X } from "lucide-react";
 import { PcmPlayer } from "./audioPlayer";
 import {
   api,
@@ -162,6 +162,10 @@ export default function ScreenWindow() {
   const [started, setStarted] = useState<ScreenStarted | null>(null);
   const [display, setDisplay] = useState<string | null>(null);
   const [paused, setPaused] = useState<"relay" | "connecting" | null>(null);
+  /** 隐私屏：对方说现在盖没盖着；想不想盖（重连以后照着它再盖上）；等对方回话 */
+  const [privacy, setPrivacy] = useState(false);
+  const privacyWant = useRef(false);
+  const [privacyBusy, setPrivacyBusy] = useState(false);
   const [stats, setStats] = useState<{ fps: number; bitrate: number; target?: number; encoder?: ScreenEncoderInfo; encodeMs?: number } | null>(null);
   const [quality, setQuality] = useState<ScreenQuality>("balanced");
   const [control, setControl] = useState(true);
@@ -534,6 +538,11 @@ export default function ScreenWindow() {
         else if (ev.msg.t === "stats") setStats({ fps: ev.msg.fps, bitrate: ev.msg.bitrate, target: ev.msg.target_fps, encoder: ev.msg.encoder, encodeMs: ev.msg.encode_us ? ev.msg.encode_us / 1000 : undefined });
         else if (ev.msg.t === "cursor") setRemoteCursor({ x: ev.msg.x, y: ev.msg.y, visible: ev.msg.visible });
         else if (ev.msg.t === "cursor_shape") setLook(cursorLook(ev.msg.shape));
+        else if (ev.msg.t === "privacy") {
+          setPrivacy(ev.msg.on);
+          setPrivacyBusy(false);
+          if (ev.msg.note) toast.notice(ev.msg.note);
+        }
         return;
       case "notice":
         // 剪贴板内容走中继传：中继只是兜底，会比较慢
@@ -574,6 +583,13 @@ export default function ScreenWindow() {
         screenId.current = opened.screen_id;
         setStarted(opened.started);
         setDisplay(opened.started.display);
+        // 重连以后对方那边的隐私屏已经撤了：之前开着就再盖上
+        setPrivacy(false);
+        setPrivacyBusy(false);
+        if (privacyWant.current && opened.started.privacy && opened.started.control) {
+          setPrivacyBusy(true);
+          void api.screenSend(opened.screen_id, [{ t: "privacy", on: true }]).catch(() => setPrivacyBusy(false));
+        }
         if (opened.started.clipboard && !shareClipboard) void api.screenSetClipboard(opened.screen_id, false).catch(() => {});
         setPaused(null);
         liveAt.current = performance.now();
@@ -1055,6 +1071,22 @@ export default function ScreenWindow() {
             aria-label={t("剪贴板互通")}
             onPress={toggleShareClipboard}>
             <ClipboardCopy />
+          </Button>
+        )}
+        {live && canControl && started?.privacy && (
+          <Button variant="ghost" size="icon-sm" className="screen-tool" data-active={privacy ? "" : undefined}
+            disabled={privacyBusy}
+            title={privacy
+              ? t("隐私屏开着：对方电脑的屏幕被盖住，那边的键盘鼠标也被拦住，只有你能操作。断开时自动撤掉。点一下撤掉")
+              : t("隐私屏：盖住对方电脑的屏幕、拦住那边的键盘鼠标，旁边的人看不到你在做什么，你这边照常看和操作")}
+            aria-label={t("隐私屏")}
+            onPress={() => {
+              const on = !privacy;
+              privacyWant.current = on;
+              setPrivacyBusy(true);
+              send({ t: "privacy", on });
+            }}>
+            {privacy ? <ShieldCheck /> : <Shield />}
           </Button>
         )}
         {live && hasAudio && (

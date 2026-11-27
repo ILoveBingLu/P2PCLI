@@ -59,7 +59,12 @@ pub(crate) fn background(style: &PrivacyStyle, width: u32, height: u32) -> Resul
 
 /// 读图片，等比放大或缩小到盖满 width×height，多出来的从中间裁掉。太大的屏幕按 3840 宽画，系统再放大
 fn load_cover(path: &Path, width: u32, height: u32) -> Result<RgbaImage> {
-    let img = image::open(path).with_context(|| format!("读不了隐私屏图片 {}", path.display()))?;
+    // 存的时候不带扩展名，格式按内容认
+    let img = image::ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(anyhow::Error::from)
+        .and_then(|r| Ok(r.decode()?))
+        .with_context(|| format!("读不了隐私屏图片 {}", path.display()))?;
     let scale = (3840.0 / width.max(height) as f64).min(1.0);
     let (w, h) = (((width as f64 * scale) as u32).max(1), ((height as f64 * scale) as u32).max(1));
     Ok(img.resize_to_fill(w, h, image::imageops::FilterType::Triangle).to_rgba8())
