@@ -22,6 +22,7 @@ use windows::Win32::Graphics::Gdi::{
     StretchDIBits, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetClientRect,
@@ -86,6 +87,8 @@ unsafe extern "system" fn collect_monitor(monitor: HMONITOR, _: HDC, _: *mut REC
 
 /// 隐私屏线程：建窗口、装钩子，跑消息循环到收到 WM_QUIT，再全部撤掉
 fn run(style: PrivacyStyle, block_input: bool, ready: mpsc::Sender<Result<u32>>) {
+    // 这个线程按物理像素算：程序没声明高 DPI 时，系统会把窗口按缩放比例放大，盖歪、字也糊
+    unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     let mut windows: Vec<HWND> = Vec::new();
     let mut hooks: Vec<HHOOK> = Vec::new();
     let setup = (|| -> Result<()> {
@@ -111,7 +114,7 @@ fn run(style: PrivacyStyle, block_input: bool, ready: mpsc::Sender<Result<u32>>)
                 Ok(Some(img)) => {
                     let (bw, bh) = (img.width() as i32, img.height() as i32);
                     let mut bgra = img.into_raw();
-                    for p in bgra.chunks_exact_mut(4) {
+                    for p in bgra.as_chunks_mut::<4>().0 {
                         p.swap(0, 2);
                     }
                     Some((bgra, bw, bh))
