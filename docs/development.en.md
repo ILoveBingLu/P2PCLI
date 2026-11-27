@@ -29,6 +29,10 @@ Congestion control (`crates/core/src/quic.rs`): Cubic is the default. The app us
 
 Path selection (`crates/core/src/path.rs`): IPv6 is used unless it is more than 50 ms slower than IPv4, then IPv4, and the relay only when neither works. iroh's built-in rule gives IPv6 only 3 ms of slack and also requires a path to be 5 ms faster before switching, which cannot prefer IPv6, so the app uses iroh's path-selection interface (that interface is marked unstable, and the iroh version is pinned).
 
+Direct first for heavy traffic (`path::wait_direct`): right after connecting, a connection is often still on the relay and switches to a direct path once hole punching succeeds a few seconds later. File transfers, large clipboard content, port forwarding, reverse forwarding, proxy sharing, `p2pcli pipe` and screenshots wait up to 3 seconds (`path::DIRECT_WAIT`) for a direct path before starting; if none appears they use the relay anyway and the app or command line says it will be slower. The remote screen only uses direct paths (it pauses on a relay).
+
+Each of these newer features is a capability that is used only when both sides report it during the handshake, so older versions never receive the new messages: `reverse_forward_v1` (reverse forwarding and proxy sharing, `crates/core/src/reverse.rs`), `ssh_v1` (the other side provides an SSH service, a user-mode sshd on macOS and Linux, `crates/core/src/ssh_host.rs`) and `screenshot_v1` (single screenshots). The remote-control shared clipboard is negotiated in the `screen_v1` open request (`crates/core/src/screen_clip.rs`). The side being connected to never opens streams toward the connecting side; when it needs data from the connecting side (clipboard, reverse forwarding) it says so on an existing stream and the connecting side opens a new one.
+
 ## Setup
 
 Rust 1.88 or newer, Node 24, and pnpm are required.
@@ -112,7 +116,7 @@ p2pcli-dev --server "" nearby
 p2pcli-dev --server "" connect <public-key> --password abc234 --run 'echo hi'
 ```
 
-`--relay-only` forces the relay. `--bind-ip` binds one interface. `--no-lan` turns off LAN discovery. `--lan-hidden` watches others without broadcasting this computer.
+Adding `--borrow-proxy 127.0.0.1:7890` on the connecting side shares that proxy with the other side before running the command (check `HTTPS_PROXY` and whether `curl` reaches the internet there). `--relay-only` forces the relay. `--bind-ip` binds one interface. `--no-lan` turns off LAN discovery. `--lan-hidden` watches others without broadcasting this computer.
 
 ## What has been verified
 

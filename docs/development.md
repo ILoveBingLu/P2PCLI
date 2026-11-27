@@ -29,6 +29,10 @@ IPv6 直连（`crates/core/src/v6.rs`）：公网 IPv6 没有 NAT，网卡地址
 
 选路（`crates/core/src/path.rs`）：IPv6 只要不比 IPv4 慢 50 毫秒以上就用 IPv6，其次 IPv4，中继只在都不通时用。iroh 自带的规则只给 IPv6 让 3 毫秒、又要求快 5 毫秒才换路，做不到 IPv6 优先，所以用了它的选路接口（这个接口标着不稳定，iroh 版本已锁死）。
 
+大流量功能直连优先（`path::wait_direct`）：刚连上时连接常常先在中继上，几秒内打洞成功再切直连。传文件、剪贴板里的大内容、端口转发、反向转发、借网、`p2pcli pipe`、截屏开始前，还在中继上的话先等最多 3 秒（`path::DIRECT_WAIT`）直连，等不到照样走中继，并在界面或命令行上提示会慢。远程画面只走直连（中继上暂停）。
+
+这几样新功能各自是一个能力，握手时双方都报了才用，老版本不发新消息：`reverse_forward_v1`（反向端口转发、借网，`crates/core/src/reverse.rs`）、`ssh_v1`（被连方给一个 SSH 服务：Mac、Linux 上起用户态 sshd，`crates/core/src/ssh_host.rs`）、`screenshot_v1`（单帧截屏）；远程控制的剪贴板互通在 `screen_v1` 的开画面请求里协商（`crates/core/src/screen_clip.rs`）。被连方不往连接方开流，要连接方送数据时（剪贴板、反向转发）都是被连方在已有的流上说一声，由连接方开新流。
+
 ## 开发环境
 
 需要 Rust 1.88 以上、Node 24、pnpm。
@@ -110,7 +114,7 @@ p2pcli-dev --server "" nearby
 p2pcli-dev --server "" connect <公钥> --password abc234 --run 'echo hi'
 ```
 
-`--relay-only` 强制走中继，`--bind-ip` 只绑某个网卡，`--no-lan` 关掉局域网发现，`--lan-hidden` 只看别人不广播本机。
+连接方加 `--borrow-proxy 127.0.0.1:7890` 会先把本机代理借给对方再跑命令（看对方终端里 `HTTPS_PROXY`、`curl` 外网能不能通）。`--relay-only` 强制走中继，`--bind-ip` 只绑某个网卡，`--no-lan` 关掉局域网发现，`--lan-hidden` 只看别人不广播本机。
 
 ## 已验证
 

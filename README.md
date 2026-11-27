@@ -9,8 +9,10 @@ A peer-to-peer remote terminal. Enter another computer's device code and pairing
 - **Terminal tabs**: sessions keep running in the background after a disconnect or after the app quits, and you pick them up when you reconnect.
 - **Knows the AI in a session**: which AI it is, whether it is working or waiting for you, and a reminder when it needs you. An input box under the terminal sends a whole sentence at once.
 - **Code editor**: edit files on the other computer in place, with completion, go to definition, errors, and a Git panel.
-- **Files, port forwarding, remote control**: drop files into a terminal to send them, forward the other side's dev server to this computer in one click, and view or control its screen.
-- **The `p2pcli` command-line tool**: send files, run commands, and read or edit files on other devices from a terminal. Your local AI can use it too.
+- **Files, port forwarding, remote control**: drop files into a terminal to send them, forward the other side's dev server to this computer in one click, and view or control its screen with a shared clipboard (text, images and files, any size).
+- **Proxy sharing and reverse forwarding**: when the other computer can't reach the internet, share your proxy with the terminals you open there in one click; ports on this computer can be made available on the other one too.
+- **Open in local VS Code**: VS Code and Cursor Remote-SSH connect through P2PCLI; a Mac or Linux computer needs no Remote Login and no password.
+- **The `p2pcli` command-line tool**: send files, run commands, and read or edit files on other devices from a terminal. Your local AI can use it too, and `p2pcli mcp` serves AIs like Cursor, Claude Desktop and Cline, including screenshots of the other screen.
 
 The interface follows the system language: Chinese locales use Simplified Chinese, every other locale uses English. Change it under Settings → Connection → Language.
 

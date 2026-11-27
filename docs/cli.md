@@ -15,6 +15,8 @@ p2pcli edit 设备名 ~/work/main.rs --old '旧的' --new '新的'   # 直接改
 printf '内容' | p2pcli write 设备名 ~/work/notes.md         # 用标准输入整个写入（新建或整个重写）
 p2pcli grep 设备名 'TODO' ~/work      # 搜内容；还有 ls、find、mkdir、mv、rm（移到废纸篓）
 p2pcli inbox                         # 看最近收到的文件
+p2pcli pipe 设备名 ssh                # 接对方的 SSH 服务（给 OpenSSH 当 ProxyCommand），也可以写端口号
+p2pcli mcp                           # 作为 MCP 服务运行，给 Cursor、Claude Desktop、Cline 这类 AI 用
 p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失败时退出码不是 0
 ```
 
@@ -35,6 +37,28 @@ p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失
 - Qwen Code：`~/.qwen/skills/p2pcli/`；CodeBuddy：`~/.codebuddy/skills/p2pcli/`
 
 只往已经存在的 AI 配置目录里写，不替没装的 AI 建目录；只写一个叫 `p2pcli` 的文件夹，不改 `CLAUDE.md`、`AGENTS.md`。文件里带 `managed-by: p2pcli` 标记，软件升级时只覆盖带标记的，别人放的同名技能不动。设置 → 多机互动 里能看到检测到哪些 AI、各自装没装，可以单个或全部安装、更新、删除，也能关掉“启动时自动安装和更新”（关掉只是不再自动动，已装的不会被删；开发版也能手动装，只是不自动装）。已经开着的 AI 窗口要重开才会读到。说明的原文在 `app/src-tauri/src/p2pcli-skill.md`，加了命令或改了用法要同步改它。
+
+## 给讲 MCP 的 AI 用（p2pcli mcp）
+
+Cursor、Claude Desktop、Cline 这类 AI 用 MCP 接工具，不读上面的使用说明。把下面的配置加进它们的 MCP 设置，它们就能直接操作你的其他设备（要 P2PCLI 开着）。设置 → 多机互动 里能一键复制，里面写的是命令行工具的完整路径（图形界面的 AI 拿不到终端的 PATH）；Claude Code 也可以用那里的“复制 Claude Code 的添加命令”。
+
+```json
+{ "mcpServers": { "p2pcli": { "command": "p2pcli 的完整路径", "args": ["mcp"] } } }
+```
+
+工具：`p2p_devices`（列设备）、`p2p_exec`（跑命令）、`p2p_read_file`（带行号、分页读）、`p2p_write_file`、`p2p_edit_file`（按原文替换，规则同 `edit`）、`p2p_list_dir`、`p2p_find_files`、`p2p_grep`、`p2p_mkdir`、`p2p_move`、`p2p_trash`（移到废纸篓）、`p2p_send_files`、`p2p_pull_files`、`p2p_screenshot`（截对方一张屏幕，返回 PNG）。都是转给正在运行的 P2PCLI 去办，认证和命令行一样。
+
+`p2p_screenshot` 让 AI 看对方屏幕上的报错弹窗、网页、程序界面：对方要像查看画面一样同意（受信设备按它的设置直接放行），截完对方会收到系统通知；对方要是 macOS 或 Windows，并且是新版本。直连优先；只能走中继时也能截，但图会缩到宽 1024，结果里会说明。
+
+## 当 SSH 的跳板（p2pcli pipe）
+
+`p2pcli pipe 设备名 端口` 把标准输入输出接到对方电脑 localhost 的那个端口上，原样传字节；写 `ssh` 代替端口时接对方的 SSH 服务。给 OpenSSH 当 ProxyCommand 用：
+
+```sh
+ssh -o ProxyCommand="p2pcli pipe 设备名 ssh" 用户名@设备名
+```
+
+对方是 Mac、Linux 时，对方的 P2PCLI 会以当前用户的身份起一个只听本机回环的 sshd，用桌面版替你管的密钥免密码登录，不用开远程登录（两边都要是新版本）；对方是 Windows 时接它系统的 OpenSSH 服务。一般不用自己写这行：在设备上右键选“用本机 VS Code 打开…”，P2PCLI 会把别名写进 `~/.ssh/p2pcli_hosts`（详见 [使用说明](usage.md#用本机-vs-code-打开ssh)），之后直接 `ssh p2p-设备名` 就行。提示只写标准错误，不混进数据；开始前先等直连，走中继时提示会慢。Windows 上标准输入读完以后对方收不到“写完了”（命名管道关不了单独一头），要等对方自己关；SSH 不受影响。
 
 ## exec 细节
 

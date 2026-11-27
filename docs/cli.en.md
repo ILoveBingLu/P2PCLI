@@ -15,6 +15,8 @@ p2pcli edit <device> ~/work/main.rs --old 'old' --new 'new'   # edit a file on t
 printf 'text' | p2pcli write <device> ~/work/notes.md       # write stdin to a file (create or rewrite it)
 p2pcli grep <device> 'TODO' ~/work   # search contents; there are also ls, find, mkdir, mv, and rm (moves to Trash)
 p2pcli inbox                         # show recently received files
+p2pcli pipe device ssh               # connect to the device's SSH service (an OpenSSH ProxyCommand); a port number also works
+p2pcli mcp                           # run as an MCP server for AIs like Cursor, Claude Desktop and Cline
 p2pcli send <device> a.txt --json    # JSON for programs and AI; a failure exits non-zero
 ```
 
@@ -35,6 +37,28 @@ at startup the app drops a usage note (`SKILL.md` in the Agent Skills format) in
 - Qwen Code: `~/.qwen/skills/p2pcli/`. CodeBuddy: `~/.codebuddy/skills/p2pcli/`
 
 It only writes into AI config directories that already exist. It does not create a directory for an AI that is not installed. It only writes a folder named `p2pcli`, and it does not edit `CLAUDE.md` or `AGENTS.md`. The file is marked `managed-by: p2pcli`. Upgrades overwrite only files with that mark, and leave a same-named skill that someone else installed alone. Settings → Multi-device AI shows which AIs were detected and whether the skill is installed. You can install, update, or remove one or all of them, and turn off Install and update automatically at startup (turning it off only stops the automatic work; installed skills are not deleted; a development build can still install manually, it just does not install automatically). AI windows that are already open need to be reopened before they see it. The source of the note is `app/src-tauri/src/p2pcli-skill.md`. Update it when commands or usage change.
+
+## For AIs that use MCP (p2pcli mcp)
+
+AIs like Cursor, Claude Desktop and Cline use MCP for tools and don't read the instructions above. Add the config below to their MCP settings and they can work on your other devices directly (P2PCLI must be running). Settings → Multi-device AI has a copy button with the full path of the command-line tool filled in (graphical AIs don't get your terminal's PATH), and another one that copies the add command for Claude Code.
+
+```json
+{ "mcpServers": { "p2pcli": { "command": "full path to p2pcli", "args": ["mcp"] } } }
+```
+
+Tools: `p2p_devices` (list devices), `p2p_exec` (run a command), `p2p_read_file` (with line numbers and paging), `p2p_write_file`, `p2p_edit_file` (exact replacement, same rules as `edit`), `p2p_list_dir`, `p2p_find_files`, `p2p_grep`, `p2p_mkdir`, `p2p_move`, `p2p_trash` (move to trash), `p2p_send_files`, `p2p_pull_files`, `p2p_screenshot` (a screenshot of the other screen as PNG). Each one is passed to the running P2PCLI, with the same authentication as the command line.
+
+`p2p_screenshot` lets the AI see error dialogs, web pages and app windows on the other screen. The other side must allow it like viewing the screen (trusted devices follow its settings) and gets a system notification afterwards; it needs to run macOS or Windows and the new version. Direct paths come first; if only a relay is available the screenshot still works but is scaled to 1024 wide, and the result says so.
+
+## As an SSH proxy (p2pcli pipe)
+
+`p2pcli pipe device port` connects standard input and output to that port on the other computer's localhost and passes the bytes through; use `ssh` instead of a port to reach its SSH service. Use it as an OpenSSH ProxyCommand:
+
+```sh
+ssh -o ProxyCommand="p2pcli pipe device ssh" user@device
+```
+
+When the other side is a Mac or Linux, its P2PCLI starts an sshd as the current user, listening only on loopback, and you log in with the key the desktop app manages for you: no Remote Login and no password (both sides need the new version). When the other side is Windows, its system OpenSSH service is used. You rarely need to type this: right-click a device and choose Open in local VS Code…, and P2PCLI writes an alias to `~/.ssh/p2pcli_hosts` (see the [user guide](usage.en.md#open-in-local-vs-code-ssh)), after which `ssh p2p-device-name` just works. Messages go to standard error only, never into the data; it waits for a direct path first and warns when using a relay. On Windows, the other side doesn't learn that standard input has ended (a named pipe can't close just one direction), so it has to close the connection itself; SSH is not affected.
 
 ## exec details
 
