@@ -86,6 +86,11 @@ impl Encoder {
         Self::open(width, height, fps, bitrate, VideoCodec::H264, p3, hw_only)
     }
 
+    /// 只开 H.265 硬件编码器，不退回 H.264：5K 以上的大画面只有它编得了
+    pub(super) fn open_hevc(width: usize, height: usize, fps: u32, bitrate: u32, p3: bool) -> Result<Self> {
+        Self::open(width, height, fps, bitrate, VideoCodec::H265, p3, true)
+    }
+
     /// 编码的画面尺寸
     pub(super) fn size(&self) -> (usize, usize) {
         (self.width, self.height)

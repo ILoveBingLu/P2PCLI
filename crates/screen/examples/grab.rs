@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     backend.check_capture()?;
     let main = displays.iter().find(|d| d.primary).unwrap();
     let q = Quality::Balanced;
-    let cap = backend.start(CaptureOptions { display: main.id.clone(), max_long_edge: q.max_long_edge(), fps: q.fps(), bitrate: q.start_bitrate(), show_cursor: true, codec, full_range: false, wide_gamut: false, yuv444: false })?;
+    let cap = backend.start(CaptureOptions { display: main.id.clone(), max_long_edge: q.max_long_edge(Default::default()), fps: q.fps(0, 0), bitrate: q.start_bitrate(), show_cursor: true, codec, full_range: false, wide_gamut: false, yuv444: false })?;
     let mut file = std::fs::File::create(&out)?;
     let start = Instant::now();
     let mut total = 0;

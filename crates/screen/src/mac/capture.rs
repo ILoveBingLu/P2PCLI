@@ -25,7 +25,7 @@ use objc2_screen_capture_kit::{
     SCStreamOutputType,
 };
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureOptions, CaptureStats, ColorFormat, DisplayInfo, EncodedFrame, Primaries, ScreenCapture};
+use p2pcli_core::screen::{CaptureOptions, CaptureStats, ColorFormat, DisplayInfo, EncodedFrame, Primaries, ScreenCapture, VideoCodec};
 use tracing::{debug, info, warn};
 
 use super::encode::Encoder;
@@ -76,6 +76,13 @@ impl Sink {
     }
 }
 
+/// 屏幕的刷新率（Hz）。ProMotion 报 120；老的内建屏报 0（读不到），那时按 60 算
+pub(crate) fn refresh_hz(id: CGDirectDisplayID) -> u32 {
+    let mode = CGDisplayCopyDisplayMode(id);
+    let hz = CGDisplayMode::refresh_rate(mode.as_deref());
+    if hz.is_finite() && hz >= 1.0 { hz.round() as u32 } else { 0 }
+}
+
 /// 一块屏幕的像素尺寸（Retina 屏是实际像素，不是点）
 pub(crate) fn pixel_size(id: CGDirectDisplayID) -> (u32, u32) {
     let mode = CGDisplayCopyDisplayMode(id);
@@ -103,7 +110,7 @@ pub fn displays() -> Result<Vec<DisplayInfo>> {
                 external += 1;
                 format!("显示器 {external}")
             };
-            DisplayInfo { id: id.to_string(), name, width, height, primary: id == main }
+            DisplayInfo { id: id.to_string(), name, width, height, primary: id == main, refresh_hz: refresh_hz(id) }
         })
         .collect())
 }
@@ -140,10 +147,12 @@ pub(crate) fn find_display(id: CGDirectDisplayID) -> Result<Retained<SCDisplay>>
         .ok_or_else(|| anyhow!("找不到这块屏幕，可能已经拔掉了"))
 }
 
-/// 按长边上限等比缩小，宽高取偶数（H.264 要求）
-/// Mac 上 4:4:4 时画面长边最多这么大
+/// Mac 上 4:4:4 时画面长边最多这么大：M4 上 2560×4320 每帧要 27 ms，只有三十多帧；1920×3240 流水线能稳在 60 帧
 const YUV444_MAX_LONG_EDGE: u32 = 1920;
+/// 长边超过这么多（5K、6K 屏的原生分辨率）要先试开一下编码器：H.265 硬件编码器才编得了，开不了就缩到这么大
+const LARGE_LONG_EDGE: u32 = 3840;
 
+/// 按长边上限等比缩小，宽高取偶数（H.264 要求）
 fn fit(w: u32, h: u32, max_long_edge: u32) -> (u32, u32) {
     let long = w.max(h).max(1);
     let scale = (max_long_edge as f64 / long as f64).min(1.0);
@@ -167,15 +176,15 @@ impl MacCapture {
         let id: CGDirectDisplayID = opts.display.parse().context("屏幕编号不对")?;
         let display = find_display(id)?;
         let (pw, ph) = pixel_size(id);
-        // 4:4:4 要编三倍高的画面：M4 上 2560×4320 每帧要 27 ms，只有三十多帧；1920×3240 流水线能稳在 60 帧
-        let max_long_edge = if opts.yuv444 { opts.max_long_edge.min(YUV444_MAX_LONG_EDGE) } else { opts.max_long_edge };
-        let (width, height) = fit(pw, ph, max_long_edge);
+        let (mut width, mut height) = fit(pw, ph, opts.max_long_edge);
         let p3 = opts.wide_gamut;
+        // 4:4:4 要编三倍高的画面，只在不用缩小就放得下时用。高分屏不为了 4:4:4 缩小，用原生分辨率的 4:2:0
+        let yuv444 = opts.yuv444 && width.max(height) <= YUV444_MAX_LONG_EDGE;
 
         // 4:4:4：先把 Metal 和三倍高的硬件编码器开起来，开不了就照旧抓 NV12
         let mut packer = None;
         let mut encoder = None;
-        if opts.yuv444 && opts.full_range {
+        if yuv444 && opts.full_range {
             let ready = Packer::new(p3).and_then(|p| {
                 let enc = Encoder::new(width as usize, height as usize * 3, opts.fps, opts.bitrate, opts.codec, p3, true)?;
                 Ok((p, enc))
@@ -189,6 +198,19 @@ impl MacCapture {
             }
         }
         let mode = if packer.is_some() { MODE_STACKED } else { MODE_NV12 };
+        // 5K、6K 的原生分辨率：只有 H.265 硬件编码器编得了（H.264 最多 4096 宽，观看方也多半解不了）。
+        // 先开好留给编码线程用，开不了就缩到 3840
+        if mode == MODE_NV12 && width.max(height) > LARGE_LONG_EDGE {
+            match Encoder::open_hevc(width as usize, height as usize, opts.fps, opts.bitrate, p3) {
+                Ok(enc) if opts.codec == VideoCodec::H265 => encoder = Some(enc),
+                result => {
+                    if let Err(e) = result {
+                        warn!(width, height, "编不了原生分辨率，缩到 {LARGE_LONG_EDGE}：{e:#}");
+                    }
+                    (width, height) = fit(pw, ph, LARGE_LONG_EDGE);
+                }
+            }
+        }
 
         let config = unsafe { SCStreamConfiguration::new() };
         unsafe {
@@ -285,5 +307,7 @@ mod tests {
         assert_eq!(fit(2880, 1800, 1920), (1920, 1200));
         assert_eq!(fit(1280, 720, 1920), (1280, 720));
         assert_eq!(fit(3025, 1965, 1920), (1920, 1246));
+        // 清晰档不缩小：5K 屏原样
+        assert_eq!(fit(5120, 2880, 8192), (5120, 2880));
     }
 }

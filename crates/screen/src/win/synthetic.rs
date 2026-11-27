@@ -27,7 +27,7 @@ pub struct SyntheticBackend;
 
 impl ScreenBackend for SyntheticBackend {
     fn displays(&self) -> Result<Vec<DisplayInfo>> {
-        Ok(vec![DisplayInfo { id: DISPLAY_ID.into(), name: "合成画面".into(), width: WIDTH, height: HEIGHT, primary: true }])
+        Ok(vec![DisplayInfo { id: DISPLAY_ID.into(), name: "合成画面".into(), width: WIDTH, height: HEIGHT, primary: true, refresh_hz: 0 }])
     }
 
     fn check_capture(&self) -> Result<()> {

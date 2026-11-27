@@ -355,6 +355,7 @@ pub(crate) async fn screen_open(
     wide_gamut: Option<bool>,
     yuv444: Option<bool>,
     clipboard: Option<bool>,
+    refresh_hz: Option<u32>,
     events: Channel<InvokeResponseBody>,
 ) -> Result<ScreenOpened, String> {
     let remote = state.remote(conn_id)?;
@@ -367,6 +368,7 @@ pub(crate) async fn screen_open(
         wide_gamut: wide_gamut.unwrap_or(false),
         yuv444: yuv444.unwrap_or(false),
         clipboard: clipboard.unwrap_or(false),
+        refresh_hz: refresh_hz.unwrap_or(0),
     };
     let (started, mut input, mut output) = remote.open_screen(open).await.map_err(|e| format!("{e:#}"))?;
     let screen_id = state.next();
@@ -473,7 +475,7 @@ pub(crate) async fn screen_open(
                     }
                 }
                 Ok(Some(ScreenEvent::Host(msg))) => {
-                    if let HostMsg::Stats { bitrate, fps } = msg {
+                    if let HostMsg::Stats { bitrate, fps, .. } = msg {
                         diag.host = Some((fps, bitrate));
                     }
                     let _ = events.send(json_event(&serde_json::json!({ "t": "host", "msg": msg })));

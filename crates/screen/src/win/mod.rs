@@ -78,6 +78,16 @@ fn pixel_size(m: &Monitor) -> (u32, u32) {
     ((m.rect.right - m.rect.left).max(0) as u32, (m.rect.bottom - m.rect.top).max(0) as u32)
 }
 
+/// 屏幕当前的刷新率（Hz）；0、1 是“硬件默认”，当成读不到
+fn refresh_hz(m: &Monitor) -> u32 {
+    let name: Vec<u16> = m.id.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut mode = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+    if unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode) }.as_bool() && mode.dmDisplayFrequency > 1 {
+        return mode.dmDisplayFrequency;
+    }
+    0
+}
+
 pub(crate) fn find_monitor(id: &str) -> Result<Monitor> {
     monitors().into_iter().find(|m| m.id == id).ok_or_else(|| anyhow!("找不到这块屏幕，可能已经拔掉了"))
 }
@@ -95,6 +105,7 @@ impl ScreenBackend for WinBackend {
                     width,
                     height,
                     primary: m.primary,
+                    refresh_hz: refresh_hz(&m),
                     id: m.id,
                 }
             })

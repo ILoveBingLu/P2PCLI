@@ -113,8 +113,8 @@ struct FakeCapture {
 impl ScreenBackend for FakeBackend {
     fn displays(&self) -> Result<Vec<DisplayInfo>> {
         Ok(vec![
-            DisplayInfo { id: "1".into(), name: "主屏".into(), width: 1920, height: 1080, primary: true },
-            DisplayInfo { id: "2".into(), name: "副屏".into(), width: 1280, height: 1024, primary: false },
+            DisplayInfo { id: "1".into(), name: "主屏".into(), width: 1920, height: 1080, primary: true, refresh_hz: 0 },
+            DisplayInfo { id: "2".into(), name: "副屏".into(), width: 1280, height: 1024, primary: false, refresh_hz: 0 },
         ])
     }
     fn check_capture(&self) -> Result<()> {

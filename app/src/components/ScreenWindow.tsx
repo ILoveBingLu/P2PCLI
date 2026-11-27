@@ -145,7 +145,7 @@ export default function ScreenWindow() {
   const [started, setStarted] = useState<ScreenStarted | null>(null);
   const [display, setDisplay] = useState<string | null>(null);
   const [paused, setPaused] = useState<"relay" | "connecting" | null>(null);
-  const [stats, setStats] = useState<{ fps: number; bitrate: number } | null>(null);
+  const [stats, setStats] = useState<{ fps: number; bitrate: number; target?: number } | null>(null);
   const [quality, setQuality] = useState<ScreenQuality>("balanced");
   const [control, setControl] = useState(true);
   const [swapMeta, setSwapMeta] = useState(true);
@@ -464,7 +464,7 @@ export default function ScreenWindow() {
         if (ev.msg.t === "paused") setPaused(ev.msg.reason);
         else if (ev.msg.t === "resumed") setPaused(null);
         else if (ev.msg.t === "switched") setDisplay(ev.msg.display);
-        else if (ev.msg.t === "stats") setStats({ fps: ev.msg.fps, bitrate: ev.msg.bitrate });
+        else if (ev.msg.t === "stats") setStats({ fps: ev.msg.fps, bitrate: ev.msg.bitrate, target: ev.msg.target_fps });
         else if (ev.msg.t === "cursor") setRemoteCursor({ x: ev.msg.x, y: ev.msg.y, visible: ev.msg.visible });
         else if (ev.msg.t === "cursor_shape") setLook(cursorLook(ev.msg.shape));
         return;
@@ -786,6 +786,7 @@ export default function ScreenWindow() {
               <Section>
                 <Row label={t("画面")} value={paused === "relay" ? t("已暂停（连接走中继）") : paused ? t("正在找直连线路") : decode ? `${decode.width} × ${decode.height}` : t("统计中…")} />
                 <Row label={t("帧率")} value={recv && !paused ? t("{{fps}} 帧/秒", { fps: recv.fps }) : "—"} hint={t("本机每秒收到的画面帧数。对方画面不动时会发得少")} />
+                {stats?.target ? <Row label={t("帧率上限")} value={t("{{fps}} 帧/秒", { fps: stats.target })} hint={t("按两边屏幕的刷新率定，取小的那个；流畅档固定 30")} /> : null}
                 <Row label={t("传输速率")} value={recv && !paused ? formatMbps(recv.mbps) : "—"} hint={t("画面每秒实际传过来的数据量")} />
                 <Row label={t("码率上限")} value={stats && !paused ? `${(stats.bitrate / 1e6).toFixed(1)} Mbps` : "—"} hint={t("对方编码器最多用到的码率，网络差时会自动往下降；画面变化少时实际用不到这么多")} />
                 <Row label={t("编码")} value={decode ? `${codecName(decode.codec)} · ${decode.codec}` : "—"} mono />

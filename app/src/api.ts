@@ -338,6 +338,8 @@ export interface ScreenDisplay {
   width: number;
   height: number;
   primary: boolean;
+  /** 刷新率（Hz），老版本不带 */
+  refresh_hz?: number;
 }
 
 export interface ScreenStarted {
@@ -381,7 +383,7 @@ export type ScreenHostMsg =
   | { t: "paused"; reason: "relay" | "connecting" }
   | { t: "resumed" }
   | { t: "switched"; display: string }
-  | { t: "stats"; bitrate: number; fps: number }
+  | { t: "stats"; bitrate: number; fps: number; target_fps?: number }
   | { t: "cursor"; x: number; y: number; visible: boolean }
   | { t: "cursor_shape"; shape: ScreenCursorShape };
 
@@ -580,6 +582,38 @@ function supportsP3Video(): boolean {
   }
 }
 
+/**
+ * 本机屏幕的刷新率（Hz）：连着量一小段 requestAnimationFrame 的间隔，取中位数。
+ * 量的是网页实际能画多快（系统、内核限到 60 时就是 60），对方的帧率不超过它，多了也显示不出来。
+ * 窗口看不见时它不触发，量不出来就是 0，由对方按自己的屏幕定
+ */
+let refreshProbe: Promise<number> | null = null;
+export function displayRefreshHz(): Promise<number> {
+  refreshProbe ??= new Promise<number>((resolve) => {
+    if (typeof requestAnimationFrame !== "function") return resolve(0);
+    const stamps: number[] = [];
+    const timer = window.setTimeout(() => finish(), 800);
+    const finish = () => {
+      window.clearTimeout(timer);
+      const gaps = stamps.slice(1).map((t, i) => t - stamps[i]).filter((g) => g > 0).sort((a, b) => a - b);
+      if (gaps.length < 8) return resolve(0);
+      const hz = Math.round(1000 / gaps[Math.floor(gaps.length / 2)]);
+      resolve(hz >= 20 && hz <= 1000 ? hz : 0);
+    };
+    const step = (t: number) => {
+      stamps.push(t);
+      if (stamps.length >= 40) finish();
+      else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }).then((hz) => {
+    // 量不出来（窗口还没露出来）下次再量
+    if (!hz) refreshProbe = null;
+    return hz;
+  });
+  return refreshProbe;
+}
+
 export const api = {
   collabDeliveries: () => invoke<CollaborationDelivery[]>("collab_deliveries"),
   collabRequest: async (target: string | null, projectId: string | null, action: CollaborationAction, requestId = crypto.randomUUID().replaceAll("-", "")) =>
@@ -750,7 +784,8 @@ export const api = {
     };
     // 认得解码配置里的范围、色域标记；屏幕是广色域就请对方按 P3 传
     const wideGamut = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches && supportsP3Video();
-    return invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, clipboard: true, events });
+    return displayRefreshHz().then((refreshHz) =>
+      invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, clipboard: true, refreshHz, events }));
   },
   /** clipboard：先看一眼本机剪贴板，变了就先把清单发过去，再发这批消息 */
   screenSend: (screenId: number, msgs: ScreenViewerMsg[], clipboard = false) => invoke<void>("screen_send", { screenId, msgs, clipboard }),

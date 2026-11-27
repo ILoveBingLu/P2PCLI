@@ -212,6 +212,12 @@ fn worker(opts: CaptureOptions, init: Sender<Result<()>>, tx: Sender<Ev>, rx: Re
     debug!("停止抓屏");
 }
 
+/// 4:4:4 时画面长边最多这么大：要编三倍高的画面，4K 屏整屏在变时也能稳在 60 帧上下
+/// （3840×6480 每帧要编 27 ms 左右，只有三十多帧）
+const YUV444_MAX_LONG_EDGE: u32 = 2560;
+/// 长边超过这么多（5K、6K 屏的原生分辨率）只有 H.265 编得了；编码器开不了就缩到这么大
+const LARGE_LONG_EDGE: u32 = 3840;
+
 fn fit(w: u32, h: u32, max_long_edge: u32) -> (u32, u32) {
     let long = w.max(h).max(1);
     let scale = (max_long_edge as f64 / long as f64).min(1.0);
@@ -378,6 +384,12 @@ impl State {
         let _ = session.SetIsCursorCaptureEnabled(opts.show_cursor);
         // Windows 11 上去掉黄色边框；老系统不支持就算了
         let _ = session.SetIsBorderRequired(false);
+        // 系统默认最多 60 帧。高刷屏要按目标帧率放开（Windows 11 24H2 起才有这个设置，老系统还是 60）。
+        // 间隔比一帧短一成：正好卡在一帧的长度上时，稍早一点到的画面会被扔掉，帧率反而掉一截
+        let interval = (10_000_000.0 * 0.9 / opts.fps.max(1) as f64) as i64;
+        if let Err(e) = session.SetMinUpdateInterval(windows::Foundation::TimeSpan { Duration: interval }) {
+            debug!("这个系统不能调抓屏的帧率上限（老于 Windows 11 24H2），最多 60 帧：{e}");
+        }
         session.StartCapture().context("开始抓屏失败")?;
         info!(display = %opts.display, width = size.Width, height = size.Height, "开始抓屏");
         let source = Source::Wgc { winrt_device, pool, session, latest, size };
@@ -707,13 +719,14 @@ impl State {
     /// 哪一步不行就退回 4:2:0，以后这一路不再试
     fn setup(&mut self, opts: &CaptureOptions, bitrate: u32) -> Result<()> {
         let (input, src) = self.input.clone().ok_or_else(|| anyhow!("还没有抓到画面"))?;
-        let dst = fit(src.0, src.1, opts.max_long_edge);
+        let mut dst = fit(src.0, src.1, opts.max_long_edge);
         self.converter = None;
         self.encoder = None;
         self.sps_pps = None;
         self.in_flight.clear();
         self.ready.clear();
-        if self.try_yuv444 {
+        // 4:4:4 只在不用缩小就放得下时用：高分屏不为了 4:4:4 缩小画面，用原生分辨率的 4:2:0
+        if self.try_yuv444 && dst.0.max(dst.1) <= YUV444_MAX_LONG_EDGE {
             let stacked = Stacker::new(&self.device, &self.ctx, &self.video_device, &self.video_ctx, &input, src, dst, opts.fps).and_then(|stacker| {
                 // 4:4:4 一定是全范围
                 let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1 * 3, opts.fps, bitrate, opts.codec, true, true)?;
@@ -732,8 +745,26 @@ impl State {
                 }
             }
         }
+        // 5K、6K 的原生分辨率：只有 H.265 硬件编码器编得了（H.264 最多 4096 宽，观看方也多半解不了），开不了就缩到 3840
+        let mut enc = None;
+        if dst.0.max(dst.1) > LARGE_LONG_EDGE {
+            match Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate, opts.codec, opts.full_range, true) {
+                Ok(e) if e.format == VideoCodec::H265 => enc = Some(e),
+                Ok(_) => {
+                    warn!(width = dst.0, height = dst.1, "没有 H.265 硬件编码器，编不了原生分辨率，缩到 {LARGE_LONG_EDGE}");
+                    dst = fit(src.0, src.1, LARGE_LONG_EDGE);
+                }
+                Err(e) => {
+                    warn!(width = dst.0, height = dst.1, "编不了原生分辨率，缩到 {LARGE_LONG_EDGE}：{e:#}");
+                    dst = fit(src.0, src.1, LARGE_LONG_EDGE);
+                }
+            }
+        }
         self.converter = Some(self.build_converter(&input, src, dst, opts.fps, opts.full_range)?);
-        let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate, opts.codec, opts.full_range, false)?;
+        let enc = match enc {
+            Some(e) => e,
+            None => Encoder::new(&self.device, &self.manager, dst.0, dst.1, opts.fps, bitrate, opts.codec, opts.full_range, false)?,
+        };
         debug!(hardware = enc.hardware, "编码器已换新");
         self.encoder = Some(enc);
         Ok(())

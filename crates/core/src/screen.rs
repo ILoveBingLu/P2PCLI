@@ -66,7 +66,8 @@ const MIN_BITRATE: u32 = 300_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Quality {
-    /// 清晰：原始分辨率（长边最多 3840，H.264 的上限附近），适合看小字
+    /// 清晰：原生分辨率（Retina、4K、5K 屏都按实际像素传，不缩小），适合看小字。
+    /// H.264 最多到 3840（再大很多解码器解不了），H.265 到 8192
     Sharp,
     /// 均衡：长边最多 1920
     #[default]
@@ -75,20 +76,38 @@ pub enum Quality {
     Smooth,
 }
 
+/// 屏幕报不出刷新率（老版本、系统读不到）时按这个算
+pub const DEFAULT_REFRESH_HZ: u32 = 60;
+/// 流畅档固定的帧率
+const SMOOTH_FPS: u32 = 30;
+
 impl Quality {
-    pub fn max_long_edge(self) -> u32 {
+    /// 长边上限。清晰档不缩小，只受编码格式限制
+    pub fn max_long_edge(self, codec: VideoCodec) -> u32 {
         match self {
-            Quality::Sharp => 3840,
+            Quality::Sharp => match codec {
+                VideoCodec::H265 => 8192,
+                VideoCodec::H264 => 3840,
+            },
             Quality::Balanced => 1920,
             Quality::Smooth => 1280,
         }
     }
-    pub fn fps(self) -> u32 {
-        match self {
-            Quality::Sharp | Quality::Balanced => 60,
-            Quality::Smooth => 30,
+    /// 帧率跟着两边的屏幕走：取被连方屏幕和观看方屏幕刷新率里小的那个，不另外封顶
+    /// （两边都是 144 Hz 就按 144 帧抓）。哪边报不出来就只看另一边，都报不出来按 60。
+    /// 编码、网络跟不上时由确认的节奏自然少发，不用在这里压。流畅档是给网差时用的，固定 30 帧
+    pub fn fps(self, host_hz: u32, viewer_hz: u32) -> u32 {
+        if self == Quality::Smooth {
+            return SMOOTH_FPS;
+        }
+        match (host_hz, viewer_hz) {
+            (0, 0) => DEFAULT_REFRESH_HZ,
+            (h, 0) => h,
+            (0, v) => v,
+            (h, v) => h.min(v),
         }
     }
+    /// 60 帧时的码率上限；帧率更高时按 [`scaled_bitrate`] 同比放大
     pub fn max_bitrate(self) -> u32 {
         match self {
             Quality::Sharp => 60_000_000,
@@ -106,6 +125,11 @@ impl Quality {
     }
 }
 
+/// 帧率高于 60 时码率上限同比放大：每帧分到的码率不变，高刷不会更糊
+pub fn scaled_bitrate(bps: u32, fps: u32) -> u32 {
+    (bps as u64 * fps.max(DEFAULT_REFRESH_HZ) as u64 / DEFAULT_REFRESH_HZ as u64).min(u32::MAX as u64) as u32
+}
+
 /// 被连方的一块屏幕
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DisplayInfo {
@@ -116,6 +140,13 @@ pub struct DisplayInfo {
     pub width: u32,
     pub height: u32,
     pub primary: bool,
+    /// 刷新率（Hz），读不到是 0。老版本不带
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub refresh_hz: u32,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 /// 解码器配置：WebCodecs 的 VideoDecoderConfig 直接能用
@@ -173,9 +204,6 @@ impl Primaries {
         *self == Primaries::Bt709
     }
 }
-
-/// 4:4:4 时画面长边最多这么大
-const YUV444_MAX_LONG_EDGE: u32 = 2560;
 
 /// 编码器实际出的颜色格式，被连方按它给解码配置打标记
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -251,7 +279,9 @@ pub struct EncodedFrame {
 #[derive(Debug, Clone)]
 pub struct CaptureOptions {
     pub display: String,
+    /// 画面长边最多多大，屏幕比它大就等比缩小
     pub max_long_edge: u32,
+    /// 目标帧率：两边屏幕刷新率里小的那个（流畅档 30）。系统按它限抓屏的间隔，编码器按它分码率
     pub fps: u32,
     pub bitrate: u32,
     /// 把鼠标指针画进画面。能单独读指针时为假：指针由观看方用本机的系统指针画，零延迟、跟手
@@ -263,7 +293,9 @@ pub struct CaptureOptions {
     /// 观看方的屏幕是广色域：本机屏幕也是的话按 Display P3 传，不压成 sRGB
     pub wide_gamut: bool,
     /// 想用 4:4:4（[`Layout::Yuv444Stacked`]）：实现做得到就用，做不到（编码器开不了这么大的画面之类）
-    /// 自己退回 4:2:0，通过 [`ScreenCapture::color`] 报实际用的。用的时候一定是全范围
+    /// 自己退回 4:2:0，通过 [`ScreenCapture::color`] 报实际用的。用的时候一定是全范围。
+    /// 4:4:4 要编三倍的像素，实现有自己的长边上限；屏幕比上限大时不为了 4:4:4 缩小画面，直接用原生分辨率的 4:2:0
+    /// （高分屏上像素够密，原生分辨率比 4:4:4 清楚）
     pub yuv444: bool,
 }
 
@@ -400,6 +432,9 @@ pub struct ScreenOpen {
     /// 观看方想和被连方互通剪贴板。老版本不带这项，就不互通
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clipboard: bool,
+    /// 观看方屏幕的刷新率（Hz）：帧率不超过它，多了也显示不出来。0 是不知道（老版本不带），只看被连方的屏幕
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub refresh_hz: u32,
 }
 
 /// 视频编码格式。H.265 同样画质码率省三到五成，同样码率更清楚；H.264 哪儿都能用，兜底
@@ -467,8 +502,13 @@ pub enum HostMsg {
     Resumed,
     /// 换了屏幕
     Switched { display: String },
-    /// 每秒一次：当前码率、实际帧率
-    Stats { bitrate: u32, fps: u32 },
+    /// 每秒一次：当前码率、实际帧率，和按两边屏幕定的目标帧率（老版本不带）
+    Stats {
+        bitrate: u32,
+        fps: u32,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        target_fps: u32,
+    },
     /// 指针挪了：相对当前屏幕的 0~1
     Cursor { x: f64, y: f64, visible: bool },
     /// 指针换样子了（箭头、文本光标、手形……）
@@ -592,6 +632,8 @@ struct RateControl {
     /// 这一段里排队最少的一次，和确认了几次
     best_queue: Option<Duration>,
     samples: usize,
+    /// 现在的帧率：高于 60 时码率上限同比放大
+    fps: u32,
 }
 
 impl RateControl {
@@ -608,17 +650,27 @@ impl RateControl {
             last_congested: now,
             best_queue: None,
             samples: 0,
+            fps: DEFAULT_REFRESH_HZ,
         }
     }
 
-    /// 码率上限：4:4:4 放宽一半，但不超过 80 Mbps（家用宽带的直连一般就这么多）
+    /// 码率上限：4:4:4 放宽一半，但不超过 80 Mbps（家用宽带的直连一般就这么多）；帧率高于 60 再同比放大
     fn set_max(&mut self, quality: Quality, yuv444: bool) {
-        self.max = if yuv444 { (quality.max_bitrate() / 2 * 3).min(80_000_000).max(quality.max_bitrate()) } else { quality.max_bitrate() };
+        let base = if yuv444 { (quality.max_bitrate() / 2 * 3).min(80_000_000).max(quality.max_bitrate()) } else { quality.max_bitrate() };
+        self.max = scaled_bitrate(base, self.fps);
+        self.bitrate = self.bitrate.min(self.max);
+    }
+
+    /// 换了帧率（开始抓、换屏、换档以后按新的屏幕算）：码率上限跟着按新帧率放大或缩回
+    fn set_fps(&mut self, fps: u32) {
+        let base = self.max as u64 * DEFAULT_REFRESH_HZ as u64 / self.fps.max(DEFAULT_REFRESH_HZ) as u64;
+        self.fps = fps;
+        self.max = scaled_bitrate(base as u32, fps);
         self.bitrate = self.bitrate.min(self.max);
     }
 
     fn set_quality(&mut self, quality: Quality) {
-        self.max = quality.max_bitrate();
+        self.max = scaled_bitrate(quality.max_bitrate(), self.fps);
         // 切到清晰档马上拉满；切到别的档不超过它的上限
         self.bitrate = if quality == Quality::Sharp { quality.start_bitrate() } else { self.bitrate.min(self.max) };
     }
@@ -850,6 +902,8 @@ struct Format {
     full_range: bool,
     wide_gamut: bool,
     yuv444: bool,
+    /// 观看方屏幕的刷新率，0 是不知道
+    viewer_hz: u32,
 }
 
 struct Running {
@@ -859,31 +913,39 @@ struct Running {
     frames: mpsc::Receiver<Result<EncodedFrame>>,
     /// 已经要了一帧，还没拿到
     waiting: bool,
+    /// 按多少帧抓
+    fps: u32,
 }
 
 impl Running {
     /// 开抓屏要等系统回应（最多几秒），放到阻塞线程上，不占异步运行时
     async fn start(backend: &Arc<dyn ScreenBackend>, display: &str, quality: Quality, bitrate: u32, show_cursor: bool, format: Format) -> Result<Self> {
-        // 流畅档是给网差的时候用的，4:4:4 要多花码率，不用
-        let yuv444 = format.yuv444 && quality != Quality::Smooth;
-        let opts = CaptureOptions {
-            display: display.to_string(),
-            // 4:4:4 要编三倍高的画面：长边最多 2560，4K 屏整屏在变时也能稳在 60 帧上下
-            // （3840×6480 每帧要编 27 ms 左右，只有三十多帧）
-            max_long_edge: if yuv444 { quality.max_long_edge().min(YUV444_MAX_LONG_EDGE) } else { quality.max_long_edge() },
-            fps: quality.fps(),
-            bitrate,
-            show_cursor,
-            codec: format.codec,
-            full_range: format.full_range,
-            wide_gamut: format.wide_gamut,
-            yuv444,
-        };
         let backend = backend.clone();
-        let capture = tokio::task::spawn_blocking(move || backend.start(opts)).await.map_err(|e| anyhow!("抓屏线程出错：{e}"))??;
+        let display = display.to_string();
+        let (capture, fps) = tokio::task::spawn_blocking(move || {
+            // 帧率按这块屏幕现在的刷新率和观看方屏幕的算（换屏、换分辨率后刷新率可能不一样，每次开抓都重新读）
+            let host_hz = backend.displays().ok().and_then(|ds| ds.into_iter().find(|d| d.id == display)).map_or(0, |d| d.refresh_hz);
+            let fps = quality.fps(host_hz, format.viewer_hz);
+            info!(host_hz, viewer_hz = format.viewer_hz, fps, ?quality, "远程画面帧率");
+            let opts = CaptureOptions {
+                display,
+                max_long_edge: quality.max_long_edge(format.codec),
+                fps,
+                bitrate,
+                show_cursor,
+                codec: format.codec,
+                full_range: format.full_range,
+                wide_gamut: format.wide_gamut,
+                // 流畅档是给网差的时候用的，4:4:4 要多花码率，不用
+                yuv444: format.yuv444 && quality != Quality::Smooth,
+            };
+            backend.start(opts).map(|c| (c, fps))
+        })
+        .await
+        .map_err(|e| anyhow!("抓屏线程出错：{e}"))??;
         let (tx, frames) = mpsc::channel(1);
         let (demand, task) = spawn_capture(capture.clone(), tx);
-        Ok(Running { capture, demand, task, frames, waiting: false })
+        Ok(Running { capture, demand, task, frames, waiting: false, fps })
     }
 }
 
@@ -932,6 +994,7 @@ where
         full_range: open.color_tags,
         wide_gamut: open.color_tags && open.wide_gamut,
         yuv444: open.color_tags && open.yuv444,
+        viewer_hz: open.refresh_hz,
     };
     // 能单独读指针就不把指针画进画面：观看方用本机的系统指针画，跟手
     let separate_cursor = {
@@ -958,6 +1021,7 @@ where
             return Err(e);
         }
     };
+    rate.set_fps(running.fps);
 
     // 第一条用普通的控制消息格式回，观看方的 open_stream 按普通消息读
     crate::proto::write_msg(
@@ -1180,6 +1244,7 @@ where
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
+                    rate.set_fps(running.fps);
                     display = want;
                     *current_display.lock().unwrap() = display.clone();
                     inflight.clear();
@@ -1195,6 +1260,7 @@ where
                         Ok(r) => r,
                         Err(e) => break Err(e),
                     }));
+                    rate.set_fps(running.fps);
                     inflight.clear();
                     need_key = true;
                     last_config = None;
@@ -1242,7 +1308,7 @@ where
                     let fps = (frames_this_second as f64 / secs).round() as u32;
                     frames_this_second = 0;
                     last_stats = Instant::now();
-                    let _ = out_tx.try_send(json(&Wire::Host { msg: HostMsg::Stats { bitrate: rate.bitrate, fps } }));
+                    let _ = out_tx.try_send(json(&Wire::Host { msg: HostMsg::Stats { bitrate: rate.bitrate, fps, target_fps: running.fps } }));
                 }
             }
             // 剪贴板：本机新复制的清单、要观看方剪贴板里的内容
@@ -1621,6 +1687,47 @@ mod tests {
             rate.on_ack(Duration::from_millis(400), 1000);
         }
         assert!(rate.tick(None).unwrap() < Quality::Sharp.max_bitrate());
+    }
+
+    #[test]
+    fn fps_follows_both_screens() {
+        // 取两边小的，不封顶
+        assert_eq!(Quality::Sharp.fps(144, 144), 144);
+        assert_eq!(Quality::Balanced.fps(240, 165), 165);
+        assert_eq!(Quality::Balanced.fps(60, 144), 60);
+        // 哪边报不出来只看另一边，都报不出来按 60
+        assert_eq!(Quality::Sharp.fps(120, 0), 120);
+        assert_eq!(Quality::Sharp.fps(0, 144), 144);
+        assert_eq!(Quality::Sharp.fps(0, 0), 60);
+        // 流畅档固定 30
+        assert_eq!(Quality::Smooth.fps(144, 144), 30);
+    }
+
+    #[test]
+    fn sharp_keeps_native_resolution_with_h265() {
+        assert!(Quality::Sharp.max_long_edge(VideoCodec::H265) >= 6016);
+        assert_eq!(Quality::Sharp.max_long_edge(VideoCodec::H264), 3840);
+        assert_eq!(Quality::Balanced.max_long_edge(VideoCodec::H265), 1920);
+    }
+
+    #[test]
+    fn bitrate_cap_scales_with_fps() {
+        assert_eq!(scaled_bitrate(16_000_000, 30), 16_000_000);
+        assert_eq!(scaled_bitrate(16_000_000, 60), 16_000_000);
+        assert_eq!(scaled_bitrate(16_000_000, 144), 38_400_000);
+        let mut rate = RateControl::new(Quality::Balanced, Duration::from_millis(20));
+        rate.set_fps(120);
+        assert_eq!(rate.max, 32_000_000);
+        rate.set_max(Quality::Balanced, false);
+        assert_eq!(rate.max, 32_000_000);
+        // 换回 60 帧缩回去，码率跟着不超过上限
+        rate.bitrate = rate.max;
+        rate.set_fps(60);
+        assert_eq!(rate.max, 16_000_000);
+        assert_eq!(rate.bitrate, 16_000_000);
+        rate.set_fps(144);
+        rate.set_quality(Quality::Sharp);
+        assert_eq!(rate.max, 144_000_000);
     }
 
     #[test]

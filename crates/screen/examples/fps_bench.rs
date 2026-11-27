@@ -1,5 +1,6 @@
 //! 测抓屏 + 编码一路能跑多少帧：屏幕要一直在动（放段动画），连着要帧，统计帧间隔。
 //! cargo run --release -p p2pcli-screen --example fps_bench -- [420|444] [balanced|sharp] [h265|h264] [秒数]
+//! 帧率按屏幕的刷新率（P2PCLI_BENCH_HZ 可以压低，假装观看方屏幕慢）
 use std::time::{Duration, Instant};
 
 use p2pcli_core::screen::{CaptureOptions, Quality, VideoCodec};
@@ -15,12 +16,15 @@ async fn main() -> anyhow::Result<()> {
     let backend = p2pcli_screen::backend().expect("这个系统不支持");
     backend.check_capture()?;
     let main = backend.displays()?.into_iter().find(|d| d.primary).unwrap();
-    let max_long_edge = if yuv444 { q.max_long_edge().min(2560) } else { q.max_long_edge() };
+    // 观看方当成和本机屏幕一样快；环境变量 P2PCLI_BENCH_HZ 可以假装观看方的刷新率
+    let viewer_hz = std::env::var("P2PCLI_BENCH_HZ").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let fps = q.fps(main.refresh_hz, viewer_hz);
+    println!("屏幕 {}×{} {} Hz，按 {fps} 帧抓", main.width, main.height, main.refresh_hz);
     let cap = backend.start(CaptureOptions {
         display: main.id.clone(),
-        max_long_edge,
-        fps: q.fps(),
-        bitrate: q.max_bitrate(),
+        max_long_edge: q.max_long_edge(codec),
+        fps,
+        bitrate: p2pcli_core::screen::scaled_bitrate(q.max_bitrate(), fps),
         show_cursor: false,
         codec,
         full_range: true,

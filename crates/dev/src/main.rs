@@ -100,6 +100,9 @@ enum Cmd {
         /// 请对方用 4:4:4（对方做不到会自己退回 4:2:0）
         #[arg(long)]
         yuv444: bool,
+        /// 假装本机屏幕的刷新率（Hz）：对方帧率不超过它。0 是不报，对方只看自己的屏幕
+        #[arg(long, default_value_t = 0)]
+        hz: u32,
     },
     /// 网络诊断：IPv6、NAT 类型、中继
     Diag,
@@ -262,7 +265,7 @@ async fn main() -> Result<()> {
     }
 
     match cli.cmd {
-        Cmd::Screen { target, password, seconds, quality, save, h265, yuv444 } => {
+        Cmd::Screen { target, password, seconds, quality, save, h265, yuv444, hz } => {
             let remote = match connect_target(&node, &target, password).await {
                 Ok(r) => r,
                 Err(ConnectError::Rejected(c)) => bail!("被拒：{}", c.describe()),
@@ -281,7 +284,7 @@ async fn main() -> Result<()> {
                 "smooth" => p2pcli_core::screen::Quality::Smooth,
                 _ => p2pcli_core::screen::Quality::Balanced,
             };
-            watch_screen(&remote, &node.endpoint, quality, seconds, save, h265, yuv444).await?;
+            watch_screen(&remote, &node.endpoint, quality, seconds, save, h265, yuv444, hz).await?;
             remote.close();
             node.shutdown().await;
             Ok(())
@@ -429,7 +432,7 @@ async fn connect_target(node: &Node, target: &str, password: Option<String>) -> 
 
 /// 只看不操作：收画面、马上回确认，每秒打印一行
 #[allow(clippy::too_many_arguments)]
-async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool, yuv444: bool) -> Result<()> {
+async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool, yuv444: bool, hz: u32) -> Result<()> {
     use p2pcli_core::screen::{HostMsg, ScreenEvent, ScreenOpen, ViewerMsg};
     let started = Instant::now();
     let (info, mut input, mut output) = remote.open_screen(ScreenOpen {
@@ -442,12 +445,13 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
         yuv444,
         // 只看不操作，剪贴板不互通
         clipboard: false,
+        refresh_hz: hz,
     }).await?;
     // 帧间隔：看稳不稳。整段的都留着，最后算分位数；每秒打印这一秒最长的和超过 25 毫秒的次数
     let mut last_frame: Option<Instant> = None;
     let mut gaps: Vec<f64> = Vec::new();
     let (mut sec_max, mut sec_slow) = (0f64, 0u32);
-    let mut host_stats: Option<(u32, u32)> = None;
+    let mut host_stats: Option<(u32, u32, u32)> = None;
     // 本机发出去的（确认）丢了多少：反方向丢包会让对方以为网络堵了
     let mut sent_lost = { let s = remote.stats(endpoint); (s.sent_packets, s.lost_packets) };
     // 单独的任务读画面：读一帧不能被超时打断，不然读了一半的字节就丢了，后面全错位
@@ -539,7 +543,7 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
                     }
                 }
             }
-            Some(ScreenEvent::Host(HostMsg::Stats { bitrate, fps })) => host_stats = Some((fps, bitrate)),
+            Some(ScreenEvent::Host(HostMsg::Stats { bitrate, fps, target_fps })) => host_stats = Some((fps, bitrate, target_fps)),
             // 指针的消息太多，不打印
             Some(ScreenEvent::Host(HostMsg::Cursor { .. } | HostMsg::CursorShape { .. })) => {}
             Some(ScreenEvent::Host(m)) => eprintln!("对方：{m:?}"),
@@ -555,7 +559,7 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
             eprintln!(
                 "{:>4.0}s  {:>3} 帧/秒  {:>6.2} Mbps  关键帧 {}  最长间隔 {:>4.0} ms  超 25 ms {:>2} 次  对方 {:?}  线路 {:?} {}ms",
                 started.elapsed().as_secs_f64(), (frames as f64 / secs).round(), bytes as f64 * 8.0 / secs / 1e6, keys,
-                sec_max, sec_slow, host_stats.map(|(f, b)| format!("{f} 帧 {:.1} Mbps", b as f64 / 1e6)).unwrap_or_default(),
+                sec_max, sec_slow, host_stats.map(|(f, b, t)| format!("{f}/{t} 帧 {:.1} Mbps", b as f64 / 1e6)).unwrap_or_default(),
                 path.kind, path.rtt_ms.unwrap_or(0)
             );
             (frames, bytes, keys, sec_max, sec_slow) = (0, 0, 0, 0.0, 0);
