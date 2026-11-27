@@ -19,6 +19,9 @@ fn main() {
     };
     let hold: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(3);
     std::fs::create_dir_all(&out).unwrap();
+    // 和 P2PCLI 一样按物理像素算，截图才是整块屏幕
+    #[cfg(windows)]
+    let _ = unsafe { windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     let style = PrivacyStyle { background, clock: true, message: p2pcli_core::screen::privacy_message("测试用的电脑") };
     let worker = std::thread::spawn(move || {
         let code = match check(&out, &style, hold) {
