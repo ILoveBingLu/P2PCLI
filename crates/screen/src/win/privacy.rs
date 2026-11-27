@@ -142,9 +142,12 @@ fn run(style: PrivacyStyle, block_input: bool, ready: mpsc::Sender<Result<u32>>)
             windows.push(hwnd);
             // 分层窗口 + 透明：鼠标点击穿过去，落在底下的程序上
             unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA) }?;
-            // 先排除出抓屏再显示：远程画面一下都不会黑
-            unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
-                .map_err(|e| anyhow!("这台 Windows 太老，抓屏排除不了隐私屏（要 Windows 10 2004 或更新）：{e}"))?;
+            // 先排除出抓屏再显示：远程画面一下都不会黑。
+            // 排查用：P2PCLI_PRIVACY_VISIBLE=1 时不排除，截图里能看到隐私屏画成什么样
+            if std::env::var_os("P2PCLI_PRIVACY_VISIBLE").is_none() {
+                unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
+                    .map_err(|e| anyhow!("这台 Windows 太老，抓屏排除不了隐私屏（要 Windows 10 2004 或更新）：{e}"))?;
+            }
             let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
             unsafe { SetTimer(Some(hwnd), TIMER, 1000, None) };
         }
