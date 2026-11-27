@@ -97,7 +97,7 @@ enum Cmd {
         /// 请对方用 H.265（对方编不了会自己退回 H.264）
         #[arg(long)]
         h265: bool,
-        /// 请对方用 4:4:4（对方做不到会自己退回 4:2:0）
+        /// 请对方用真正的 4:4:4（H.265 Main 4:4:4，要带 --h265；对方编码器不支持就是 4:2:0）
         #[arg(long)]
         yuv444: bool,
         /// 假装本机屏幕的刷新率（Hz）：对方帧率不超过它。0 是不报，对方只看自己的屏幕
@@ -442,7 +442,7 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
         codecs: if h265 { vec![p2pcli_core::screen::VideoCodec::H265, p2pcli_core::screen::VideoCodec::H264] } else { vec![] },
         color_tags: true,
         wide_gamut: false,
-        yuv444,
+        chroma444: yuv444,
         // 只看不操作，剪贴板不互通
         clipboard: false,
         refresh_hz: hz,

@@ -371,8 +371,8 @@ export interface ScreenVideoConfig {
   full_range?: boolean;
   /** 色域；没有就是 sRGB */
   primaries?: "bt709" | "p3";
-  /** 画面怎么排的；没有就是普通的 4:2:0。yuv444_stacked 是 Y、Cb、Cr 叠成三倍高的灰度图 */
-  layout?: "yuv420" | "yuv444_stacked";
+  /** 码流本身就是 4:4:4（H.265 的 4:4:4 档次）；没有就是 4:2:0 */
+  chroma444?: boolean;
 }
 
 export type ScreenMouseButton = "left" | "right" | "middle" | "back" | "forward";
@@ -788,7 +788,7 @@ export const api = {
   screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
   /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
   /** keyboard：本机键盘是 Mac 的还是 PC 的；translateKeys：一开始要不要让对方转换快捷键 */
-  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], yuv444: boolean, keyboard: "mac" | "pc", translateKeys: boolean, onEvent: (ev: ScreenStreamEvent) => void) => {
+  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], chroma444: boolean, keyboard: "mac" | "pc", translateKeys: boolean, onEvent: (ev: ScreenStreamEvent) => void) => {
     const events = new Channel<ArrayBuffer>();
     const decoder = new TextDecoder();
     events.onmessage = (raw) => {
@@ -803,7 +803,7 @@ export const api = {
     // 认得解码配置里的范围、色域标记；屏幕是广色域就请对方按 P3 传
     const wideGamut = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches && supportsP3Video();
     return displayRefreshHz().then((refreshHz) =>
-      invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, yuv444, clipboard: true, refreshHz, keyboard, translateKeys, events }));
+      invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, chroma444, clipboard: true, refreshHz, keyboard, translateKeys, events }));
   },
   /** clipboard：先看一眼本机剪贴板，变了就先把清单发过去，再发这批消息 */
   screenSend: (screenId: number, msgs: ScreenViewerMsg[], clipboard = false) => invoke<void>("screen_send", { screenId, msgs, clipboard }),

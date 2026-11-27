@@ -28,7 +28,6 @@ import { Button } from "@/components/ui/button";
 import { Toaster, toast } from "@/components/ui/toast";
 import { ConnectionCard, Row, Section } from "./ConnectionCard";
 import { t } from "@/i18n";
-import { Yuv444Renderer, canRender444 } from "./yuv444";
 
 /** 这台电脑的屏幕是广色域（Display P3） */
 const WIDE_GAMUT = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches;
@@ -74,22 +73,32 @@ function supportedCodecs(): Promise<ScreenCodec[]> {
   return codecsProbe;
 }
 
-/** 能不能看 4:4:4 的画面：要 WebGL2，解码器还要解得了三倍高的画面（1080p 的屏幕就是 1920×3240） */
-let yuv444Probe: Promise<boolean> | null = null;
-function supports444(): Promise<boolean> {
-  yuv444Probe ??= (async () => {
-    if (typeof VideoDecoder === "undefined" || !canRender444()) return false;
-    const codecs = await supportedCodecs();
-    const tries = codecs.includes("h265") ? ["hvc1.1.6.L183.B0", "avc1.640033"] : ["avc1.640033"];
-    for (const codec of tries) {
+/**
+ * 显卡能不能解真正的 4:4:4（H.265 Range Extensions 档次，每个像素都有自己的颜色）。能才请对方用 4:4:4；
+ * 不能就老老实实 4:2:0，不拿别的办法凑。解码器嘴上说能、实际解不了时记下来（见 hevc444Broken），这次运行里不再要
+ */
+let hevc444Probe: Promise<boolean> | null = null;
+let hevc444Broken = false;
+function supportsHevc444(): Promise<boolean> {
+  hevc444Probe ??= (async () => {
+    if (typeof VideoDecoder === "undefined") return false;
+    if (!(await supportedCodecs()).includes("h265")) return false;
+    // 档次 4（Range Extensions），几种常见的等级写法都试一下
+    for (const codec of ["hvc1.4.10.L123.90", "hvc1.4.10.H150.90", "hev1.4.10.L123.90"]) {
       try {
-        const s = await VideoDecoder.isConfigSupported({ codec, codedWidth: 1920, codedHeight: 3240, hardwareAcceleration: "prefer-hardware" });
+        const s = await VideoDecoder.isConfigSupported({ codec, codedWidth: 1920, codedHeight: 1080, hardwareAcceleration: "prefer-hardware" });
         if (s.supported) return true;
       } catch { /* 下一个 */ }
     }
     return false;
   })();
-  return yuv444Probe;
+  return hevc444Probe.then((ok) => ok && !hevc444Broken);
+}
+
+/** 解码出来的画面像素格式是不是 4:2:0 的（解码器把 4:4:4 降了）；不知道（显存里的画面）时是 null */
+function is420Format(format: VideoPixelFormat | null): boolean | null {
+  if (!format) return null;
+  return format.startsWith("I420") || format.startsWith("NV12");
 }
 
 /** 解码配置里的 codec 字符串是哪种格式 */
@@ -158,14 +167,10 @@ export default function ScreenWindow() {
   // 连接详情：对方信息、线路，解码器在用的格式
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [path, setPath] = useState<PathInfo | null>(null);
-  const [decode, setDecode] = useState<{ codec: string; width: number; height: number; hardware: boolean; yuv444: boolean } | null>(null);
-  /** 画布怎么画：普通画面用 2D；4:4:4 用 WebGL2 还原。一块画布只能开一种，换的时候整块换掉 */
-  const [renderMode, setRenderMode] = useState<"2d" | "gl">("2d");
-  const renderModeRef = useRef<"2d" | "gl">("2d");
-  const p3Ref = useRef(false);
-  const glRef = useRef<Yuv444Renderer | null>(null);
-  /** 画布刚换、还没画上的那帧：换好以后补画，屏幕不动时也不会一直黑着 */
-  const pendingFrame = useRef<VideoFrame | null>(null);
+  /** 解码器在解什么：chroma444 是对方说码流是 4:4:4；format 是解出来第一帧的像素格式（看解码器有没有偷偷降成 4:2:0） */
+  const [decode, setDecode] = useState<{ codec: string; width: number; height: number; hardware: boolean; chroma444: boolean; format?: VideoPixelFormat | null } | null>(null);
+  const formatSeen = useRef(false);
+  const chroma444Ref = useRef(false);
   // 对方单独报来的指针：样子和位置。对方是老版本时收不到，那时指针画在画面里
   const [look, setLook] = useState<CursorLook | null>(null);
   const [remoteCursor, setRemoteCursor] = useState<{ x: number; y: number; visible: boolean } | null>(null);
@@ -360,22 +365,13 @@ export default function ScreenWindow() {
       setFirstFrameMs(Math.round(now - liveAt.current));
       setNoFrame(false);
     }
-    const canvas = canvasRef.current;
-    if (renderModeRef.current === "gl") {
-      let gl = glRef.current;
-      if (canvas && gl?.canvas !== canvas) {
-        try { gl = glRef.current = Yuv444Renderer.create(canvas); } catch { gl = glRef.current = null; }
-      }
-      if (canvas && gl) {
-        gl.draw(frame, p3Ref.current);
-        frame.close();
-      } else {
-        // 画布还是 2D 的那块（换画布的渲染还没轮到）：先留着，换好再画
-        pendingFrame.current?.close();
-        pendingFrame.current = frame;
-      }
-      return;
+    // 记下解出来的像素格式：诊断面板按实际解出来的说 4:4:4 还是 4:2:0
+    if (!formatSeen.current) {
+      formatSeen.current = true;
+      const format = frame.format;
+      setDecode((d) => (d ? { ...d, format } : d));
     }
+    const canvas = canvasRef.current;
     if (canvas) {
       if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
         canvas.width = frame.displayWidth;
@@ -387,25 +383,15 @@ export default function ScreenWindow() {
     frame.close();
   }, []);
 
-  // 画布换过（2D 和 WebGL 之间）：补画换的时候留着的那帧，焦点也挪到新画布上
-  useEffect(() => {
-    const frame = pendingFrame.current;
-    pendingFrame.current = null;
-    if (frame) draw(frame);
-    if (document.activeElement === document.body) canvasRef.current?.focus();
-  }, [renderMode, draw]);
-  useEffect(() => () => { pendingFrame.current?.close(); pendingFrame.current = null; }, []);
-
   const configure = useCallback(async (config: ScreenVideoConfig) => {
     resetDecoder();
     if (typeof VideoDecoder === "undefined") {
       setPhase({ kind: "error", message: t("这台电脑的系统版本太旧，不支持硬件解码画面，请更新系统") });
       return;
     }
-    const yuv444 = config.layout === "yuv444_stacked";
-    renderModeRef.current = yuv444 ? "gl" : "2d";
-    p3Ref.current = config.primaries === "p3";
-    setRenderMode(renderModeRef.current);
+    const chroma444 = config.chroma444 === true;
+    chroma444Ref.current = chroma444;
+    formatSeen.current = false;
     const base: VideoDecoderConfig = {
       codec: config.codec,
       codedWidth: config.width,
@@ -414,18 +400,23 @@ export default function ScreenWindow() {
       optimizeForLatency: true,
       // 电脑屏幕的颜色：sRGB 曲线、BT.709 矩阵；范围和色域按对方解码配置里标的（老版本不标，是视频范围、sRGB）。
       // 明确告诉解码器，不让它按电视的 BT.709 曲线去猜，颜色和对方屏幕上一致
-      // 4:4:4 的画面是数据（灰度图里装着 Y、Cb、Cr），解码器按 sRGB 原样给出，不做色域换算；色域在 WebGL 画布上体现
       colorSpace: {
-        primaries: (config.primaries === "p3" && !yuv444 ? "smpte432" : "bt709") as VideoColorPrimaries,
+        primaries: (config.primaries === "p3" ? "smpte432" : "bt709") as VideoColorPrimaries,
         transfer: "iec61966-2-1",
         matrix: "bt709",
-        fullRange: config.full_range === true || yuv444,
+        fullRange: config.full_range === true,
       },
     };
     // 先要显卡解码，不行再让系统自己挑
     let chosen: VideoDecoderConfig = { ...base, hardwareAcceleration: "prefer-hardware" };
     try {
       const support = await VideoDecoder.isConfigSupported(chosen);
+      if (!support.supported && chroma444) {
+        // 探测时说能解 4:4:4，真到这个码流又不行：记下来，重新打开画面，这次只要 4:2:0
+        hevc444Broken = true;
+        setAttempt((n) => n + 1);
+        return;
+      }
       if (!support.supported) {
         chosen = base;
         setHwNote(t("显卡不支持这个画面，改用系统解码"));
@@ -435,11 +426,18 @@ export default function ScreenWindow() {
     } catch {
       chosen = base;
     }
-    setDecode({ codec: config.codec, width: config.width, height: yuv444 ? Math.floor(config.height / 3) : config.height, hardware: chosen.hardwareAcceleration === "prefer-hardware", yuv444 });
+    setDecode({ codec: config.codec, width: config.width, height: config.height, hardware: chosen.hardwareAcceleration === "prefer-hardware", chroma444 });
     hardwareRef.current = chosen.hardwareAcceleration === "prefer-hardware";
     const d = new VideoDecoder({
       output: draw,
       error: () => {
+        // 4:4:4 一帧都没解出来就出错：这块显卡其实解不了，重新打开画面，这次只要 4:2:0
+        if (chroma444Ref.current && !formatSeen.current) {
+          hevc444Broken = true;
+          resetDecoder();
+          setAttempt((n) => n + 1);
+          return;
+        }
         // 解码出错：重建解码器，要一个关键帧
         errorCount.current += 1;
         resetDecoder();
@@ -547,9 +545,9 @@ export default function ScreenWindow() {
       }
       setPhase({ kind: "asking" });
       try {
-        const [codecs, yuv444] = await Promise.all([supportedCodecs(), supports444()]);
+        const [codecs, chroma444] = await Promise.all([supportedCodecs(), supportsHevc444()]);
         if (cancelled) return;
-        const opened = await api.screenOpen(connId, quality, true, display, codecs, yuv444, isMac ? "mac" : "pc", swapRef.current, onEvent);
+        const opened = await api.screenOpen(connId, quality, true, display, codecs, chroma444, isMac ? "mac" : "pc", swapRef.current, onEvent);
         if (cancelled) { void api.screenClose(opened.screen_id); return; }
         screenId.current = opened.screen_id;
         setStarted(opened.started);
@@ -615,7 +613,7 @@ export default function ScreenWindow() {
     if (canvas.style.cursor !== css) canvas.style.cursor = css;
   }, []);
   // 换了画布（切到 4:4:4 时整块换掉）也要重新设
-  useEffect(applyCursor, [applyCursor, look, remoteCursor?.visible, control, started, renderMode]);
+  useEffect(applyCursor, [applyCursor, look, remoteCursor?.visible, control, started]);
 
   /** 锁定鼠标时一个 CSS 像素算对方屏幕上几个像素：按画面显示的大小和对方屏幕的实际像素换算 */
   const remotePerCss = () => {
@@ -689,8 +687,7 @@ export default function ScreenWindow() {
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-    // renderMode：切到 4:4:4 时画布整块换掉，要挂到新画布上，不然滚轮还挂在旧的那块上
-  }, [pos, send, phase.kind, renderMode]);
+  }, [pos, send, phase.kind]);
 
   /** 发出去按下、还没发抬起的键 */
   const pressed = useRef(new Set<string>());
@@ -755,7 +752,7 @@ export default function ScreenWindow() {
       window.removeEventListener("blur", releaseAll);
       canvas?.removeEventListener("blur", releaseAll);
     };
-  }, [device, send, releaseAll, renderMode]);
+  }, [device, send, releaseAll]);
 
   const toggleShareClipboard = () => {
     const on = !shareClipboard;
@@ -955,7 +952,8 @@ export default function ScreenWindow() {
                 <Row label={t("传输速率")} value={recv && !paused ? formatMbps(recv.mbps) : "—"} hint={t("画面每秒实际传过来的数据量")} />
                 <Row label={t("码率上限")} value={stats && !paused ? `${(stats.bitrate / 1e6).toFixed(1)} Mbps` : "—"} hint={t("对方编码器最多用到的码率，网络差时会自动往下降；画面变化少时实际用不到这么多")} />
                 <Row label={t("编码")} value={decode ? `${codecName(decode.codec)} · ${decode.codec}` : "—"} mono />
-                <Row label={t("色彩")} value={decode ? (decode.yuv444 ? t("4:4:4 原色") : "4:2:0") : "—"} />
+                <Row label={t("色彩")} value={!decode ? "—" : !decode.chroma444 ? "4:2:0" : is420Format(decode.format ?? null) ? t("4:2:0（本机解码器把 4:4:4 降成了 4:2:0）") : "4:4:4"}
+                  hint={t("4:4:4 是每个像素都有自己的颜色，彩色小字、细线清楚；4:2:0 是四个像素共用一份颜色。两边显卡都支持 H.265 的 4:4:4 时才有，不支持就是 4:2:0")} />
                 <Row label={t("解码")} value={decode ? (decode.hardware && !hwNote ? t("显卡硬件解码") : t("系统解码")) : "—"} />
                 <Row label={t("对方编码")} value={stats?.encoder ? `${stats.encoder.name} · ${stats.encoder.hardware ? t("硬件") : t("软件")}` : "—"}
                   hint={t("对方用哪个编码器压画面。软件编码会卡、很费对方的 CPU，一般是对方显卡驱动有问题")} />
@@ -1040,7 +1038,7 @@ export default function ScreenWindow() {
         </button>
       )}
       <div className="screen-stage">
-        <canvas key={renderMode} ref={canvasRef} className="screen-canvas" tabIndex={0}
+        <canvas ref={canvasRef} className="screen-canvas" tabIndex={0}
           data-control={live && control && canControl ? "" : undefined}
           onPointerMove={onPointerMove}
           onPointerDown={(e) => onPointerButton(e, true)}

@@ -1,8 +1,8 @@
 //! ScreenCaptureKit 抓屏：在 GPU 里缩放、转成 NV12（视频范围、BT.709），画面一直在 IOSurface 里，
 //! 编码器直接拿去用。屏幕没变化时系统不给新帧，不占带宽。
 //!
-//! 4:4:4：系统抓成 BGRA，再用 Metal 排成三倍高的灰度图（见 [`super::pack`]）交给编码器。
-//! 编码器开不了这么高的画面时，同样用 Metal 转成普通的 NV12，退回 4:2:0。
+//! Mac 的硬件编码器（VideoToolbox）没有 4:4:4 的档次，所以一直是 4:2:0；观看方要 4:4:4 也照实给 4:2:0，
+//! 解码配置里不标 4:4:4。
 //!
 //! 抓到的画面交给 [`super::flow`]：单独的编码线程边排边编，不等上一帧编完。
 
@@ -29,8 +29,7 @@ use p2pcli_core::screen::{CaptureOptions, CaptureStats, ColorFormat, DisplayInfo
 use tracing::{debug, info, warn};
 
 use super::encode::Encoder;
-use super::flow::{Frames, MODE_NV12, MODE_STACKED, PIPELINED, Pipe};
-use super::pack::{PIXEL_FORMAT_BGRA, Packer};
+use super::flow::{Frames, PIPELINED, Pipe};
 
 /// kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange（'420v'）：硬件编码器最喜欢的格式
 const PIXEL_FORMAT_NV12: u32 = 0x3432_3076;
@@ -147,8 +146,6 @@ pub(crate) fn find_display(id: CGDirectDisplayID) -> Result<Retained<SCDisplay>>
         .ok_or_else(|| anyhow!("找不到这块屏幕，可能已经拔掉了"))
 }
 
-/// Mac 上 4:4:4 时画面长边最多这么大：M4 上 2560×4320 每帧要 27 ms，只有三十多帧；1920×3240 流水线能稳在 60 帧
-const YUV444_MAX_LONG_EDGE: u32 = 1920;
 /// 长边超过这么多（5K、6K 屏的原生分辨率）要先试开一下编码器：H.265 硬件编码器才编得了，开不了就缩到这么大
 const LARGE_LONG_EDGE: u32 = 3840;
 
@@ -178,29 +175,10 @@ impl MacCapture {
         let (pw, ph) = pixel_size(id);
         let (mut width, mut height) = fit(pw, ph, opts.max_long_edge);
         let p3 = opts.wide_gamut;
-        // 4:4:4 要编三倍高的画面，只在不用缩小就放得下时用。高分屏不为了 4:4:4 缩小，用原生分辨率的 4:2:0
-        let yuv444 = opts.yuv444 && width.max(height) <= YUV444_MAX_LONG_EDGE;
-
-        // 4:4:4：先把 Metal 和三倍高的硬件编码器开起来，开不了就照旧抓 NV12
-        let mut packer = None;
         let mut encoder = None;
-        if yuv444 && opts.full_range {
-            let ready = Packer::new(p3).and_then(|p| {
-                let enc = Encoder::new(width as usize, height as usize * 3, opts.fps, opts.bitrate, opts.codec, p3, true)?;
-                Ok((p, enc))
-            });
-            match ready {
-                Ok((p, enc)) => {
-                    packer = Some(p);
-                    encoder = Some(enc);
-                }
-                Err(e) => warn!("4:4:4 开不起来，用 4:2:0：{e:#}"),
-            }
-        }
-        let mode = if packer.is_some() { MODE_STACKED } else { MODE_NV12 };
         // 5K、6K 的原生分辨率：只有 H.265 硬件编码器编得了（H.264 最多 4096 宽，观看方也多半解不了）。
         // 先开好留给编码线程用，开不了就缩到 3840
-        if mode == MODE_NV12 && width.max(height) > LARGE_LONG_EDGE {
+        if width.max(height) > LARGE_LONG_EDGE {
             match Encoder::open_hevc(width as usize, height as usize, opts.fps, opts.bitrate, p3) {
                 Ok(enc) if opts.codec == VideoCodec::H265 => encoder = Some(enc),
                 result => {
@@ -216,11 +194,7 @@ impl MacCapture {
         unsafe {
             config.setWidth(width as usize);
             config.setHeight(height as usize);
-            config.setPixelFormat(match mode {
-                MODE_NV12 if opts.full_range => PIXEL_FORMAT_NV12_FULL,
-                MODE_NV12 => PIXEL_FORMAT_NV12,
-                _ => PIXEL_FORMAT_BGRA,
-            });
+            config.setPixelFormat(if opts.full_range { PIXEL_FORMAT_NV12_FULL } else { PIXEL_FORMAT_NV12 });
             config.setColorMatrix(kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
             // Mac 屏幕多是广色域（Display P3）。观看方也是广色域屏幕就按 P3 抓，鲜艳的颜色不被压掉；
             // 不然让系统抓屏时就转成 sRGB，免得 P3 的数值被当成 sRGB 显示，颜色发灰发淡
@@ -239,7 +213,7 @@ impl MacCapture {
         };
 
         let color = ColorFormat { full_range: opts.full_range, primaries: if p3 { Primaries::P3 } else { Primaries::Bt709 }, ..Default::default() };
-        let pipe = Pipe { encoder, packer, mode, fps: opts.fps, codec: opts.codec, p3 };
+        let pipe = Pipe { encoder, fps: opts.fps, codec: opts.codec, p3 };
         let frames = Frames::start(pipe, color, opts.bitrate, PIPELINED)?;
         let sink = Sink::new(frames.clone());
         let queue = DispatchQueue::new("cn.p2pcli.screen", None);
@@ -263,7 +237,7 @@ impl MacCapture {
         if let Err(e) = started {
             bail!("抓屏开不起来：{e}");
         }
-        info!(display = id, width, height, fps = opts.fps, yuv444 = mode == MODE_STACKED, "开始抓屏");
+        info!(display = id, width, height, fps = opts.fps, "开始抓屏");
         Ok(MacCapture { stream, _sink: sink, _queue: queue, frames })
     }
 }

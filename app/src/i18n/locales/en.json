@@ -1255,7 +1255,6 @@
   "每秒收到的帧数 · 画面实际传输速率": "Frames received per second · actual transfer rate",
   "编码": "Encoding",
   "色彩": "Color",
-  "4:4:4 原色": "4:4:4 full color",
   "解码": "Decoding",
   "显卡硬件解码": "GPU hardware decoding",
   "系统解码": "System decoding",
@@ -1384,5 +1383,7 @@
   "按键原样发送（⌘ 就是对方的 Win 键），点一下改成按 Mac 的习惯": "Keys are sent as they are (⌘ is the Windows key there). Click to use Mac habits",
   "快捷键按 Windows 的习惯：Ctrl+C 复制、Home 到行首、Ctrl+← 按词跳，对方换成 Mac 的按法；对方前台是终端时 Ctrl 还是 Ctrl（Ctrl+C 中断），Ctrl+Shift+C/V 复制粘贴。点一下改成原样发送": "Shortcuts follow Windows habits: Ctrl+C copies, Home goes to line start, Ctrl+← jumps by word, and the Mac gets its own equivalents. When a terminal is in front there, Ctrl stays Ctrl (Ctrl+C interrupts) and Ctrl+Shift+C/V copy and paste. Click to send keys as they are",
   "按键原样发送（Ctrl 就是 Mac 的 ⌃），点一下改成按 Windows 的习惯": "Keys are sent as they are (Ctrl is ⌃ on the Mac). Click to use Windows habits",
-  "按本机习惯用快捷键": "Use this computer's shortcuts"
+  "按本机习惯用快捷键": "Use this computer's shortcuts",
+  "4:2:0（本机解码器把 4:4:4 降成了 4:2:0）": "4:2:0 (this computer's decoder reduced the 4:4:4 stream to 4:2:0)",
+  "4:4:4 是每个像素都有自己的颜色，彩色小字、细线清楚；4:2:0 是四个像素共用一份颜色。两边显卡都支持 H.265 的 4:4:4 时才有，不支持就是 4:2:0": "4:4:4 gives every pixel its own color, so small colored text and thin lines stay sharp; 4:2:0 shares one color between four pixels. You only get 4:4:4 when both graphics cards support H.265 4:4:4; otherwise it's 4:2:0"
 }

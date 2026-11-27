@@ -14,6 +14,8 @@ mod cursor;
 pub mod encode;
 mod flow;
 mod input;
+/// Metal 把彩色画面转成 NV12：只给测试造画面用
+#[cfg(test)]
 mod pack;
 
 #[link(name = "ApplicationServices", kind = "framework")]

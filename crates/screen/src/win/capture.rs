@@ -1,6 +1,7 @@
 //! Windows.Graphics.Capture 抓屏：画面是 GPU 上的 BGRA 纹理，用 D3D11 视频处理器在 GPU 上
 //! 缩放并转成 NV12（BT.709），再交给硬件编码器。整个过程画面都不离开显存。
-//! 观看方要 4:4:4 时改用着色器把 Y、Cb、Cr 叠成三倍高的画面（见 [`super::yuv444`]），开不起来就退回 4:2:0。
+//! 观看方能解 4:4:4 时，用着色器把画面转成 AYUV、按 H.265 Main 4:4:4 编（见 [`super::yuv444`]），码流本身就是 4:4:4；
+//! 显卡的编码器不支持这个档次就照常编 4:2:0，告诉观看方的也是 4:2:0。
 //! 抓屏、转换、编码都放在一个专门的线程里，COM 和 D3D 对象只在这个线程上用。
 //!
 //! 抓屏到编码是一条流水线：上一帧还在编码器里的时候，下一帧就能抓、转好送进去，
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use p2pcli_core::host::BoxFuture;
 use p2pcli_core::screen::{
-    CaptureOptions, CaptureStats, ColorFormat, EncodedFrame, EncoderInfo, Layout, Primaries, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config,
+    CaptureOptions, CaptureStats, ColorFormat, EncodedFrame, EncoderInfo, Primaries, ScreenCapture, VideoCodec, annexb_to_lengths, avcc_config,
     hvcc_config,
 };
 use tokio::sync::oneshot;
@@ -41,7 +42,7 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::core::{IInspectable, Interface};
 
 use super::encode::Encoder;
-use super::yuv444::Stacker;
+use super::yuv444::AyuvConverter;
 
 /// 老接口的颜色空间（位域）：第 1 位 RGB 范围（0 是全范围 0~255），第 2 位 YCbCr 矩阵（1 是 BT.709），
 /// 第 4、5 位 YCbCr 的范围（1 是 16~235，2 是 0~255）。None 是输入的 RGB，Some(全范围) 是输出的 YCbCr
@@ -91,9 +92,9 @@ pub(super) enum Ev {
 pub(super) struct Shared {
     pub want_key: AtomicBool,
     pub bitrate: AtomicU32,
-    /// 最近交出去的那帧是不是 4:4:4。编码器建的时候才定下来，开不起来就退回 4:2:0；
+    /// 最近交出去的那帧是不是 4:4:4。编码器建的时候才定下来，开不起来就是 4:2:0；
     /// 按交出去的帧记，不按正在编的记：被连方收到关键帧时读的颜色格式一定和这帧对得上
-    pub stacked: AtomicBool,
+    pub chroma444: AtomicBool,
     pub source_frames: AtomicU64,
     pub encoded_frames: AtomicU64,
     pub skipped_frames: AtomicU64,
@@ -185,8 +186,8 @@ impl ScreenCapture for WinCapture {
 
     fn color(&self) -> ColorFormat {
         // 4:4:4 一定是全范围
-        if self.shared.stacked.load(Ordering::Relaxed) {
-            return ColorFormat { full_range: true, primaries: Primaries::Bt709, layout: Layout::Yuv444Stacked };
+        if self.shared.chroma444.load(Ordering::Relaxed) {
+            return ColorFormat { full_range: true, primaries: Primaries::Bt709, chroma444: true };
         }
         // Windows 抓到的画面已经是 sRGB，只有范围跟着观看方
         ColorFormat { full_range: self.full_range, primaries: Primaries::Bt709, ..Default::default() }
@@ -218,9 +219,6 @@ fn worker(opts: CaptureOptions, init: Sender<Result<()>>, tx: Sender<Ev>, rx: Re
     debug!("停止抓屏");
 }
 
-/// 4:4:4 时画面长边最多这么大：要编三倍高的画面，4K 屏整屏在变时也能稳在 60 帧上下
-/// （3840×6480 每帧要编 27 ms 左右，只有三十多帧）
-const YUV444_MAX_LONG_EDGE: u32 = 2560;
 /// 长边超过这么多（5K、6K 屏的原生分辨率）只有 H.265 编得了；编码器开不了就缩到这么大
 const LARGE_LONG_EDGE: u32 = 3840;
 
@@ -240,8 +238,8 @@ enum Converter {
         outputs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
         next: usize,
     },
-    /// 4:4:4：Y、Cb、Cr 叠成三倍高
-    Stacked(Stacker),
+    /// 4:4:4：着色器转成 AYUV
+    Ayuv(AyuvConverter),
 }
 
 /// 画面从哪来
@@ -544,11 +542,11 @@ impl State {
 
     /// 编码出错：4:4:4 时退回 4:2:0，拿输入纹理里留着的这帧接着编；4:2:0 也错就没办法了
     fn recover(&mut self, e: anyhow::Error) -> Result<()> {
-        if !matches!(self.converter, Some(Converter::Stacked(_))) {
+        if !matches!(self.converter, Some(Converter::Ayuv(_))) {
             warn!("硬件编码出错：{e:#}");
             return Err(e);
         }
-        warn!("4:4:4 编码出错，改用 4:2:0：{e:#}");
+        warn!("4:4:4 编码出错，以后用 4:2:0：{e:#}");
         self.try_yuv444 = false;
         self.reset_encoder();
         self.restage();
@@ -589,7 +587,7 @@ impl State {
             let entry = self.in_flight.pop_front();
             let ts = entry.as_ref().map(|f| f.ts).or(time).unwrap_or(0);
             let frame = package(enc, &mut self.sps_pps, &data, (ts / 10) as u64)?;
-            let stacked = matches!(self.converter, Some(Converter::Stacked(_)));
+            let chroma444 = matches!(self.converter, Some(Converter::Ayuv(_)));
             match entry {
                 Some(f) if f.discard => {}
                 entry => {
@@ -598,7 +596,7 @@ impl State {
                         self.shared.busy_us.fetch_add(us, Ordering::Relaxed);
                         self.shared.max_us.fetch_max(us, Ordering::Relaxed);
                     }
-                    self.ready.push_back((frame, stacked));
+                    self.ready.push_back((frame, chroma444));
                 }
             }
         }
@@ -615,15 +613,15 @@ impl State {
         if pending.is_none() {
             return;
         }
-        let Some((frame, stacked)) = self.ready.pop_front() else { return };
+        let Some((frame, chroma444)) = self.ready.pop_front() else { return };
         // 先记下这帧的格式再交：对面拿到关键帧马上就读 color()
-        self.shared.stacked.store(stacked, Ordering::Relaxed);
+        self.shared.chroma444.store(chroma444, Ordering::Relaxed);
         match pending.take().unwrap().send(Ok(frame)) {
             Ok(()) => {
                 self.shared.encoded_frames.fetch_add(1, Ordering::Relaxed);
             }
             // 对面刚好不要了：留着给下一个
-            Err(Ok(frame)) => self.ready.push_front((frame, stacked)),
+            Err(Ok(frame)) => self.ready.push_front((frame, chroma444)),
             Err(Err(_)) => {}
         }
     }
@@ -739,22 +737,19 @@ impl State {
         self.sps_pps = None;
         self.in_flight.clear();
         self.ready.clear();
-        // 4:4:4 只在不用缩小就放得下时用：高分屏不为了 4:4:4 缩小画面，用原生分辨率的 4:2:0
-        if self.try_yuv444 && dst.0.max(dst.1) <= YUV444_MAX_LONG_EDGE {
-            let stacked = Stacker::new(&self.device, &self.ctx, &self.video_device, &self.video_ctx, &input, src, dst, opts.fps).and_then(|stacker| {
-                // 4:4:4 一定是全范围
-                let enc = Encoder::new(&self.device, &self.manager, dst.0, dst.1 * 3, opts.fps, bitrate, opts.codec, true, true)?;
-                Ok((stacker, enc))
-            });
-            match stacked {
-                Ok((stacker, enc)) => {
-                    info!(width = dst.0, height = dst.1 * 3, hardware = enc.hardware, "远程画面用 4:4:4");
-                    self.converter = Some(Converter::Stacked(stacker));
+        // 真正的 4:4:4：显卡的 H.265 编码器支持 Main 4:4:4 档次才用，不支持就是 4:2:0
+        if self.try_yuv444 {
+            let ready = AyuvConverter::new(&self.device, &self.video_device, &self.video_ctx, &input, src, dst, opts.fps)
+                .and_then(|conv| Ok((conv, Encoder::hevc444(&self.manager, dst.0, dst.1, opts.fps, bitrate)?)));
+            match ready {
+                Ok((conv, enc)) => {
+                    info!(width = dst.0, height = dst.1, "远程画面用 4:4:4（H.265 Main 4:4:4）");
+                    self.converter = Some(Converter::Ayuv(conv));
                     self.set_encoder(enc);
                     return Ok(());
                 }
                 Err(e) => {
-                    warn!(width = dst.0, height = dst.1 * 3, "开不了 4:4:4，改用 4:2:0：{e:#}");
+                    warn!(width = dst.0, height = dst.1, "这块显卡编不了 4:4:4，用 4:2:0：{e:#}");
                     self.try_yuv444 = false;
                 }
             }
@@ -815,7 +810,7 @@ impl State {
                 vp_blt(&self.video_ctx, processor, input_view, view).context("GPU 转格式失败")?;
                 Ok(tex.clone())
             }
-            Converter::Stacked(stacker) => stacker.pack(&self.ctx, &self.video_ctx),
+            Converter::Ayuv(conv) => conv.convert(&self.ctx, &self.video_ctx),
         }
     }
 }

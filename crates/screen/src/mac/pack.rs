@@ -1,8 +1,4 @@
-//! 4:4:4 叠图：在 GPU 上把抓到的 BGRA 画面（W×H）排成 W×3H 的 NV12（全范围），
-//! 亮度平面从上到下是全分辨率的 Y、Cb、Cr，色度平面全是 128。编码器照常当 4:2:0 编，
-//! 观看方解码后再合成彩色，每个像素都有自己的颜色。
-//!
-//! 4:4:4 开不了（编码器不接受这么高的画面）时，同一套东西也能把 BGRA 转成普通的 NV12 全范围。
+//! 测试用：在 GPU 上画合成的画面（BGRA），再用 Metal 转成 NV12 全范围，交给编码器测速度和流量控制。
 //! 画面一直在 IOSurface 里，输入输出都通过 CVMetalTextureCache 直接给 GPU 读写，不拷贝。
 
 use std::ptr::{self, NonNull};
@@ -54,28 +50,7 @@ static float q(float v) {
     return clamp(round(v * 255.0), 0.0, 255.0) / 255.0;
 }
 
-// 一个线程管一个像素：亮度平面写三行（Y、Cb、Cr），偶数列的线程顺手把色度平面填成 128
-kernel void stacked(texture2d<float, access::read> src [[texture(0)]],
-                    texture2d<float, access::write> luma [[texture(1)]],
-                    texture2d<float, access::write> chroma [[texture(2)]],
-                    uint2 p [[thread_position_in_grid]]) {
-    uint w = src.get_width();
-    uint h = src.get_height();
-    if (p.x >= w || p.y >= h) return;
-    float3 v = ycbcr(src.read(p).rgb);
-    luma.write(float4(q(v.x)), p);
-    luma.write(float4(q(v.y)), uint2(p.x, p.y + h));
-    luma.write(float4(q(v.z)), uint2(p.x, p.y + 2 * h));
-    if ((p.x & 1) == 0) {
-        // 色度平面 W/2 × 3H/2：前 H 行按线程的行号，剩下的 H/2 行由上半的线程多写一行
-        float4 mid = float4(128.0 / 255.0);
-        uint cx = p.x >> 1;
-        chroma.write(mid, uint2(cx, p.y));
-        if (p.y < h / 2) chroma.write(mid, uint2(cx, p.y + h));
-    }
-}
-
-// 退回 4:2:0 时用：一个线程管 2×2 个像素，色度取四个的平均
+// 一个线程管 2×2 个像素，色度取四个的平均
 kernel void nv12(texture2d<float, access::read> src [[texture(0)]],
                  texture2d<float, access::write> luma [[texture(1)]],
                  texture2d<float, access::write> chroma [[texture(2)]],
@@ -141,7 +116,6 @@ fn pool_buffer(slot: &mut Option<Pool>, format: u32, width: usize, height: usize
 
 pub(super) struct Packer {
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
-    stacked: Pipeline,
     nv12: Pipeline,
     cache: CFRetained<CVMetalTextureCache>,
     pool: Option<Pool>,
@@ -166,14 +140,13 @@ impl Packer {
             let f = library.newFunctionWithName(&NSString::from_str(name)).ok_or_else(|| anyhow!("着色器里没有 {name}"))?;
             device.newComputePipelineStateWithFunction_error(&f).map_err(|e| anyhow!("建不了计算管线：{}", ns_err(&e)))
         };
-        let stacked = pipeline("stacked")?;
         let nv12 = pipeline("nv12")?;
         let queue = device.newCommandQueue().ok_or_else(|| anyhow!("建不了 Metal 命令队列"))?;
         let mut cache: *mut CVMetalTextureCache = ptr::null_mut();
         let status = unsafe { CVMetalTextureCache::create(None, None, &device, None, NonNull::from(&mut cache)) };
         let cache = NonNull::new(cache).filter(|_| status == 0).ok_or_else(|| anyhow!("建不了纹理缓存（{status}）"))?;
         let cache = unsafe { CFRetained::from_raw(cache) };
-        Ok(Packer { queue, stacked, nv12, cache, pool: None, p3 })
+        Ok(Packer { queue, nv12, cache, pool: None, p3 })
     }
 
     /// 从池子里拿一块 '420f' 的输出缓冲（IOSurface，Metal 能直接写）
@@ -214,9 +187,8 @@ impl Packer {
         Ok((cv, tex))
     }
 
-    /// BGRA 画面（W×H）排成 NV12 全范围：stacked 为真时是 W×3H 的 4:4:4 叠图，假时是普通的 W×H 4:2:0。
-    /// 等 GPU 做完才返回，拿到的缓冲可以直接交给编码器
-    pub(super) fn pack(&mut self, src: &CVImageBuffer, stacked: bool) -> Result<CFRetained<CVPixelBuffer>> {
+    /// BGRA 画面（W×H）转成 NV12 全范围。等 GPU 做完才返回，拿到的缓冲可以直接交给编码器
+    pub(super) fn pack(&mut self, src: &CVImageBuffer) -> Result<CFRetained<CVPixelBuffer>> {
         let format = CVPixelBufferGetPixelFormatType(src);
         if format != PIXEL_FORMAT_BGRA {
             bail!("画面不是 BGRA（{format:#x}）");
@@ -225,13 +197,13 @@ impl Packer {
         if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
             bail!("画面尺寸要是偶数：{w}×{h}");
         }
-        let (ow, oh) = if stacked { (w, h * 3) } else { (w, h) };
+        let (ow, oh) = (w, h);
         let out = self.buffer(ow, oh)?;
         let (_src_cv, src_tex) = self.texture(src, MTLPixelFormat::BGRA8Unorm, w, h, 0, false)?;
         let (_luma_cv, luma) = self.texture(&out, MTLPixelFormat::R8Unorm, ow, oh, 0, true)?;
         let (_chroma_cv, chroma) = self.texture(&out, MTLPixelFormat::RG8Unorm, ow / 2, oh / 2, 1, true)?;
 
-        let pipeline = if stacked { &self.stacked } else { &self.nv12 };
+        let pipeline = &self.nv12;
         let cmd = self.queue.commandBuffer().ok_or_else(|| anyhow!("建不了 Metal 命令"))?;
         let enc = cmd.computeCommandEncoder().ok_or_else(|| anyhow!("建不了 Metal 计算命令"))?;
         enc.setComputePipelineState(pipeline);
@@ -240,7 +212,7 @@ impl Packer {
             enc.setTexture_atIndex(Some(&luma), 1);
             enc.setTexture_atIndex(Some(&chroma), 2);
         }
-        let grid = if stacked { MTLSize { width: w, height: h, depth: 1 } } else { MTLSize { width: w / 2, height: h / 2, depth: 1 } };
+        let grid = MTLSize { width: w / 2, height: h / 2, depth: 1 };
         let tw = pipeline.threadExecutionWidth().max(1);
         let th = (pipeline.maxTotalThreadsPerThreadgroup() / tw).clamp(1, 16);
         enc.dispatchThreads_threadsPerThreadgroup(grid, MTLSize { width: tw, height: th, depth: 1 });
@@ -273,7 +245,7 @@ pub(super) mod tests {
         CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferLockBaseAddress,
         CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
     };
-    use p2pcli_core::screen::{pack_yuv444_stacked, rgb_to_yuv444};
+    use p2pcli_core::screen::rgb_to_yuv444;
 
     /// 合成的“屏幕”：慢慢变的背景上一大块往上滚的彩色“文字”（像在滚动网页），几个来回跑的方块和圆。
     /// 每帧的内容都不一样，编码器得真的编
@@ -376,7 +348,7 @@ kernel void scene(texture2d<float, access::write> out [[texture(0)]],
         /// 同样的画面转成 NV12 全范围：当作系统直接给的 4:2:0 画面
         pub(in super::super) fn render_nv12(&mut self, w: usize, h: usize) -> CFRetained<CVPixelBuffer> {
             let bgra = self.render(w, h);
-            self.gpu.pack(&bgra, false).unwrap()
+            self.gpu.pack(&bgra).unwrap()
         }
     }
 
@@ -466,46 +438,7 @@ kernel void scene(texture2d<float, access::write> out [[texture(0)]],
         (luma, chroma, w, h)
     }
 
-    /// GPU 排出来的叠图和 core 里的参考实现逐个像素比，差不超过 1；色度平面全是 128
-    #[test]
-    #[ignore = "要 GPU：cargo test -p p2pcli-screen -- --ignored pack"]
-    fn pack_stacked_matches_reference() {
-        let mut packer = Packer::new(false).unwrap();
-        // 宽不是线程组的整数倍，边上的像素也要对
-        for (w, h) in [(70usize, 40usize), (1920, 1080), (3840, 2160)] {
-            let rgba = pattern(w, h);
-            let src = bgra_buffer(&rgba, w, h);
-            let out = packer.pack(&src, true).unwrap();
-            assert_eq!(CVPixelBufferGetPixelFormatType(&out), PIXEL_FORMAT_NV12_FULL);
-            let (luma, chroma, ow, oh) = read_planes(&out);
-            assert_eq!((ow, oh), (w, h * 3));
-            let want = pack_yuv444_stacked(&rgba, w, h);
-            let mut max_diff = 0;
-            for (i, (&a, &b)) in luma.iter().zip(&want).enumerate() {
-                let d = (a as i32 - b as i32).abs();
-                assert!(d <= 1, "{w}×{h} 第 {} 行第 {} 列：GPU {a}，参考 {b}", i / w, i % w);
-                max_diff = max_diff.max(d);
-            }
-            assert!(chroma.iter().all(|&v| v == 128), "{w}×{h} 色度平面不全是 128");
-            // 第一行的饱和色单独再核一遍，失败时好看
-            for x in 0..12 {
-                let px = &rgba[x * 4..x * 4 + 3];
-                let [y, cb, cr] = rgb_to_yuv444(px[0], px[1], px[2]);
-                let got = [luma[x], luma[w * h + x], luma[2 * w * h + x]];
-                for k in 0..3 {
-                    assert!((got[k] as i32 - [y, cb, cr][k] as i32).abs() <= 1, "颜色 {px:?}：GPU {got:?}，参考 {:?}", [y, cb, cr]);
-                }
-            }
-            // 顺便看看一帧要多久（含等 GPU 做完）
-            let t = std::time::Instant::now();
-            for _ in 0..30 {
-                packer.pack(&src, true).unwrap();
-            }
-            println!("{w}×{h}：亮度平面最大差 {max_diff}，每帧 {:?}", t.elapsed() / 30);
-        }
-    }
-
-    /// 退回 4:2:0 时的转换：Y 和参考一样，色度是 2×2 的平均
+    /// 转换结果：Y 和参考一样，色度是 2×2 的平均
     #[test]
     #[ignore = "要 GPU：cargo test -p p2pcli-screen -- --ignored pack"]
     fn pack_nv12_matches_reference() {
@@ -513,18 +446,18 @@ kernel void scene(texture2d<float, access::write> out [[texture(0)]],
         let (w, h) = (70usize, 40usize);
         let rgba = pattern(w, h);
         let src = bgra_buffer(&rgba, w, h);
-        let out = packer.pack(&src, false).unwrap();
+        let out = packer.pack(&src).unwrap();
         let (luma, chroma, ow, oh) = read_planes(&out);
         assert_eq!((ow, oh), (w, h));
-        let ref444 = pack_yuv444_stacked(&rgba, w, h);
+        // 每个像素的 Y、Cb、Cr 参考值
+        let reference: Vec<[u8; 3]> = rgba.chunks(4).map(|p| rgb_to_yuv444(p[0], p[1], p[2])).collect();
         for i in 0..w * h {
-            assert!((luma[i] as i32 - ref444[i] as i32).abs() <= 1, "Y 第 {i} 个");
+            assert!((luma[i] as i32 - reference[i][0] as i32).abs() <= 1, "Y 第 {i} 个");
         }
         for cy in 0..h / 2 {
             for cx in 0..w / 2 {
                 for k in 0..2 {
-                    let plane = &ref444[(k + 1) * w * h..];
-                    let sum: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)].iter().map(|(dx, dy)| plane[(cy * 2 + dy) * w + cx * 2 + dx] as u32).sum();
+                    let sum: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)].iter().map(|(dx, dy)| reference[(cy * 2 + dy) * w + cx * 2 + dx][k + 1] as u32).sum();
                     let want = sum as f64 / 4.0;
                     let got = chroma[cy * w + cx * 2 + k] as f64;
                     assert!((got - want).abs() <= 1.5, "色度 ({cx},{cy}) 分量 {k}：GPU {got}，参考 {want}");

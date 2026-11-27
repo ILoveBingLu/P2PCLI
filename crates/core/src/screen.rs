@@ -164,28 +164,10 @@ pub struct VideoConfig {
     /// 色域；老版本不带，就是 sRGB（BT.709 原色）
     #[serde(default, skip_serializing_if = "Primaries::is_default")]
     pub primaries: Primaries,
-    /// 画面怎么排的；老版本不带，就是普通的 4:2:0
-    #[serde(default, skip_serializing_if = "Layout::is_default")]
-    pub layout: Layout,
-}
-
-/// 一帧画面里像素怎么排
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum Layout {
-    /// 普通的 4:2:0：四个像素共用一份颜色，彩色小字、细线会发虚
-    #[default]
-    Yuv420,
-    /// 4:4:4 叠成一张灰度图：编码的画面宽 W、高 3H，亮度平面从上到下依次是全分辨率的 Y、Cb、Cr
-    /// （BT.709 矩阵、全范围），色度平面全是 128。解码后按 [`unpack_yuv444_stacked`] 合成彩色，
-    /// 每个像素都有自己的颜色。解码配置里的宽高是编码画面的（高是原画面的三倍）
-    Yuv444Stacked,
-}
-
-impl Layout {
-    fn is_default(&self) -> bool {
-        *self == Layout::Yuv420
-    }
+    /// 码流本身就是 4:4:4（H.265 的 4:4:4 档次）：每个像素都有自己的颜色。假是普通的 4:2:0
+    /// （四个像素共用一份颜色，彩色小字、细线会发虚）
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chroma444: bool,
 }
 
 /// 画面的色域
@@ -210,7 +192,8 @@ impl Primaries {
 pub struct ColorFormat {
     pub full_range: bool,
     pub primaries: Primaries,
-    pub layout: Layout,
+    /// 编出来的是真正的 4:4:4
+    pub chroma444: bool,
 }
 
 /// BT.709 的亮度系数
@@ -219,7 +202,7 @@ const KB: f64 = 0.0722;
 const KG: f64 = 1.0 - KR - KB;
 
 /// 一个 RGB 像素（0~255）转成全范围 BT.709 的 Y、Cb、Cr（0~255，Cb、Cr 以 128 为零）。
-/// 两边抓屏的着色器要和这里一模一样，测试拿它当标准答案
+/// Windows 上 4:4:4 时着色器把画面转成 AYUV，要和这里一模一样，测试拿它当标准答案
 pub fn rgb_to_yuv444(r: u8, g: u8, b: u8) -> [u8; 3] {
     let (r, g, b) = (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0);
     let y = KR * r + KG * g + KB * b;
@@ -227,40 +210,6 @@ pub fn rgb_to_yuv444(r: u8, g: u8, b: u8) -> [u8; 3] {
     let cr = (r - y) / (2.0 * (1.0 - KR)) + 0.5;
     let q = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
     [q(y), q(cb), q(cr)]
-}
-
-/// [`rgb_to_yuv444`] 反过来：观看方的 WebGL 着色器用同样的公式
-pub fn yuv444_to_rgb(y: u8, cb: u8, cr: u8) -> [u8; 3] {
-    let (y, cb, cr) = (y as f64 / 255.0, cb as f64 / 255.0 - 0.5, cr as f64 / 255.0 - 0.5);
-    let r = y + 2.0 * (1.0 - KR) * cr;
-    let b = y + 2.0 * (1.0 - KB) * cb;
-    let g = (y - KR * r - KB * b) / KG;
-    let q = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
-    [q(r), q(g), q(b)]
-}
-
-/// 参考实现：RGBA（w×h）排成 [`Layout::Yuv444Stacked`] 的亮度平面（w×3h）。平台实现在 GPU 上做同样的事
-pub fn pack_yuv444_stacked(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
-    let n = width * height;
-    let mut out = vec![0u8; n * 3];
-    for i in 0..n {
-        let [y, cb, cr] = rgb_to_yuv444(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
-        out[i] = y;
-        out[n + i] = cb;
-        out[2 * n + i] = cr;
-    }
-    out
-}
-
-/// 参考实现：[`Layout::Yuv444Stacked`] 的亮度平面（w×3h）还原成 RGBA（w×h）
-pub fn unpack_yuv444_stacked(luma: &[u8], width: usize, height: usize) -> Vec<u8> {
-    let n = width * height;
-    let mut out = vec![255u8; n * 4];
-    for i in 0..n {
-        let [r, g, b] = yuv444_to_rgb(luma[i], luma[n + i], luma[2 * n + i]);
-        out[i * 4..i * 4 + 3].copy_from_slice(&[r, g, b]);
-    }
-    out
 }
 
 /// 编码好的一帧
@@ -292,10 +241,9 @@ pub struct CaptureOptions {
     pub full_range: bool,
     /// 观看方的屏幕是广色域：本机屏幕也是的话按 Display P3 传，不压成 sRGB
     pub wide_gamut: bool,
-    /// 想用 4:4:4（[`Layout::Yuv444Stacked`]）：实现做得到就用，做不到（编码器开不了这么大的画面之类）
-    /// 自己退回 4:2:0，通过 [`ScreenCapture::color`] 报实际用的。用的时候一定是全范围。
-    /// 4:4:4 要编三倍的像素，实现有自己的长边上限；屏幕比上限大时不为了 4:4:4 缩小画面，直接用原生分辨率的 4:2:0
-    /// （高分屏上像素够密，原生分辨率比 4:4:4 清楚）
+    /// 想用真正的 4:4:4（H.265 的 4:4:4 档次，码流里每个像素都有自己的颜色）：只在观看方能硬件解这种码流时才为真。
+    /// 本机硬件编码器编得了就用，编不了就是普通的 4:2:0，不拿别的办法凑；通过 [`ScreenCapture::color`] 报实际用的。
+    /// 用的时候一定是全范围
     pub yuv444: bool,
 }
 
@@ -460,9 +408,10 @@ pub struct ScreenOpen {
     /// 观看方的屏幕是广色域（Display P3），画布也能画出来
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub wide_gamut: bool,
-    /// 观看方能还原 [`Layout::Yuv444Stacked`]（有 WebGL2）：被连方能做到就用 4:4:4
+    /// 观看方能用显卡解 H.265 的 4:4:4 档次：被连方的硬件编码器也编得了时用真正的 4:4:4。
+    /// （老版本的 `yuv444` 是另一种“叠成灰度图”的做法，已经不用了，收到也不理）
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub yuv444: bool,
+    pub chroma444: bool,
     /// 观看方想和被连方互通剪贴板。老版本不带这项，就不互通
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clipboard: bool,
@@ -709,7 +658,7 @@ impl RateControl {
         }
     }
 
-    /// 码率上限：4:4:4 放宽一半，但不超过 80 Mbps（家用宽带的直连一般就这么多）；帧率高于 60 再同比放大
+    /// 码率上限：4:4:4 的颜色多一倍数据，放宽一半，但不超过 80 Mbps（家用宽带的直连一般就这么多）；帧率高于 60 再同比放大
     fn set_max(&mut self, quality: Quality, yuv444: bool) {
         let base = if yuv444 { (quality.max_bitrate() / 2 * 3).min(80_000_000).max(quality.max_bitrate()) } else { quality.max_bitrate() };
         self.max = scaled_bitrate(base, self.fps);
@@ -1048,7 +997,8 @@ where
         codec,
         full_range: open.color_tags,
         wide_gamut: open.color_tags && open.wide_gamut,
-        yuv444: open.color_tags && open.yuv444,
+        // 4:4:4 只有 H.265 有能用的硬件编码器
+        yuv444: open.color_tags && open.chroma444 && codec == VideoCodec::H265,
         viewer_hz: open.refresh_hz,
     };
     // 能单独读指针就不把指针画进画面：观看方用本机的系统指针画，跟手
@@ -1272,12 +1222,12 @@ where
                     let color = running.capture.color();
                     c.full_range = color.full_range;
                     c.primaries = color.primaries;
-                    c.layout = color.layout;
+                    c.chroma444 = color.chroma444;
                     c
                 });
                 if let Some(config) = &config {
                     // 4:4:4 要编三倍的像素（Cb、Cr 平面很平滑，好压），码率上限放宽一半
-                    rate.set_max(quality, config.layout == Layout::Yuv444Stacked);
+                    rate.set_max(quality, config.chroma444);
                 }
                 if let Some(config) = &config
                     && last_config.as_ref() != Some(config)
@@ -1526,7 +1476,7 @@ pub fn avcc_config(sps: &[u8], pps: &[u8], width: u32, height: u32) -> Result<Vi
         description: base64::engine::general_purpose::STANDARD.encode(rec),
         full_range: false,
         primaries: Primaries::Bt709,
-        layout: Layout::Yuv420,
+        chroma444: false,
     })
 }
 
@@ -1637,7 +1587,7 @@ pub fn hevc_config(hvcc: &[u8], width: u32, height: u32) -> Result<VideoConfig> 
     for c in constraints {
         codec.push_str(&format!(".{c:X}"));
     }
-    Ok(VideoConfig { codec, width, height, description: base64::engine::general_purpose::STANDARD.encode(hvcc), full_range: false, primaries: Primaries::Bt709, layout: Layout::Yuv420 })
+    Ok(VideoConfig { codec, width, height, description: base64::engine::general_purpose::STANDARD.encode(hvcc), full_range: false, primaries: Primaries::Bt709, chroma444: false })
 }
 
 fn split_annexb(data: &[u8]) -> Vec<&[u8]> {
@@ -1881,27 +1831,6 @@ mod tests {
             rate.on_ack(Duration::from_millis(400), 2_000);
         }
         assert!(rate.tick(None).unwrap() < start);
-    }
-
-    /// 4:4:4 排法来回一趟：8 位量化的误差不超过 1 级，彩色细线的颜色不丢
-    #[test]
-    fn yuv444_stacked_round_trip() {
-        let (w, h) = (4usize, 2usize);
-        // 红绿蓝白黑、饱和的品红、灰、橙：一个像素一个颜色，4:2:0 会把它们混在一起
-        let px: [[u8; 3]; 8] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [0, 0, 0], [255, 0, 255], [128, 128, 128], [255, 128, 0]];
-        let rgba: Vec<u8> = px.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
-        let luma = pack_yuv444_stacked(&rgba, w, h);
-        assert_eq!(luma.len(), w * h * 3);
-        // 灰色的 Cb、Cr 是 128
-        assert_eq!(luma[6], 128);
-        assert_eq!((luma[w * h + 6], luma[2 * w * h + 6]), (128, 128));
-        let back = unpack_yuv444_stacked(&luma, w, h);
-        for (i, p) in px.iter().enumerate() {
-            for c in 0..3 {
-                let d = (back[i * 4 + c] as i32 - p[c] as i32).abs();
-                assert!(d <= 1, "第 {i} 个像素 {p:?} 还原成 {:?}", &back[i * 4..i * 4 + 3]);
-            }
-        }
     }
 
     #[test]

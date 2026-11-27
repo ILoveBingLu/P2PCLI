@@ -15,20 +15,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use objc2_core_foundation::CFRetained;
 use objc2_core_media::CMTime;
-use objc2_core_video::{CVImageBuffer, CVPixelBufferGetHeight, CVPixelBufferGetWidth};
+use objc2_core_video::CVImageBuffer;
 use p2pcli_core::host::BoxFuture;
-use p2pcli_core::screen::{CaptureStats, ColorFormat, EncodedFrame, EncoderInfo, Layout, VideoCodec};
-use tracing::{debug, warn};
+use p2pcli_core::screen::{CaptureStats, ColorFormat, EncodedFrame, EncoderInfo, VideoCodec};
+use tracing::debug;
 
 use super::encode::{Encoder, Reply};
-use super::pack::Packer;
-
-/// 送进编码器的是什么画面：系统直接给的 NV12（4:2:0）
-pub(super) const MODE_NV12: u8 = 0;
-/// 系统给 BGRA，Metal 排成 4:4:4 叠图（W×3H）
-pub(super) const MODE_STACKED: u8 = 1;
-/// 系统给 BGRA，Metal 转成 NV12 全范围：4:4:4 中途开不了编码器时退到这里
-pub(super) const MODE_PACKED_NV12: u8 = 2;
 
 /// 要关键帧时最多等新画面这么久，等不到就拿上一帧重新编
 const REUSE_AFTER: Duration = Duration::from_millis(100);
@@ -51,10 +43,9 @@ struct Sample {
 }
 unsafe impl Send for Sample {}
 
-/// 编好的一帧，和它是按哪种画面编的
+/// 编好的一帧（或者出错）
 struct Done {
     result: Result<EncodedFrame>,
-    mode: u8,
 }
 
 #[derive(Default)]
@@ -72,12 +63,8 @@ struct State {
     in_flight: usize,
     /// 编好还没取走的
     ready: VecDeque<Done>,
-    /// 编码器换代：4:4:4 编坏了加一，旧编码器后面回来的结果都不要
-    generation: u64,
     /// 要了关键帧：之前送进去的非关键帧回来了也不要，下一帧就是关键帧，解码用不着它们
     drop_until_key: bool,
-    /// 4:4:4 编坏了，等编码线程退回 4:2:0
-    stacked_failed: Option<anyhow::Error>,
     stats: CaptureStats,
 }
 
@@ -90,8 +77,6 @@ pub(super) struct Frames {
     ready: tokio::sync::Notify,
     want_key: AtomicBool,
     bitrate: AtomicU32,
-    /// 最近交出去的那帧是哪种画面：color() 报这个，和刚交出去的关键帧对得上
-    handed_mode: AtomicU8,
     color: ColorFormat,
     limits: Limits,
     /// 时间戳从这里算
@@ -102,12 +87,9 @@ pub(super) struct Frames {
     encoder_key: AtomicU8,
 }
 
-/// 编码线程自己用的：编码器、GPU 排画面、现在出哪种画面
+/// 编码线程自己用的：编码器和编码参数
 pub(super) struct Pipe {
     pub encoder: Option<Encoder>,
-    /// 4:4:4 时在 GPU 上排画面
-    pub packer: Option<Packer>,
-    pub mode: u8,
     pub fps: u32,
     /// 想用的编码格式（编不了 H.265 时编码器自己退回 H.264）
     pub codec: VideoCodec,
@@ -115,7 +97,7 @@ pub(super) struct Pipe {
 }
 
 impl Frames {
-    /// 开编码线程。color 是 4:2:0 直接编系统画面时报的颜色格式
+    /// 开编码线程。color 是编出来的颜色格式（Mac 的硬件编码器只有 4:2:0）
     pub(super) fn start(pipe: Pipe, color: ColorFormat, bitrate: u32, limits: Limits) -> Result<Arc<Self>> {
         let frames = Arc::new(Frames {
             state: Mutex::new(State::default()),
@@ -123,7 +105,6 @@ impl Frames {
             ready: tokio::sync::Notify::new(),
             want_key: AtomicBool::new(true),
             bitrate: AtomicU32::new(bitrate),
-            handed_mode: AtomicU8::new(pipe.mode),
             color,
             limits,
             started: Instant::now(),
@@ -174,7 +155,6 @@ impl Frames {
                     if let Some(done) = s.ready.pop_front() {
                         if done.result.is_ok() {
                             s.stats.encoded_frames += 1;
-                            this.handed_mode.store(done.mode, Ordering::Relaxed);
                         }
                         return done.result;
                     }
@@ -207,12 +187,7 @@ impl Frames {
     }
 
     pub(super) fn color(&self) -> ColorFormat {
-        match self.handed_mode.load(Ordering::Relaxed) {
-            MODE_NV12 => self.color,
-            // Metal 出的都是全范围
-            MODE_STACKED => ColorFormat { full_range: true, layout: Layout::Yuv444Stacked, ..self.color },
-            _ => ColorFormat { full_range: true, layout: Layout::Yuv420, ..self.color },
-        }
+        self.color
     }
 
     pub(super) fn encoder(&self) -> Option<EncoderInfo> {
@@ -237,9 +212,6 @@ impl Frames {
                         debug!("编码线程退出");
                         return;
                     }
-                    if let Some(e) = s.stacked_failed.take() {
-                        break Err(e);
-                    }
                     let allowed = self.limits.prefetch + usize::from(s.waiting);
                     let room = s.in_flight < self.limits.in_flight && s.in_flight + s.ready.len() < allowed;
                     if room {
@@ -247,7 +219,7 @@ impl Frames {
                             s.last = Some(sample.clone());
                             // 位置在拿画面的同时占上
                             s.in_flight += 1;
-                            break Ok((sample, s.generation));
+                            break sample;
                         }
                         // 要关键帧但屏幕没动：等一小会儿新画面，等不到就重编上一帧
                         if self.want_key.load(Ordering::Relaxed)
@@ -257,7 +229,7 @@ impl Frames {
                             let deadline = *reuse_at.get_or_insert(now + REUSE_AFTER);
                             if now >= deadline {
                                 s.in_flight += 1;
-                                break Ok((Sample { image: last.image, at: now }, s.generation));
+                                break Sample { image: last.image, at: now };
                             }
                             s = self.wake.wait_timeout(s, deadline - now).unwrap().0;
                             continue;
@@ -267,39 +239,20 @@ impl Frames {
                 }
             };
             reuse_at = None;
-            match job {
-                Ok((sample, generation)) => self.submit(&mut pipe, sample, generation),
-                Err(e) => {
-                    // 扔掉坏了的编码器：它会等在编的帧都回调完，那些结果按旧的一代丢掉
-                    pipe.encoder = None;
-                    self.fall_back(&mut pipe, &e);
-                }
-            }
+            self.submit(&mut pipe, job);
         }
     }
 
-    /// 排好画面送进编码器。编码器的位置已经占上了，出错时在这里还回去
-    fn submit(self: &Arc<Self>, pipe: &mut Pipe, sample: Sample, generation: u64) {
+    /// 送进编码器。编码器的位置已经占上了，出错时在这里还回去
+    fn submit(self: &Arc<Self>, pipe: &mut Pipe, sample: Sample) {
         let taken = Instant::now();
-        let mut key = self.want_key.swap(false, Ordering::Relaxed);
+        let key = self.want_key.swap(false, Ordering::Relaxed);
         let bitrate = self.bitrate.load(Ordering::Relaxed);
         let pts = unsafe { CMTime::new(self.started.elapsed().as_micros() as i64, 1_000_000) };
-        if pipe.packer.is_some() {
-            key |= self.prepare_stacked(pipe, &sample.image, bitrate);
-        }
-        let mode = pipe.mode;
-        let packed = match &mut pipe.packer {
-            Some(packer) => match packer.pack(&sample.image, mode == MODE_STACKED) {
-                Ok(b) => Some(b),
-                Err(e) => return self.failed(e, mode),
-            },
-            None => None,
-        };
-        let image = packed.as_deref().unwrap_or(&sample.image);
-        let reply = self.reply(generation, mode, key, sample.at, taken);
-        if let Err(e) = Encoder::submit(&mut pipe.encoder, image, pts, pipe.fps, bitrate, key, pipe.codec, pipe.p3, reply) {
+        let reply = self.reply(key, sample.at, taken);
+        if let Err(e) = Encoder::submit(&mut pipe.encoder, &sample.image, pts, pipe.fps, bitrate, key, pipe.codec, pipe.p3, reply) {
             // 编码器开不起来：reply 没被调，位置在这里还
-            self.failed(e, mode);
+            self.failed(e);
         }
         // 编码器换了（格式、硬件还是软件）才更新，每帧只比一个数
         if let Some(enc) = &pipe.encoder {
@@ -312,89 +265,49 @@ impl Frames {
     }
 
     /// 送不进编码器：还回位置，错误交给 next_frame（画面结束）
-    fn failed(&self, e: anyhow::Error, mode: u8) {
+    fn failed(&self, e: anyhow::Error) {
         self.want_key.store(true, Ordering::Relaxed);
         let mut s = self.state.lock().unwrap();
         s.in_flight -= 1;
-        s.ready.push_back(Done { result: Err(e), mode });
+        s.ready.push_back(Done { result: Err(e) });
         drop(s);
         self.ready.notify_one();
     }
 
     /// 一帧编完的回调（在 VideoToolbox 的线程上，或者编码器扔掉时在编码线程上）
-    fn reply(self: &Arc<Self>, generation: u64, mode: u8, key: bool, at: Instant, taken: Instant) -> Reply {
+    fn reply(self: &Arc<Self>, key: bool, at: Instant, taken: Instant) -> Reply {
         let this = self.clone();
         Box::new(move |result| {
             let mut s = this.state.lock().unwrap();
             s.in_flight -= 1;
-            if generation == s.generation {
-                match result {
-                    Ok(Some(mut frame)) => {
-                        if s.drop_until_key && !frame.key {
-                            debug!("要了关键帧，之前的帧不要了");
-                        } else {
-                            s.drop_until_key = false;
-                            frame.ts_us = at.saturating_duration_since(this.started).as_micros() as u64;
-                            let us = taken.elapsed().as_micros() as u64;
-                            s.stats.busy_us += us;
-                            s.stats.max_us = s.stats.max_us.max(us);
-                            s.ready.push_back(Done { result: Ok(frame), mode });
-                            this.ready.notify_one();
-                        }
-                    }
-                    // 编码器丢了这帧：丢的是要求的关键帧就再要一次
-                    Ok(None) => {
-                        if key {
-                            this.want_key.store(true, Ordering::Relaxed);
-                        }
-                    }
-                    // 4:4:4 编坏了：这一代后面的结果都不要，编码线程退回 4:2:0 重来，画面不断
-                    Err(e) if mode == MODE_STACKED => {
-                        s.generation += 1;
-                        s.stacked_failed = Some(e);
-                    }
-                    Err(e) => {
-                        s.ready.push_back(Done { result: Err(e), mode });
+            match result {
+                Ok(Some(mut frame)) => {
+                    if s.drop_until_key && !frame.key {
+                        debug!("要了关键帧，之前的帧不要了");
+                    } else {
+                        s.drop_until_key = false;
+                        frame.ts_us = at.saturating_duration_since(this.started).as_micros() as u64;
+                        let us = taken.elapsed().as_micros() as u64;
+                        s.stats.busy_us += us;
+                        s.stats.max_us = s.stats.max_us.max(us);
+                        s.ready.push_back(Done { result: Ok(frame) });
                         this.ready.notify_one();
                     }
+                }
+                // 编码器丢了这帧：丢的是要求的关键帧就再要一次
+                Ok(None) => {
+                    if key {
+                        this.want_key.store(true, Ordering::Relaxed);
+                    }
+                }
+                Err(e) => {
+                    s.ready.push_back(Done { result: Err(e) });
+                    this.ready.notify_one();
                 }
             }
             drop(s);
             this.wake.notify_one();
         })
-    }
-
-    /// 4:4:4 时编码器要按 W×3H 开（只要硬件编码器）。没开或者尺寸不对就重开，开不了就退回 4:2:0。
-    /// 返回是不是新开了编码器（要出关键帧）
-    fn prepare_stacked(&self, pipe: &mut Pipe, image: &CVImageBuffer, bitrate: u32) -> bool {
-        if pipe.mode != MODE_STACKED {
-            return false;
-        }
-        let (w, h) = (CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image));
-        if pipe.encoder.as_ref().is_some_and(|e| e.size() == (w, h * 3)) {
-            return false;
-        }
-        pipe.encoder = None;
-        match Encoder::new(w, h * 3, pipe.fps, bitrate, pipe.codec, pipe.p3, true) {
-            Ok(enc) => {
-                pipe.encoder = Some(enc);
-                true
-            }
-            Err(e) => {
-                self.fall_back(pipe, &e);
-                false
-            }
-        }
-    }
-
-    /// 4:4:4 编不了：之后一直用 Metal 转普通的 NV12，编码器随后按 W×H 重开（Encoder::submit 里看尺寸）。
-    /// 每帧带着自己的画面种类，color() 按交出去的那帧报，和关键帧对得上。只退一次，警告也只记一次
-    fn fall_back(&self, pipe: &mut Pipe, e: &anyhow::Error) {
-        self.want_key.store(true, Ordering::Relaxed);
-        if pipe.mode == MODE_STACKED {
-            warn!("编码器编不了 4:4:4 的三倍高画面，退回 4:2:0：{e:#}");
-        }
-        pipe.mode = MODE_PACKED_NV12;
     }
 }
 
@@ -424,21 +337,14 @@ impl Drop for Waiting<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::pack::tests::{Scene, bgra_buffer, pattern};
+    use super::super::pack::tests::Scene;
     use super::*;
     use p2pcli_core::screen::Primaries;
 
     const SERIAL: Limits = Limits { in_flight: 1, prefetch: 0 };
 
-    fn start(stacked: bool, codec: VideoCodec, p3: bool, bitrate: u32, limits: Limits) -> Arc<Frames> {
-        let pipe = Pipe {
-            encoder: None,
-            packer: stacked.then(|| Packer::new(p3).unwrap()),
-            mode: if stacked { MODE_STACKED } else { MODE_NV12 },
-            fps: 60,
-            codec,
-            p3,
-        };
+    fn start(codec: VideoCodec, p3: bool, bitrate: u32, limits: Limits) -> Arc<Frames> {
+        let pipe = Pipe { encoder: None, fps: 60, codec, p3 };
         let color = ColorFormat { full_range: true, primaries: if p3 { Primaries::P3 } else { Primaries::Bt709 }, ..Default::default() };
         Frames::start(pipe, color, bitrate, limits).unwrap()
     }
@@ -451,43 +357,13 @@ mod tests {
         rt.block_on(async { tokio::time::timeout(Duration::from_secs(5), frames.next_frame()).await }).expect("等不到帧").unwrap()
     }
 
-    /// 能编 4:4:4 时出 W×3H 的关键帧、报叠图；编不了（H.264 的 3840×6480）时退回 W×H 的 4:2:0，报的也跟着变
-    #[test]
-    #[ignore = "要 GPU 和硬件编码器：cargo test -p p2pcli-screen -- --ignored frames_ --nocapture"]
-    fn frames_report_layout() {
-        let rt = runtime();
-        let (w, h) = (1920, 1080);
-        let frames = start(true, VideoCodec::H265, true, 20_000_000, PIPELINED);
-        frames.deliver(bgra_buffer(&pattern(w, h), w, h));
-        let frame = next(&rt, &frames);
-        let config = frame.config.expect("第一帧要带解码配置");
-        assert!(frame.key);
-        assert_eq!((config.width, config.height), (1920, 3240));
-        assert_eq!(frames.color(), ColorFormat { full_range: true, primaries: Primaries::P3, layout: Layout::Yuv444Stacked });
-        frames.deliver(bgra_buffer(&pattern(w, h), w, h));
-        assert!(!next(&rt, &frames).key, "接着编的帧不用关键帧");
-        frames.close();
-
-        let (w, h) = (3840, 2160);
-        let frames = start(true, VideoCodec::H264, false, 20_000_000, PIPELINED);
-        frames.deliver(bgra_buffer(&pattern(w, h), w, h));
-        // 4:4:4 编坏了以后，要关键帧时没新画面就重编上一帧
-        let frame = next(&rt, &frames);
-        let config = frame.config.expect("退回以后第一帧要带解码配置");
-        assert!(frame.key);
-        println!("H.264 {w}×{h} 的 4:4:4：{} {}×{}，{:?}", config.codec, config.width, config.height, frames.color());
-        assert_eq!((config.width, config.height), (3840, 2160));
-        assert_eq!(frames.color(), ColorFormat { full_range: true, primaries: Primaries::Bt709, layout: Layout::Yuv420 });
-        frames.close();
-    }
-
     /// 没人要帧时最多先编好一帧；要了关键帧，先编好的 P 帧扔掉，下一帧就是关键帧；屏幕不动时要关键帧就重编上一帧
     #[test]
     #[ignore = "要 GPU 和硬件编码器：cargo test -p p2pcli-screen -- --ignored frames_ --nocapture"]
     fn frames_flow_control() {
         let rt = runtime();
         let (w, h) = (1280, 720);
-        let frames = start(false, VideoCodec::H265, false, 8_000_000, PIPELINED);
+        let frames = start(VideoCodec::H265, false, 8_000_000, PIPELINED);
         let mut scene = Scene::new();
         frames.deliver(scene.render_nv12(w, h));
         assert!(next(&rt, &frames).key);
@@ -533,10 +409,10 @@ mod tests {
     }
 
     /// 按 60 Hz 送合成画面，消费端像 serve 那样拿到一帧马上要下一帧。返回一行结果
-    fn bench(name: &str, w: usize, h: usize, stacked: bool, codec: VideoCodec, bitrate: u32, limits: Limits) -> String {
+    fn bench(name: &str, w: usize, h: usize, codec: VideoCodec, bitrate: u32, limits: Limits) -> String {
         const WARMUP: Duration = Duration::from_secs(1);
         const MEASURE: Duration = Duration::from_secs(6);
-        let frames = start(stacked, codec, false, bitrate, limits);
+        let frames = start(codec, false, bitrate, limits);
         let done = Arc::new(AtomicBool::new(false));
         let producer = {
             let frames = frames.clone();
@@ -550,7 +426,7 @@ mod tests {
                 let mut n = 0u32;
                 let mut sent = Vec::new();
                 while begin.elapsed() < WARMUP + MEASURE {
-                    let image = if stacked { scene.render(w, h) } else { scene.render_nv12(w, h) };
+                    let image = scene.render_nv12(w, h);
                     n += 1;
                     let due = begin + Duration::from_secs_f64(n as f64 / 60.0);
                     // 系统的 sleep 会晚好几毫秒（定时器合并），最后 6 毫秒空转，送帧的节奏才像屏幕刷新一样稳
@@ -635,22 +511,21 @@ mod tests {
     #[test]
     #[ignore = "要 GPU 和硬件编码器，跑一分多钟：cargo test -p p2pcli-screen -- --ignored frames_bench --nocapture --test-threads=1"]
     fn frames_bench() {
-        let cases: [(&str, usize, usize, bool, VideoCodec, u32); 5] = [
-            ("4:2:0 1920×1080 HEVC", 1920, 1080, false, VideoCodec::H265, 16_000_000),
-            ("4:2:0 2560×1440 HEVC", 2560, 1440, false, VideoCodec::H265, 30_000_000),
-            ("4:4:4 1920×3240 HEVC", 1920, 1080, true, VideoCodec::H265, 24_000_000),
-            ("4:4:4 2560×4320 HEVC", 2560, 1440, true, VideoCodec::H265, 45_000_000),
-            ("4:4:4 1920×3240 H.264", 1920, 1080, true, VideoCodec::H264, 24_000_000),
+        let cases: [(&str, usize, usize, VideoCodec, u32); 4] = [
+            ("1920×1080 HEVC", 1920, 1080, VideoCodec::H265, 16_000_000),
+            ("2560×1440 HEVC", 2560, 1440, VideoCodec::H265, 30_000_000),
+            ("3840×2160 HEVC", 3840, 2160, VideoCodec::H265, 60_000_000),
+            ("1920×1080 H.264", 1920, 1080, VideoCodec::H264, 16_000_000),
         ];
         let only = std::env::var("P2PCLI_BENCH_ONLY").ok();
         println!("| 画面 | 做法 | 帧率 | 间隔 ms 中位/p95/最大 | >20ms | 延迟 ms 中位/p95/最大 | 跳过/来源 | 平均处理 ms | 关键帧 | 来源间隔 p95/最大/>20ms | 码率 Mbps / 最大帧 KB |");
         println!("|---|---|---|---|---|---|---|---|---|---|---|");
-        for (name, w, h, stacked, codec, bitrate) in cases {
+        for (name, w, h, codec, bitrate) in cases {
             if only.as_deref().is_some_and(|o| !name.contains(o)) {
                 continue;
             }
             for limits in [SERIAL, PIPELINED] {
-                println!("{}", bench(name, w, h, stacked, codec, bitrate, limits));
+                println!("{}", bench(name, w, h, codec, bitrate, limits));
             }
         }
     }

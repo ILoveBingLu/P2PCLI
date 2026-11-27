@@ -169,12 +169,11 @@ fn pipeline_fps() {
     let cases = [
         ("4:2:0 1920×1200 H.265", 1920, 1200, false, VideoCodec::H265, none),
         ("4:2:0 2560×1600 H.265", 2560, 1600, false, VideoCodec::H265, none),
-        ("4:4:4 1920×3600 H.265", 1920, 1200, true, VideoCodec::H265, none),
-        ("4:4:4 2560×4800 H.265", 2560, 1600, true, VideoCodec::H265, none),
-        ("4:4:4 1920×3600 H.264", 1920, 1200, true, VideoCodec::H264, none),
+        ("4:4:4 1920×1200 H.265", 1920, 1200, true, VideoCodec::H265, none),
+        ("4:4:4 2560×1600 H.265", 2560, 1600, true, VideoCodec::H265, none),
         // 一帧编得比 16.7 毫秒还久、或者要帧那头有耽搁时，才看得出流水线的差别
         ("4:2:0 2560×1600 H.265，拿到帧后 5 ms 才要下一帧", 2560, 1600, false, VideoCodec::H265, Duration::from_millis(5)),
-        ("4:4:4 3840×6480 H.265", 3840, 2160, true, VideoCodec::H265, none),
+        ("4:4:4 3840×2160 H.265", 3840, 2160, true, VideoCodec::H265, none),
     ];
     let mut table = vec![
         "| 画面 | 一路 | 编码 | 帧/秒 | 帧间隔 中位/95%/最长 ms | >20 ms | 放进来到拿到 中位/95%/最长 ms | 处理 平均/最长 ms | 屏幕出/跳过 |".to_string(),

@@ -44,6 +44,8 @@ pub struct Encoder {
     pub name: String,
     /// 实际在用的格式
     pub format: VideoCodec,
+    /// 按 H.265 Main 4:4:4 编（输入是 AYUV），码流本身就是 4:4:4
+    pub chroma444: bool,
     pub width: u32,
     pub height: u32,
     fps: u32,
@@ -132,7 +134,7 @@ impl Encoder {
             return Err(last_err);
         }
         for activate in candidates(false, VideoCodec::H264)? {
-            match Self::open(&activate, None, width, height, fps, bitrate, VideoCodec::H264, full_range) {
+            match Self::open(&activate, None, width, height, fps, bitrate, VideoCodec::H264, full_range, false) {
                 Ok(mut enc) => {
                     warn!(width, height, "没有可用的硬件编码器，改用系统的软件编码器");
                     enc.name = friendly_name(&activate);
@@ -145,6 +147,28 @@ impl Encoder {
         Err(last_err)
     }
 
+    /// 真正的 4:4:4：找支持 H.265 Main 4:4:4（8 位）档次、收 AYUV 画面的硬件编码器。没有就报错，不凑合。
+    /// 4:4:4 一定是全范围
+    pub fn hevc444(manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32) -> Result<Self> {
+        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
+        let mut last_err = None;
+        for activate in candidates(true, VideoCodec::H265).unwrap_or_default() {
+            let name = friendly_name(&activate);
+            match Self::open(&activate, Some(manager), width, height, fps, bitrate, VideoCodec::H265, true, true) {
+                Ok(mut enc) => {
+                    info!(encoder = %name, width, height, fps, bitrate, "H.265 4:4:4 硬件编码器已就绪");
+                    enc.name = name;
+                    return Ok(enc);
+                }
+                Err(e) => {
+                    warn!(encoder = %name, width, height, "这个 H.265 硬件编码器编不了 4:4:4：{e:#}");
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow!("这台电脑上没有 H.265 硬件编码器")))
+    }
+
     /// 只找这一种格式的硬件编码器，一个个试
     pub fn hardware(manager: &IMFDXGIDeviceManager, width: u32, height: u32, fps: u32, bitrate: u32, codec: VideoCodec, full_range: bool) -> Result<Self> {
         unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
@@ -155,7 +179,7 @@ impl Encoder {
         let mut last_err = None;
         for activate in candidates(true, codec).unwrap_or_default() {
             let name = friendly_name(&activate);
-            match Self::open(&activate, Some(manager), width, height, fps, bitrate, codec, full_range) {
+            match Self::open(&activate, Some(manager), width, height, fps, bitrate, codec, full_range, false) {
                 Ok(mut enc) => {
                     info!(encoder = %name, width, height, fps, bitrate, "{label} 硬件编码器已就绪");
                     enc.name = name;
@@ -171,7 +195,9 @@ impl Encoder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn open(activate: &IMFActivate, manager: Option<&IMFDXGIDeviceManager>, width: u32, height: u32, fps: u32, bitrate: u32, format: VideoCodec, full_range: bool) -> Result<Self> {
+    /// chroma444：按 H.265 Main 4:4:4 开，输入是 AYUV（只用于 H.265 硬件编码器）
+    #[allow(clippy::too_many_arguments)]
+    fn open(activate: &IMFActivate, manager: Option<&IMFDXGIDeviceManager>, width: u32, height: u32, fps: u32, bitrate: u32, format: VideoCodec, full_range: bool, chroma444: bool) -> Result<Self> {
         let range = if full_range { MFNominalRange_0_255 } else { MFNominalRange_16_235 };
         let transform: IMFTransform = unsafe { activate.ActivateObject()? };
         let hardware = manager.is_some();
@@ -197,6 +223,11 @@ impl Encoder {
             set_u32(c, &CODECAPI_AVEncMPVGOPSize, 0xFFFF);
         }
 
+        let profile = match format {
+            VideoCodec::H264 => eAVEncH264VProfile_High.0 as u32,
+            VideoCodec::H265 if chroma444 => eAVEncH265VProfile_Main_444_8.0 as u32,
+            VideoCodec::H265 => eAVEncH265VProfile_Main_420_8.0 as u32,
+        };
         // 先设输出类型，再设输入类型
         let out = unsafe { MFCreateMediaType()? };
         unsafe {
@@ -207,10 +238,6 @@ impl Encoder {
             out.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1))?;
             out.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;
             out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-            let profile = match format {
-                VideoCodec::H264 => eAVEncH264VProfile_High.0 as u32,
-                VideoCodec::H265 => eAVEncH265VProfile_Main_420_8.0 as u32,
-            };
             out.SetUINT32(&MF_MT_MPEG2_PROFILE, profile)?;
             out.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
             out.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
@@ -222,7 +249,7 @@ impl Encoder {
         let input = unsafe { MFCreateMediaType()? };
         unsafe {
             input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            input.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+            input.SetGUID(&MF_MT_SUBTYPE, if chroma444 { &MFVideoFormat_AYUV } else { &MFVideoFormat_NV12 })?;
             input.SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))?;
             input.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1))?;
             input.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;
@@ -232,11 +259,16 @@ impl Encoder {
             input.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_sRGB.0 as u32)?;
             input.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, range.0 as u32)?;
             transform.SetInputType(in_id, &input, 0).context("编码器不支持这个输入格式")?;
+            // 有的编码器嘴上接受 4:4:4 的档次、实际按别的编：开完再核对一遍，不对就不用
+            if chroma444 {
+                let actual = transform.GetOutputCurrentType(out_id).ok().and_then(|t| t.GetUINT32(&MF_MT_MPEG2_PROFILE).ok());
+                anyhow::ensure!(actual == Some(profile), "编码器没按 4:4:4 档次开（实际 {actual:?}）");
+            }
         }
 
         let info = unsafe { transform.GetOutputStreamInfo(out_id)? };
         let provides_samples = info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0 as u32) != 0;
-        let out_size = info.cbSize.max(width * height * 3 / 2);
+        let out_size = info.cbSize.max(if chroma444 { width * height * 3 } else { width * height * 3 / 2 });
 
         // 异步编码器的事件单独一个线程等，阻塞着等不会占 CPU
         let waker: Waker = Arc::default();
@@ -284,6 +316,7 @@ impl Encoder {
             hardware,
             name: String::new(),
             format,
+            chroma444,
             width,
             height,
             fps,
@@ -524,4 +557,88 @@ fn staging_texture(device: &ID3D11Device, width: u32, height: u32) -> Result<ID3
     let mut tex = None;
     unsafe { device.CreateTexture2D(&desc, None, Some(&mut tex))? };
     tex.ok_or_else(|| anyhow!("建不了暂存纹理"))
+}
+
+#[cfg(test)]
+mod probe {
+    //! 看本机的硬件编码器能不能编真正的 4:4:4（不是叠成灰度图的那种）：列出能收的画面格式，
+    //! 再按 H.265 Main 4:4:4 / H.264 High 4:4:4 的档次试着开。默认不跑：
+    //! cargo test -p p2pcli-screen --lib -- --ignored probe_444 --nocapture
+    use super::*;
+
+    fn fourcc(g: &GUID) -> String {
+        let b = g.data1.to_le_bytes();
+        if b.iter().all(|c| c.is_ascii_graphic()) { String::from_utf8_lossy(&b).into_owned() } else { format!("{:08x}", g.data1) }
+    }
+
+    fn inputs(t: &IMFTransform) -> Vec<String> {
+        let mut list = Vec::new();
+        for i in 0..64 {
+            let Ok(mt) = (unsafe { t.GetInputAvailableType(0, i) }) else { break };
+            if let Ok(g) = unsafe { mt.GetGUID(&MF_MT_SUBTYPE) } {
+                list.push(fourcc(&g));
+            }
+        }
+        list
+    }
+
+    #[test]
+    #[ignore]
+    fn probe_444() {
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL).unwrap() };
+        let (device, _) = crate::win::capture::create_device().unwrap();
+        let mut token = 0u32;
+        let mut manager = None;
+        unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager).unwrap() };
+        let manager = manager.unwrap();
+        unsafe { manager.ResetDevice(&device, token).unwrap() };
+        let tries: [(VideoCodec, u32, &str); 2] = [
+            (VideoCodec::H265, eAVEncH265VProfile_Main_444_8.0 as u32, "H.265 Main 4:4:4 8 位"),
+            (VideoCodec::H264, eAVEncH264VProfile_444.0 as u32, "H.264 High 4:4:4"),
+        ];
+        for (codec, profile, label) in tries {
+            for activate in candidates(true, codec).unwrap() {
+                let name = friendly_name(&activate);
+                let t: IMFTransform = unsafe { activate.ActivateObject().unwrap() };
+                let attrs = unsafe { t.GetAttributes().unwrap() };
+                unsafe { attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1).unwrap() };
+                let _ = unsafe { t.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize) };
+                println!("== {name}（{codec:?}）能收的格式：{:?}", inputs(&t));
+                let out = unsafe { MFCreateMediaType().unwrap() };
+                unsafe {
+                    out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).unwrap();
+                    out.SetGUID(&MF_MT_SUBTYPE, &subtype(codec)).unwrap();
+                    out.SetUINT32(&MF_MT_AVG_BITRATE, 20_000_000).unwrap();
+                    out.SetUINT64(&MF_MT_FRAME_SIZE, pack(1920, 1080)).unwrap();
+                    out.SetUINT64(&MF_MT_FRAME_RATE, pack(60, 1)).unwrap();
+                    out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).unwrap();
+                    out.SetUINT32(&MF_MT_MPEG2_PROFILE, profile).unwrap();
+                }
+                match unsafe { t.SetOutputType(0, &out, 0) } {
+                    Err(e) => println!("   {label}：不接受这个输出档次（{e}）"),
+                    Ok(()) => {
+                        println!("   {label}：接受输出档次，这时能收的格式：{:?}", inputs(&t));
+                        for (sub, n) in [(MFVideoFormat_AYUV, "AYUV"), (MFVideoFormat_Y410, "Y410"), (MFVideoFormat_Y416, "Y416"), (MFVideoFormat_ARGB32, "ARGB32"), (MFVideoFormat_NV12, "NV12")] {
+                            let input = unsafe { MFCreateMediaType().unwrap() };
+                            unsafe {
+                                input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).unwrap();
+                                input.SetGUID(&MF_MT_SUBTYPE, &sub).unwrap();
+                                input.SetUINT64(&MF_MT_FRAME_SIZE, pack(1920, 1080)).unwrap();
+                                input.SetUINT64(&MF_MT_FRAME_RATE, pack(60, 1)).unwrap();
+                                input.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).unwrap();
+                            }
+                            let r = unsafe { t.SetInputType(0, &input, 0) };
+                            println!("     输入 {n}：{}", if r.is_ok() { "能收".to_string() } else { format!("不收（{}）", r.unwrap_err()) });
+                        }
+                        // 真正生效的档次（有的编码器嘴上接受、实际按 Main 编）
+                        if let Ok(cur) = unsafe { t.GetOutputCurrentType(0) } {
+                            println!("     实际输出档次：{:?}", unsafe { cur.GetUINT32(&MF_MT_MPEG2_PROFILE) });
+                        }
+                    }
+                }
+                let _ = unsafe { activate.ShutdownObject() };
+            }
+        }
+    }
 }

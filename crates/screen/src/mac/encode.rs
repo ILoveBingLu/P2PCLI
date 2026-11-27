@@ -96,11 +96,6 @@ impl Encoder {
         Self::open(width, height, fps, bitrate, VideoCodec::H265, p3, true)
     }
 
-    /// 编码的画面尺寸
-    pub(super) fn size(&self) -> (usize, usize) {
-        (self.width, self.height)
-    }
-
     /// p3：画面是按 Display P3 抓的，码流里标 P3 原色
     fn open(width: usize, height: usize, fps: u32, bitrate: u32, codec: VideoCodec, p3: bool, hw_only: bool) -> Result<Self> {
         let hevc = codec == VideoCodec::H265;
@@ -362,116 +357,39 @@ fn extract(sample: &CMSampleBuffer, codec: VideoCodec) -> Result<EncodedFrame> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
     use std::time::{Duration, Instant};
 
-    use base64::Engine as _;
     use p2pcli_core::screen::VideoCodec;
 
-    use super::super::pack::{Packer, tests::{bgra_buffer, pattern}};
+    use super::super::pack::tests::Scene;
     use super::*;
 
-    /// 从 avcC / hvcC 里取出参数集，写成 Annex B 文件时放在关键帧前面
-    fn parameter_sets(rec: &[u8], hevc: bool) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        if hevc {
-            let mut i = 23;
-            for _ in 0..rec[22] {
-                let n = u16::from_be_bytes([rec[i + 1], rec[i + 2]]) as usize;
-                i += 3;
-                for _ in 0..n {
-                    let len = u16::from_be_bytes([rec[i], rec[i + 1]]) as usize;
-                    out.push(rec[i + 2..i + 2 + len].to_vec());
-                    i += 2 + len;
-                }
-            }
-        } else {
-            let sl = u16::from_be_bytes([rec[6], rec[7]]) as usize;
-            let pl = u16::from_be_bytes([rec[9 + sl], rec[10 + sl]]) as usize;
-            out.push(rec[8..8 + sl].to_vec());
-            out.push(rec[11 + sl..11 + sl + pl].to_vec());
-        }
-        out
-    }
-
-    /// 开一个 W×3H 的硬件编码器，送几帧叠图进去。返回出来的第一个关键帧的解码配置、平均每帧（排画面 + 编码）的时间。
-    /// dump 有值时把码流写成 Annex B 文件，好拿 ffmpeg 解出来对
-    /// stacked 为假时是普通的 4:2:0（Metal 转 NV12），拿来比时间
-    fn try_stacked(w: usize, h: usize, codec: VideoCodec, frames: usize, stacked: bool, dump: Option<&str>) -> Result<(p2pcli_core::screen::VideoConfig, Duration)> {
-        let mut packer = Packer::new(false)?;
-        let coded_h = if stacked { h * 3 } else { h };
-        let mut slot = Some(Encoder::open(w, coded_h, 60, 40_000_000, codec, false, true)?);
-        let rgba = pattern(w, h);
-        // 第二帧整体挪一个像素，编码器要真的编点东西
-        let mut moved = rgba.clone();
-        moved.rotate_left(4);
-        let sources = [bgra_buffer(&rgba, w, h), bgra_buffer(&moved, w, h)];
-        let mut file = dump.map(std::fs::File::create).transpose()?;
-        if let Some(dump) = dump {
-            // 第一帧该是什么样：解码出来的亮度平面拿去和它比
-            std::fs::write(format!("{dump}.ref"), p2pcli_core::screen::pack_yuv444_stacked(&rgba, w, h))?;
-        }
-        let mut config = None;
-        let mut spent = Duration::ZERO;
-        for i in 0..frames {
-            let t = Instant::now();
-            let packed = packer.pack(&sources[i % 2], stacked)?;
-            let rx = Encoder::encode(&mut slot, &packed, unsafe { CMTime::new(i as i64, 60) }, 60, 40_000_000, i == 0, codec, false)?;
-            assert_eq!(slot.as_ref().unwrap().size(), (w, coded_h), "编码器不该被重建");
-            let Some(f) = rx.blocking_recv()?? else { continue };
-            if i > 0 {
-                spent += t.elapsed();
-            }
-            if let Some(c) = &f.config {
-                config.get_or_insert(c.clone());
-                if let Some(file) = &mut file {
-                    let rec = base64::engine::general_purpose::STANDARD.decode(&c.description)?;
-                    for p in parameter_sets(&rec, c.codec.starts_with("hvc1")) {
-                        file.write_all(&[0, 0, 0, 1])?;
-                        file.write_all(&p)?;
-                    }
-                }
-            }
-            if let Some(file) = &mut file {
-                let mut d = &f.data[..];
-                while d.len() >= 4 {
-                    let n = u32::from_be_bytes(d[..4].try_into()?) as usize;
-                    file.write_all(&[0, 0, 0, 1])?;
-                    file.write_all(&d[4..4 + n])?;
-                    d = &d[4 + n..];
-                }
-            }
-        }
-        let config = config.ok_or_else(|| anyhow!("没出关键帧"))?;
-        Ok((config, spent / (frames.max(2) - 1) as u32))
-    }
-
-    /// HEVC 1920×3240 一定要能编；别的尺寸和 H.264 只打出来看
+    /// 硬件编码器编系统给的那种 NV12 画面：出关键帧和解码配置，记一下每帧多久。
+    /// 要 GPU 和硬件编码器：cargo test -p p2pcli-screen -- --ignored nv12_encode --nocapture
     #[test]
-    #[ignore = "要 GPU 和硬件编码器：cargo test -p p2pcli-screen -- --ignored stacked_encode --nocapture"]
-    fn stacked_encode() {
-        let dump = std::env::var("P2PCLI_444_DUMP").ok();
-        let (config, per_frame) = try_stacked(1920, 1080, VideoCodec::H265, 20, true, dump.as_deref()).expect("HEVC 1920×3240 编不了");
-        println!("HEVC 1920×3240：{} {}×{}，每帧 {per_frame:?}", config.codec, config.width, config.height);
-        assert!(config.codec.starts_with("hvc1"));
-        assert_eq!((config.width, config.height), (1920, 3240));
-
-        for (codec, w, h) in [
-            (VideoCodec::H265, 1920, 1080),
-            (VideoCodec::H265, 2560, 1440),
-            (VideoCodec::H265, 3840, 2160),
-            (VideoCodec::H264, 1280, 720),
-            (VideoCodec::H264, 1920, 1080),
-            (VideoCodec::H264, 3840, 2160),
-        ] {
-            match try_stacked(w, h, codec, 20, true, None) {
-                Ok((c, per_frame)) => println!("{codec:?} {w}×{}：可以，{} {}×{}，每帧 {per_frame:?}", h * 3, c.codec, c.width, c.height),
-                Err(e) => println!("{codec:?} {w}×{}：不行，{e:#}", h * 3),
+    #[ignore = "要 GPU 和硬件编码器"]
+    fn nv12_encode() {
+        let mut scene = Scene::new();
+        for (codec, w, h) in [(VideoCodec::H265, 1920, 1080), (VideoCodec::H265, 3840, 2160), (VideoCodec::H264, 1920, 1080)] {
+            let mut slot = None;
+            let mut config = None;
+            let mut spent = Duration::ZERO;
+            for i in 0..20 {
+                let image = scene.render_nv12(w, h);
+                let t = Instant::now();
+                let rx = Encoder::encode(&mut slot, &image, unsafe { CMTime::new(i, 60) }, 60, 40_000_000, i == 0, codec, false).unwrap();
+                let Some(f) = rx.blocking_recv().unwrap().unwrap() else { continue };
+                if i > 0 {
+                    spent += t.elapsed();
+                }
+                if let Some(c) = f.config {
+                    config.get_or_insert(c);
+                }
             }
-            // 同样的画面按 4:2:0 编，比一比时间
-            if let Ok((_, per_frame)) = try_stacked(w, h, codec, 20, false, None) {
-                println!("    对照 4:2:0 {w}×{h}：每帧 {per_frame:?}");
-            }
+            let c = config.expect("没出关键帧");
+            println!("{codec:?} {w}×{h}：{} {}×{}，每帧 {:?}", c.codec, c.width, c.height, spent / 19);
+            assert_eq!((c.width, c.height), (w as u32, h as u32));
+            assert!(!c.chroma444, "Mac 只有 4:2:0");
         }
     }
 }

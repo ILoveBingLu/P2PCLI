@@ -182,7 +182,7 @@ impl ScreenCapture for FakeCapture {
                 key,
                 ts_us: 0,
                 data: vec![if key { 0x65 } else { 0x41 }; if key { 60_000 } else { 8_000 }],
-                config: key.then(|| VideoConfig { codec: "avc1.640028".into(), width: 1920, height: 1080, description: "AQ==".into(), full_range: false, primaries: Default::default(), layout: Default::default() }),
+                config: key.then(|| VideoConfig { codec: "avc1.640028".into(), width: 1920, height: 1080, description: "AQ==".into(), full_range: false, primaries: Default::default(), chroma444: false }),
             })
         })
     }
@@ -199,8 +199,7 @@ impl ScreenCapture for FakeCapture {
         // 像 Mac：要什么给什么
         let (full_range, wide, yuv444) = self.fake.color.lock().unwrap().unwrap_or_default();
         let primaries = if wide { p2pcli_core::screen::Primaries::P3 } else { Default::default() };
-        let layout = if yuv444 { p2pcli_core::screen::Layout::Yuv444Stacked } else { Default::default() };
-        p2pcli_core::screen::ColorFormat { full_range, primaries, layout }
+        p2pcli_core::screen::ColorFormat { full_range, primaries, chroma444: yuv444 }
     }
 }
 
@@ -574,21 +573,27 @@ async fn color_is_negotiated() {
     }
 }
 
-/// 4:4:4 协商：观看方能还原、又不是流畅档才请被连方用；老观看方（不认颜色标记）一律 4:2:0
+/// 4:4:4 协商：观看方能硬件解 H.265 4:4:4、用的是 H.265、又不是流畅档，才请被连方用真正的 4:4:4；
+/// 别的情况（包括老观看方）一律 4:2:0
 #[tokio::test(flavor = "multi_thread")]
 async fn yuv444_is_negotiated() {
-    use p2pcli_core::screen::{Layout, ScreenEvent};
-    for (color_tags, yuv444, quality, want) in [
-        (true, true, Quality::Balanced, Layout::Yuv444Stacked),
-        (true, true, Quality::Sharp, Layout::Yuv444Stacked),
-        (true, true, Quality::Smooth, Layout::Yuv420),
-        (true, false, Quality::Sharp, Layout::Yuv420),
-        (false, true, Quality::Sharp, Layout::Yuv420),
+    use p2pcli_core::screen::{ScreenEvent, VideoCodec};
+    let h265 = vec![VideoCodec::H265, VideoCodec::H264];
+    for (color_tags, chroma444, codecs, quality, want) in [
+        (true, true, h265.clone(), Quality::Balanced, true),
+        (true, true, h265.clone(), Quality::Sharp, true),
+        (true, true, h265.clone(), Quality::Smooth, false),
+        (true, true, vec![VideoCodec::H264], Quality::Sharp, false),
+        (true, false, h265.clone(), Quality::Sharp, false),
+        (false, true, h265.clone(), Quality::Sharp, false),
     ] {
         let fake = Arc::new(Fake::default());
         let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
-        let (_, _input, mut output) =
-            n.remote.open_screen(ScreenOpen { quality, color_tags, yuv444, ..Default::default() }).await.unwrap();
+        let (_, _input, mut output) = n
+            .remote
+            .open_screen(ScreenOpen { quality, color_tags, chroma444, codecs: codecs.clone(), ..Default::default() })
+            .await
+            .unwrap();
         let config = loop {
             match tokio::time::timeout(Duration::from_secs(5), output.next()).await.unwrap().unwrap() {
                 Some(ScreenEvent::Config(c)) => break c,
@@ -596,7 +601,7 @@ async fn yuv444_is_negotiated() {
                 None => panic!("画面没给解码配置就结束了"),
             }
         };
-        assert_eq!(config.layout, want, "color_tags={color_tags} yuv444={yuv444} quality={quality:?}");
+        assert_eq!(config.chroma444, want, "color_tags={color_tags} chroma444={chroma444} codecs={codecs:?} quality={quality:?}");
         n.shutdown().await;
     }
 }
