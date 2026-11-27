@@ -488,7 +488,8 @@ pub(crate) async fn screen_open(
         let _ = events.send(json_event(&serde_json::json!({ "t": "closed", "reason": reason })));
         let state = app.state::<AppState>();
         state.screens.lock().unwrap().remove(&screen_id);
-        release_held(&state, conn_id);
+        // 主窗口早先要断这条连接：画面关了，别的也不用了就断
+        crate::release_if_unused(&state, conn_id);
         info!(screen_id, "不再看对方画面");
     });
     Ok(ScreenOpened { screen_id, started })
@@ -660,25 +661,10 @@ pub(crate) fn window_closed(state: &AppState, label: &str) {
     state.screens.lock().unwrap().retain(|_, e| e.window != label);
 }
 
-/// 主窗口要断开这条连接时，画面还在用就先不断，等画面关了再断。
-/// 远程控制从设备进，不依赖终端标签：关掉标签、离开设备页都不影响正在看的画面
-pub(crate) fn hold_disconnect(state: &AppState, conn_id: u64) -> bool {
-    let in_use = state.screens.lock().unwrap().values().any(|e| e.conn_id == conn_id);
-    if in_use {
-        state.screen_held.lock().unwrap().insert(conn_id);
-    }
-    in_use
-}
-
-/// 一路画面结束了：这条连接主窗口早就不要了、也没有别的画面在用，就真的断开
-fn release_held(state: &AppState, conn_id: u64) {
-    if state.screens.lock().unwrap().values().any(|e| e.conn_id == conn_id) {
-        return;
-    }
-    if state.screen_held.lock().unwrap().remove(&conn_id) {
-        info!(conn_id, "画面关了，断开主窗口早先要断的连接");
-        crate::close_connection(state, conn_id);
-    }
+/// 这条连接上有没有正在看的画面。主窗口要断开时画面还在用就先不断，等画面关了再断：
+/// 远程控制从设备进，不依赖终端标签，关掉标签、离开设备页都不影响正在看的画面
+pub(crate) fn in_use(state: &AppState, conn_id: u64) -> bool {
+    state.screens.lock().unwrap().values().any(|e| e.conn_id == conn_id)
 }
 
 /// 画面窗口用哪条连接：已经在用的那条还活着就一直用它（同一台设备后来又连了新的也不换，

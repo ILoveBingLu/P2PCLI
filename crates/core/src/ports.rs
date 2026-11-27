@@ -5,7 +5,9 @@
 //! 不会变成通往它所在局域网的代理。另外能列出对方电脑上正在监听的端口和程序名，方便挑。
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -181,11 +183,28 @@ fn scan() -> Result<Vec<ListeningPort>> {
     Ok(Vec::new())
 }
 
+/// 转发用的连接从哪来：每接进一个本机连接，问它要一条活着的连接。
+/// 连接断了（网络断了、关了终端标签）由它负责重连，转发本身不用停
+pub type RemoteSource = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Arc<RemoteHost>>> + Send>> + Send + Sync>;
+
+/// 只用这一条连接：断了就连不上，不重连
+pub fn fixed_source(remote: Arc<RemoteHost>) -> RemoteSource {
+    Arc::new(move || {
+        let remote = remote.clone();
+        Box::pin(async move {
+            if remote.is_closed() { bail!("连接已断开"); }
+            Ok(remote)
+        })
+    })
+}
+
 /// 连接方：一个正在进行的转发。丢掉它就停止监听，正在转的连接也一起断掉
 pub struct Forward {
     pub remote_port: u16,
     pub local_port: u16,
     connections: Arc<AtomicUsize>,
+    /// 现在有什么问题：本机端口被占、上一次连对方没连上。好了就清掉
+    problem: Arc<Mutex<Option<String>>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -193,6 +212,11 @@ impl Forward {
     /// 开始转发对方电脑上的 remote_port。本机端口尽量和对方一样（网页里写死的地址也能用），
     /// 被占了就换一个空闲的；指定了 local_port 就只用它
     pub async fn start(remote: Arc<RemoteHost>, remote_port: u16, local_port: Option<u16>) -> Result<Forward> {
+        Self::start_via(remote.clone(), fixed_source(remote), remote_port, local_port).await
+    }
+
+    /// 和 [`Forward::start`] 一样先用 remote 试连、选本机端口；之后每个连接问 source 要连接，连接断了也能接着用
+    pub async fn start_via(remote: Arc<RemoteHost>, source: RemoteSource, remote_port: u16, local_port: Option<u16>) -> Result<Forward> {
         if remote_port == 0 { bail!("端口不对"); }
         // 本机自己：直接用 localhost，转发反而会占掉同号端口、连回自己
         if remote.is_local() { bail!("这是本机，直接在浏览器里打开 localhost 就行，不用转发"); }
@@ -212,16 +236,47 @@ impl Forward {
         let port = v4.local_addr()?.port();
         // localhost 在有的浏览器里先解析成 ::1，IPv6 上也听一下；听不了就算了
         let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, port)).await.ok();
-        let connections = Arc::new(AtomicUsize::new(0));
-        let mut tasks = vec![tokio::spawn(serve(v4, remote.clone(), remote_port, connections.clone()))];
-        if let Some(v6) = v6 { tasks.push(tokio::spawn(serve(v6, remote, remote_port, connections.clone()))); }
+        let (connections, problem) = (Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(None)));
+        let ctx = ServeCtx { source, port: remote_port, connections: connections.clone(), problem: problem.clone() };
+        let mut tasks = vec![tokio::spawn(serve(v4, ctx.clone()))];
+        if let Some(v6) = v6 { tasks.push(tokio::spawn(serve(v6, ctx))); }
         tracing::info!(remote_port, local_port = port, "开始端口转发");
-        Ok(Forward { remote_port, local_port: port, connections, tasks })
+        Ok(Forward { remote_port, local_port: port, connections, problem, tasks })
+    }
+
+    /// 记住的转发（下次打开软件自动恢复）：直接在固定的本机端口上听，不先连对方，有连接进来时才连。
+    /// 端口被别的程序占着就隔几秒再试，原因放在 [`Forward::problem`] 里
+    pub fn keep(source: RemoteSource, remote_port: u16, local_port: u16) -> Forward {
+        let (connections, problem) = (Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(None)));
+        let ctx = ServeCtx { source, port: remote_port, connections: connections.clone(), problem: problem.clone() };
+        let task = tokio::spawn(async move {
+            loop {
+                match TcpListener::bind((Ipv4Addr::LOCALHOST, local_port)).await {
+                    Ok(v4) => {
+                        *ctx.problem.lock().unwrap() = None;
+                        tracing::info!(remote_port, local_port, "恢复记住的端口转发");
+                        let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, local_port)).await.ok();
+                        let also = ctx.clone();
+                        tokio::join!(serve(v4, ctx.clone()), async move { if let Some(v6) = v6 { serve(v6, also).await } });
+                    }
+                    Err(e) => {
+                        *ctx.problem.lock().unwrap() = Some(format!("本机的 {local_port} 端口被别的程序占着（{e}），过几秒再试"));
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        });
+        Forward { remote_port, local_port, connections, problem, tasks: vec![task] }
     }
 
     /// 正在转的连接数
     pub fn connections(&self) -> usize {
         self.connections.load(Ordering::Relaxed)
+    }
+
+    /// 现在有什么问题（本机端口被占、上一次没连上对方）；没有就是 None
+    pub fn problem(&self) -> Option<String> {
+        self.problem.lock().unwrap().clone()
     }
 }
 
@@ -232,22 +287,37 @@ impl Drop for Forward {
     }
 }
 
+#[derive(Clone)]
+struct ServeCtx {
+    source: RemoteSource,
+    port: u16,
+    connections: Arc<AtomicUsize>,
+    problem: Arc<Mutex<Option<String>>>,
+}
+
 /// 每接一个连接开一条 P2P 流；监听任务被停掉时，JoinSet 一起丢掉，正在转的连接都断开
-async fn serve(listener: TcpListener, remote: Arc<RemoteHost>, port: u16, connections: Arc<AtomicUsize>) {
+async fn serve(listener: TcpListener, ctx: ServeCtx) {
     let mut running = JoinSet::new();
     loop {
         tokio::select! {
             accepted = listener.accept() => {
                 let Ok((tcp, _)) = accepted else { continue };
                 let _ = tcp.set_nodelay(true);
-                let (remote, connections) = (remote.clone(), connections.clone());
+                let ctx = ctx.clone();
                 running.spawn(async move {
-                    connections.fetch_add(1, Ordering::Relaxed);
-                    match remote.open_port(port).await {
-                        Ok(tunnel) => if let Err(e) = tunnel.pipe(tcp).await { tracing::debug!(port, "转发的连接断开：{e:#}"); },
-                        Err(e) => tracing::debug!(port, "转发时连不上对方：{e:#}"),
+                    ctx.connections.fetch_add(1, Ordering::Relaxed);
+                    let opened = async { (ctx.source)().await?.open_port(ctx.port).await }.await;
+                    match opened {
+                        Ok(tunnel) => {
+                            *ctx.problem.lock().unwrap() = None;
+                            if let Err(e) = tunnel.pipe(tcp).await { tracing::debug!(port = ctx.port, "转发的连接断开：{e:#}"); }
+                        }
+                        Err(e) => {
+                            tracing::debug!(port = ctx.port, "转发时连不上对方：{e:#}");
+                            *ctx.problem.lock().unwrap() = Some(format!("{e:#}"));
+                        }
                     }
-                    connections.fetch_sub(1, Ordering::Relaxed);
+                    ctx.connections.fetch_sub(1, Ordering::Relaxed);
                 });
             }
             // 顺手收掉已经结束的

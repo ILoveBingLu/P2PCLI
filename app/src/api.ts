@@ -209,11 +209,15 @@ export interface LspOpened { lsp_id: number; server: string; root: string }
 
 /** 对方电脑上正在监听的端口 */
 export interface ListeningPort { port: number; process?: string; pid?: number }
-/** 一个正在进行的端口转发：对方的 remote_port 接到了本机的 local_port */
-export interface ForwardView { id: number; conn_id: number; remote_port: number; local_port: number; connections: number }
+/** 一个正在进行的端口转发：对方的 remote_port 接到了本机的 local_port。按设备记，关标签、断网都不停；
+ * saved 是记住了（本机端口固定，下次打开软件自动恢复）；problem 是本机端口被占、上次没连上对方这类问题 */
+export interface ForwardView {
+  id: number; endpoint_id: string; name: string; remote_port: number; local_port: number; connections: number;
+  saved: boolean; problem: string | null;
+}
 export type ProxyKind = "http" | "socks5";
 /** 反向端口转发：本机的 target 接到对方电脑的 127.0.0.1:remote_port；proxy 有值时是借网 */
-export interface ReverseView { id: number; conn_id: number; remote_port: number; target: string; proxy: ProxyKind | null; connections: number }
+export interface ReverseView { id: number; conn_id: number; endpoint_id: string; remote_port: number; target: string; proxy: ProxyKind | null; connections: number }
 export type LspEventView = { kind: "message"; message: string } | { kind: "closed"; reason: string | null };
 
 export interface OpenedTerminal { term_id: number; session_id: string }
@@ -690,7 +694,10 @@ export const api = {
   editorConnection: (endpointId: string) => invoke<number | null>("editor_connection", { endpointId }),
   listPorts: (connId: number) => invoke<ListeningPort[]>("list_ports", { connId }),
   /** 同一台设备的同一个端口已经在转发时返回已有的那个 */
-  forwardPort: (connId: number, remotePort: number, localPort?: number) => invoke<ForwardView>("forward_port", { connId, remotePort, localPort: localPort ?? null }),
+  forwardPort: (connId: number, remotePort: number, localPort?: number, keep?: boolean) =>
+    invoke<ForwardView>("forward_port", { connId, remotePort, localPort: localPort ?? null, keep: keep ?? null }),
+  /** 记住（或不再记住）：记住的本机端口固定，下次打开软件自动恢复 */
+  keepForward: (id: number, keep: boolean) => invoke<ForwardView>("keep_forward", { id, keep }),
   stopForward: (id: number) => invoke<void>("stop_forward", { id }),
   portForwards: () => invoke<ForwardView[]>("port_forwards"),
   /** SSH：~/.ssh/config 里有没有 Include 了 P2PCLI 维护的 p2pcli_hosts */

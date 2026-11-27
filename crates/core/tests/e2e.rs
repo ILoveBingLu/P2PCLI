@@ -2024,6 +2024,86 @@ async fn port_forward_over_connection() {
 }
 
 
+/// 记住的端口转发：固定本机端口，端口被占时等着；连接断了，下一个连接进来时自己重连
+#[tokio::test]
+async fn kept_forward_reconnects() {
+    use p2pcli_core::ports::{Forward, RemoteSource};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let delegate = TestDelegate::new();
+    delegate.set(Decision::Allow { trust: false });
+    let host = Node::start(NodeConfig { data_dir: temp_dir("kf-host"), offline: true, ..Default::default() }, delegate).await.unwrap();
+    host.host.set_password("abc234");
+    let guest = Node::start(NodeConfig { data_dir: temp_dir("kf-guest"), offline: true, ..Default::default() }, TestDelegate::new()).await.unwrap();
+
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = server.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = server.accept().await {
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 64 * 1024];
+                while let Ok(n) = s.read(&mut buf).await { if n == 0 || s.write_all(&buf[..n]).await.is_err() { break; } }
+            });
+        }
+    });
+
+    // 连接从这里拿：现有的还活着就用，断了就重新连，记下连了几次
+    let current: Arc<std::sync::Mutex<Option<Arc<p2pcli_core::client::RemoteHost>>>> = Default::default();
+    let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let source: RemoteSource = {
+        let (guest, addr, current, dials) = (guest.clone(), local_addr(&host), current.clone(), dials.clone());
+        Arc::new(move || {
+            let (guest, addr, current, dials) = (guest.clone(), addr.clone(), current.clone(), dials.clone());
+            Box::pin(async move {
+                if let Some(r) = current.lock().unwrap().clone().filter(|r| !r.is_closed()) { return Ok(r); }
+                dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let r = Arc::new(guest.connect_addr(addr, Some("abc234".into())).await.map_err(|e| anyhow::anyhow!("{e:?}"))?);
+                *current.lock().unwrap() = Some(r.clone());
+                Ok(r)
+            })
+        })
+    };
+
+    // 本机端口先被别的程序占着：转发等着，说明原因
+    let blocker = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let local_port = blocker.local_addr().unwrap().port();
+    let forward = Forward::keep(source, port, local_port);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(forward.problem().is_some_and(|p| p.contains("占着")), "{:?}", forward.problem());
+    assert_eq!(dials.load(std::sync::atomic::Ordering::SeqCst), 0, "没人用之前不该去连对方");
+    drop(blocker);
+
+    let echo = async |payload: &[u8]| {
+        let mut c = None;
+        for _ in 0..100 {
+            if let Ok(s) = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await { c = Some(s); break; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let mut c = c.expect("本机端口一直没开始听");
+        let (mut r, mut w) = c.split();
+        let send = async { w.write_all(payload).await.unwrap(); w.shutdown().await.unwrap(); };
+        let mut back = Vec::new();
+        let recv = async { r.read_to_end(&mut back).await.unwrap(); };
+        tokio::time::timeout(Duration::from_secs(20), async { tokio::join!(send, recv) }).await.unwrap();
+        assert_eq!(back, payload);
+    };
+    echo(b"first").await;
+    assert!(forward.problem().is_none(), "{:?}", forward.problem());
+    assert_eq!(dials.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    // 连接断了（关了标签、网络断了）：转发还在，下一个连接进来时重连
+    current.lock().unwrap().clone().unwrap().close();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    echo("第二次".as_bytes()).await;
+    assert_eq!(dials.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    drop(forward);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.is_err(), "停止以后本机端口应该关掉");
+    if let Some(r) = current.lock().unwrap().take() { r.close(); }
+    guest.shutdown().await;
+    host.shutdown().await;
+}
+
 /// 反向端口转发：本机的服务（这里是个回显服务）接到对方电脑的 127.0.0.1 上；借网时对方新开的命令带上代理环境变量
 #[tokio::test]
 async fn reverse_forward_and_proxy() {

@@ -407,7 +407,7 @@ const previewCommits = [
   { hash: "b".repeat(40), short: "9f8e7d6", author: "demo", time: Math.floor(Date.now() / 1000) - 86400 * 2, subject: "初始化项目" },
 ];
 function previewUnder(path: string, dir: string) { return path === dir || path.startsWith(dir + "/"); }
-const previewForwards: { id: number; conn_id: number; remote_port: number; local_port: number; connections: number }[] = [];
+const previewForwards: { id: number; endpoint_id: string; name: string; remote_port: number; local_port: number; connections: number; saved: boolean; problem: string | null }[] = [];
 let previewForwardSeq = 0;
 // 假的语言服务：Rust 和 TypeScript 文件有补全、悬停、报错、跳转，其他语言当成对方没装
 const previewLsps = new Map<number, (message: any) => void>();
@@ -992,20 +992,31 @@ mockIPC(
         return [{ port: 5173, process: "node", pid: 4242 }, { port: 8000, process: "python3", pid: 4300 }, { port: 5432, process: "postgres", pid: 88 }];
       case "forward_port": {
         await new Promise((r) => setTimeout(r, 300));
-        const existing = previewForwards.find((f) => f.conn_id === args.connId && f.remote_port === args.remotePort);
+        // 预览里连接 2 是 Windows 那台，别的都当成 Mac mini
+        const endpoint = Number(args.connId) === 2 ? "windows-device-01" : "x";
+        const existing = previewForwards.find((f) => f.endpoint_id === endpoint && f.remote_port === args.remotePort);
         if (existing) return existing;
         if (args.remotePort === 9) throw new Error("对方电脑上这个端口没有服务在监听");
         // 本机 5173 假装被占用了，换成 5174
-        const local = args.remotePort === 5173 ? 5174 : Number(args.remotePort);
-        const forward = { id: ++previewForwardSeq, conn_id: Number(args.connId), remote_port: Number(args.remotePort), local_port: local, connections: 0 };
+        const local = args.localPort ? Number(args.localPort) : args.remotePort === 5173 ? 5174 : Number(args.remotePort);
+        const forward = { id: ++previewForwardSeq, endpoint_id: endpoint, name: endpoint === "x" ? "工作室 Mac mini" : "Windows", remote_port: Number(args.remotePort), local_port: local,
+          connections: 0, saved: !!args.keep, problem: null };
         previewForwards.push(forward);
         return forward;
+      }
+      case "keep_forward": {
+        const f = previewForwards.find((f) => f.id === args.id);
+        if (!f) throw new Error("这个转发已经停了");
+        f.saved = !!args.keep;
+        return f;
       }
       case "stop_forward":
         previewForwards.splice(previewForwards.findIndex((f) => f.id === args.id), 1);
         return;
       case "port_forwards":
-        return previewForwards.map((f) => ({ ...f, connections: f.remote_port === 5173 ? 3 : 0 }));
+        // s=forward-problem：演示本机端口被占时的提示
+        return previewForwards.map((f) => ({ ...f, connections: f.remote_port === 5173 ? 3 : 0,
+          problem: s === "forward-problem" && f.remote_port === 8000 ? "本机的 8000 端口被别的程序占着（Address already in use），过几秒再试" : null }));
       case "open_forward":
       case "open_localhost":
         console.log("[preview] 打开浏览器", cmd, JSON.stringify(args));

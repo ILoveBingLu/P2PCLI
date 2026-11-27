@@ -253,7 +253,7 @@ export default function App() {
     await api.openEditorWindow(tab.info.endpoint_id, tab.info.name, cwd || dirName(path), { path, line: link.line ?? 1, col: link.col ?? 1 })
       .catch((e) => toast.error(tr(String(e))));
   };
-  // 端口转发：后端按连接记，这里只拿来显示；有转发时隔几秒刷新一下连接数，连接断了也会跟着消失
+  // 端口转发：后端按设备记（关标签、断网都不停），这里只拿来显示；有转发时隔几秒刷新一下连接数
   const [forwards, setForwards] = useState<ForwardView[]>([]);
   // 反向转发（本机的端口接到对方电脑上，借网也是它）
   const [reverses, setReverses] = useState<ReverseView[]>([]);
@@ -1072,8 +1072,8 @@ export default function App() {
                   </Button>
                   {!isLocalTab(activeTab) && (
                     <PortForwards connId={activeTab.connId} deviceName={activeTab.info.name}
-                      forwards={forwards.filter((f) => f.conn_id === activeTab.connId)}
-                      reverses={reverses.filter((f) => f.conn_id === activeTab.connId)} onChanged={refreshForwards} />
+                      forwards={forwards.filter((f) => f.endpoint_id === activeTab.info.endpoint_id)}
+                      reverses={reverses.filter((f) => f.endpoint_id === activeTab.info.endpoint_id)} onChanged={refreshForwards} />
                   )}
                 </div>
               )}

@@ -1337,5 +1337,17 @@
   "已在 {{editor}} 里打开 {{alias}}:{{path}}。第一次连会让你确认对方的主机密钥": "Opened {{alias}}:{{path}} in {{editor}}. The first connection asks you to confirm the other computer's host key",
   "用 VS Code 或 Cursor 的 Remote-SSH 连过去，SSH 走 P2PCLI 的加密通道，不用对方开公网端口。对方是 Mac、Linux 时不用开远程登录、不用密码（两边都要是新版 P2PCLI）；对方是 Windows 时要装好 OpenSSH 服务器。本机编辑器要装 Remote-SSH 扩展。": "Connects with VS Code or Cursor Remote-SSH. SSH runs through P2PCLI's encrypted channel, so the other computer doesn't need a public port. A Mac or Linux computer doesn't need Remote Login or a password (both sides need the new P2PCLI); a Windows computer needs OpenSSH Server. The local editor needs the Remote-SSH extension.",
   "对方电脑没有开 SSH 服务：在对方电脑上装好「OpenSSH 服务器」（设置 → 系统 → 可选功能），并启动 sshd 服务": "The other computer has no SSH service. Install OpenSSH Server there (Settings → System → Optional features) and start the sshd service",
-  "对方电脑上的 SSH 服务起不来，也没有开系统的远程登录": "The SSH service on the other computer couldn't start, and Remote Login isn't on either"
+  "对方电脑上的 SSH 服务起不来，也没有开系统的远程登录": "The SSH service on the other computer couldn't start, and Remote Login isn't on either",
+  "正在转发这台设备上的 {{count}} 个端口，关了终端标签也不停，右键「端口转发…」可以管理": "Forwarding {{count}} port(s) from this device. Closing the terminal tab doesn't stop them; right-click → Port forwarding… to manage",
+  "端口转发中": "Forwarding ports",
+  "本机端口（可不填）": "Local port (optional)",
+  "转发到本机的端口": "Local port to forward to",
+  "已记住：下次打开 P2PCLI 会自动在 localhost:{{port}} 上恢复这个转发": "Remembered: next time P2PCLI opens, this forward comes back on localhost:{{port}}",
+  "不再记住这个转发，关掉 P2PCLI 以后就不恢复了": "No longer remembered; it won't come back after P2PCLI quits",
+  "关了终端标签、网络断了都不停，有连接进来时自动重连。点图钉记住，下次打开 P2PCLI 自动恢复。": "Keeps running when you close the terminal tab or the network drops, and reconnects on the next connection. Click the pin to remember it so it comes back next time P2PCLI opens.",
+  "不再记住": "Forget",
+  "记住这个转发": "Remember this forward",
+  "已记住：下次打开 P2PCLI 自动恢复（本机端口固定为 {{port}}）。点一下不再记住": "Remembered: comes back next time P2PCLI opens (local port fixed at {{port}}). Click to forget",
+  "记住这个转发：本机端口固定为 {{port}}，下次打开 P2PCLI 自动恢复": "Remember this forward: local port fixed at {{port}}, comes back next time P2PCLI opens",
+  "停止转发（也不再记住）": "Stop forwarding (and forget it)"
 }

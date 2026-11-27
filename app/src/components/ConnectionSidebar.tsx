@@ -163,19 +163,17 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   // 借网、端口转发：要一条连上的连接。没连上就先连，连上以后接着做
   type DeviceAction = "lend" | "ports" | "editor";
   const pendingAction = useRef<{ endpointId: string; name: string; kind: DeviceAction; at: number } | null>(null);
-  const [portsTarget, setPortsTarget] = useState<{ connId: number; name: string } | null>(null);
+  const [portsTarget, setPortsTarget] = useState<{ connId: number; endpointId: string; name: string } | null>(null);
   const [editorTarget, setEditorTarget] = useState<{ connId: number; name: string } | null>(null);
   /** 这台设备已经连上的连接（正在看它的会话页，或者开着的终端标签） */
   const openTarget = (endpointId: string): SessionTarget | undefined =>
     sessionTarget?.info.endpoint_id === endpointId ? sessionTarget : tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.state === "open");
-  /** 正在把本机代理借给这台设备的那个反向转发（这台设备的任意一条连接上） */
-  const lendingFor = (endpointId: string) => {
-    const conns = new Set(tabs.filter((tab) => tab.info.endpoint_id === endpointId).map((tab) => tab.connId));
-    if (sessionTarget?.info.endpoint_id === endpointId) conns.add(sessionTarget.connId);
-    return reverses.find((r) => r.proxy && conns.has(r.conn_id));
-  };
+  /** 正在把本机代理借给这台设备的那个反向转发（关了标签也还在借的也算） */
+  const lendingFor = (endpointId: string) => reverses.find((r) => r.proxy && r.endpoint_id === endpointId);
+  /** 这台设备上正在转发的端口（关了标签也不停） */
+  const forwardsFor = (endpointId: string) => forwards.filter((f) => f.endpoint_id === endpointId);
   const runAction = (kind: DeviceAction, target: SessionTarget, name: string) => {
-    if (kind === "ports") return setPortsTarget({ connId: target.connId, name });
+    if (kind === "ports") return setPortsTarget({ connId: target.connId, endpointId: target.info.endpoint_id, name });
     if (kind === "editor") return setEditorTarget({ connId: target.connId, name });
     void lendProxy(target.connId, name).then(onForwardsChanged);
   };
@@ -292,8 +290,8 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       {portsTarget && (
         <PortForwardsDialog open onOpenChange={(next) => !next && setPortsTarget(null)}
           connId={portsTarget.connId} deviceName={portsTarget.name}
-          forwards={forwards.filter((f) => f.conn_id === portsTarget.connId)}
-          reverses={reverses.filter((f) => f.conn_id === portsTarget.connId)}
+          forwards={forwardsFor(portsTarget.endpointId)}
+          reverses={reverses.filter((f) => f.endpoint_id === portsTarget.endpointId)}
           onChanged={onForwardsChanged} />
       )}
       {editorTarget && (
@@ -435,6 +433,11 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
                         {lanOnline.has(device.endpoint_id) && (
                           <span className="lan-mark" title={t("在同一个局域网里，连接不经过牵线服务器")}>
                             <House aria-hidden="true" /><span className="sr-only">{t("局域网")}</span>
+                          </span>
+                        )}
+                        {forwardsFor(device.endpoint_id).length > 0 && (
+                          <span className="lan-mark lend-mark" title={t("正在转发这台设备上的 {{count}} 个端口，关了终端标签也不停，右键「端口转发…」可以管理", { count: forwardsFor(device.endpoint_id).length })}>
+                            <Cable aria-hidden="true" /><span className="sr-only">{t("端口转发中")}</span>
                           </span>
                         )}
                         {lendingFor(device.endpoint_id) && (

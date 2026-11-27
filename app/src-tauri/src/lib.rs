@@ -4,6 +4,7 @@ mod ai_hint;
 mod cli;
 mod links;
 mod permissions;
+mod forwards;
 mod screen;
 mod ssh;
 #[cfg(desktop)]
@@ -293,18 +294,18 @@ struct AppState {
     terms: Mutex<HashMap<u64, mpsc::UnboundedSender<TermCmd>>>,
     /// 编辑器开着的语言服务：发给它的消息走这个通道，丢掉通道它就结束
     lsps: Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>,
-    /// 端口转发：编号 → (连接编号, 转发)。丢掉就停止；连接断了一起清掉
-    forwards: Mutex<HashMap<u64, (u64, p2pcli_core::ports::Forward)>>,
-    /// 反向端口转发（本机的端口接到对方电脑上，借网也是它）：编号 → (连接, 转发)
-    reverses: Mutex<HashMap<u64, (u64, p2pcli_core::reverse::ReverseForward)>>,
+    /// 端口转发：编号 → 转发。按设备记，关标签、断网都不停，丢掉才停（见 forwards.rs）
+    forwards: Mutex<HashMap<u64, forwards::Entry>>,
+    /// 反向端口转发（本机的端口接到对方电脑上，借网也是它）：编号 → (连接, 设备公钥, 转发)。连接断了一起清掉
+    reverses: Mutex<HashMap<u64, (u64, String, p2pcli_core::reverse::ReverseForward)>>,
     /// 代码编辑器窗口：窗口标签 → 它是哪台设备的、还没取走的请求（打开哪个文件、换根目录）
     editor_windows: Mutex<HashMap<String, EditorWindow>>,
     /// 正在看的远程画面：编号 → 发给对方的消息（键鼠、确认）。丢掉就停
     screens: Mutex<screen::ScreenSenders>,
     /// 远程画面窗口：窗口标签 → 哪台设备
     screen_windows: Mutex<screen::ScreenWindows>,
-    /// 主窗口已经不要、但画面还在用的连接：画面关了再断
-    screen_held: Mutex<std::collections::HashSet<u64>>,
+    /// 主窗口已经不要、但画面、端口转发、反向转发还在用的连接：都不用了再断（见 release_if_unused）
+    held: Mutex<std::collections::HashSet<u64>>,
     next: AtomicU64,
     /// 本机自己那条常驻连接的编号：启动时建好，一直在 remotes 里，侧边栏的“本机”用它开终端、读会话
     local_conn: AtomicU64,
@@ -1009,9 +1010,11 @@ async fn connect(
     let watch = remote.clone();
     tauri::async_runtime::spawn(async move {
         let reason = watch.closed().await;
-        app.state::<AppState>().remotes.lock().unwrap().remove(&conn_id);
-        app.state::<AppState>().forwards.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
-        app.state::<AppState>().reverses.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
+        let state = app.state::<AppState>();
+        state.remotes.lock().unwrap().remove(&conn_id);
+        state.held.lock().unwrap().remove(&conn_id);
+        // 端口转发不跟着连接走（下一个连接进来时重连）；反向转发挂在这条连接上，一起没了
+        state.reverses.lock().unwrap().retain(|_, (conn, _, _)| *conn != conn_id);
         let _ = app.emit(
             "remote-closed",
             serde_json::json!({ "conn_id": conn_id, "reason": reason }),
@@ -1032,19 +1035,30 @@ fn disconnect(state: State<'_, AppState>, conn_id: u64) {
     if conn_id == state.local_conn.load(Ordering::Relaxed) {
         return;
     }
-    // 远程画面还开着：等画面关了再断
-    if screen::hold_disconnect(&state, conn_id) {
+    // 远程画面、端口转发、反向转发（借网）还在用：先留着，都不用了再断
+    state.held.lock().unwrap().insert(conn_id);
+    release_if_unused(&state, conn_id);
+}
+
+/// 主窗口不要了的连接：画面、端口转发、反向转发都不用了就断开
+pub(crate) fn release_if_unused(state: &AppState, conn_id: u64) {
+    if !state.held.lock().unwrap().contains(&conn_id) {
         return;
     }
-    close_connection(&state, conn_id);
+    let reversing = state.reverses.lock().unwrap().values().any(|(c, _, _)| *c == conn_id);
+    if screen::in_use(state, conn_id) || reversing || forwards::needs(state, conn_id) {
+        return;
+    }
+    state.held.lock().unwrap().remove(&conn_id);
+    info!(conn_id, "这条连接没人用了，断开");
+    close_connection(state, conn_id);
 }
 
 fn close_connection(state: &AppState, conn_id: u64) {
     if let Some(r) = state.remotes.lock().unwrap().remove(&conn_id) {
         r.close();
     }
-    state.forwards.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
-    state.reverses.lock().unwrap().retain(|_, (conn, _)| *conn != conn_id);
+    state.reverses.lock().unwrap().retain(|_, (conn, _, _)| *conn != conn_id);
 }
 
 /// 这条连接的对方是谁：版本、系统等（远程画面窗口的连接详情用）
@@ -1219,56 +1233,17 @@ fn editor_connection(state: State<'_, AppState>, endpoint_id: String) -> Option<
         .max()
 }
 
-#[derive(Serialize)]
-struct ForwardView {
-    id: u64,
-    conn_id: u64,
-    remote_port: u16,
-    local_port: u16,
-    /// 正在转的连接数
-    connections: usize,
-}
-
-fn forward_view(id: u64, conn_id: u64, f: &p2pcli_core::ports::Forward) -> ForwardView {
-    ForwardView { id, conn_id, remote_port: f.remote_port, local_port: f.local_port, connections: f.connections() }
-}
-
 /// 对方电脑上正在监听的端口
 #[tauri::command]
 async fn list_ports(state: State<'_, AppState>, conn_id: u64) -> Result<Vec<p2pcli_core::ports::ListeningPort>, String> {
     state.remote(conn_id)?.list_ports().await.map_err(|e| format!("{e:#}"))
 }
 
-/// 把对方电脑上的端口接到本机；同一台设备的同一个端口已经在转发就直接用它
-#[tauri::command]
-async fn forward_port(state: State<'_, AppState>, conn_id: u64, remote_port: u16, local_port: Option<u16>) -> Result<ForwardView, String> {
-    if let Some((id, (_, f))) = state.forwards.lock().unwrap().iter().find(|(_, (c, f))| *c == conn_id && f.remote_port == remote_port) {
-        return Ok(forward_view(*id, conn_id, f));
-    }
-    let remote = state.remote(conn_id)?;
-    let forward = p2pcli_core::ports::Forward::start(remote, remote_port, local_port).await.map_err(|e| format!("{e:#}"))?;
-    let id = state.next();
-    let view = forward_view(id, conn_id, &forward);
-    state.forwards.lock().unwrap().insert(id, (conn_id, forward));
-    Ok(view)
-}
-
-#[tauri::command]
-fn stop_forward(state: State<'_, AppState>, id: u64) {
-    state.forwards.lock().unwrap().remove(&id);
-}
-
-#[tauri::command]
-fn port_forwards(state: State<'_, AppState>) -> Vec<ForwardView> {
-    let mut list: Vec<_> = state.forwards.lock().unwrap().iter().map(|(id, (conn, f))| forward_view(*id, *conn, f)).collect();
-    list.sort_by_key(|f| f.id);
-    list
-}
-
 #[derive(Serialize)]
 struct ReverseView {
     id: u64,
     conn_id: u64,
+    endpoint_id: String,
     /// 对方电脑上监听的端口（127.0.0.1）
     remote_port: u16,
     /// 本机的目标，主机:端口
@@ -1278,8 +1253,8 @@ struct ReverseView {
     connections: usize,
 }
 
-fn reverse_view(id: u64, conn_id: u64, f: &p2pcli_core::reverse::ReverseForward) -> ReverseView {
-    ReverseView { id, conn_id, remote_port: f.remote_port, target: f.target.clone(), proxy: f.proxy, connections: f.connections() }
+fn reverse_view(id: u64, conn_id: u64, endpoint_id: &str, f: &p2pcli_core::reverse::ReverseForward) -> ReverseView {
+    ReverseView { id, conn_id, endpoint_id: endpoint_id.to_string(), remote_port: f.remote_port, target: f.target.clone(), proxy: f.proxy, connections: f.connections() }
 }
 
 #[derive(Serialize)]
@@ -1304,38 +1279,42 @@ fn reverse_info(state: State<'_, AppState>, conn_id: u64) -> Result<ReverseInfo,
 #[tauri::command]
 async fn reverse_forward(state: State<'_, AppState>, conn_id: u64, remote_port: Option<u16>, target: String, proxy: Option<p2pcli_core::reverse::ProxyKind>) -> Result<ReverseView, String> {
     if proxy.is_some()
-        && let Some((id, (_, f))) = state.reverses.lock().unwrap().iter().find(|(_, (c, f))| *c == conn_id && f.proxy.is_some())
+        && let Some((id, (_, endpoint, f))) = state.reverses.lock().unwrap().iter().find(|(_, (c, _, f))| *c == conn_id && f.proxy.is_some())
     {
-        return Ok(reverse_view(*id, conn_id, f));
+        return Ok(reverse_view(*id, conn_id, endpoint, f));
     }
     let remote = state.remote(conn_id)?;
+    let endpoint_id = remote.info.endpoint_id.clone();
     let forward = p2pcli_core::reverse::ReverseForward::start(remote, remote_port.unwrap_or(0), target, proxy).await.map_err(|e| format!("{e:#}"))?;
     let id = state.next();
-    let view = reverse_view(id, conn_id, &forward);
-    state.reverses.lock().unwrap().insert(id, (conn_id, forward));
+    let view = reverse_view(id, conn_id, &endpoint_id, &forward);
+    state.reverses.lock().unwrap().insert(id, (conn_id, endpoint_id, forward));
     Ok(view)
 }
 
 #[tauri::command]
 fn stop_reverse(state: State<'_, AppState>, id: u64) {
-    state.reverses.lock().unwrap().remove(&id);
+    let stopped = state.reverses.lock().unwrap().remove(&id);
+    if let Some((conn_id, _, forward)) = stopped {
+        drop(forward);
+        release_if_unused(&state, conn_id);
+    }
 }
 
 /// 正在进行的反向转发；对方那边停了的顺手清掉
 #[tauri::command]
 fn reverse_forwards(state: State<'_, AppState>) -> Vec<ReverseView> {
-    let mut map = state.reverses.lock().unwrap();
-    map.retain(|_, (_, f)| !f.is_finished());
-    let mut list: Vec<_> = map.iter().map(|(id, (conn, f))| reverse_view(*id, *conn, f)).collect();
+    let (mut list, ended) = {
+        let mut map = state.reverses.lock().unwrap();
+        let ended: Vec<u64> = map.values().filter(|(_, _, f)| f.is_finished()).map(|(c, _, _)| *c).collect();
+        map.retain(|_, (_, _, f)| !f.is_finished());
+        (map.iter().map(|(id, (conn, endpoint, f))| reverse_view(*id, *conn, endpoint, f)).collect::<Vec<_>>(), ended)
+    };
+    for conn_id in ended {
+        release_if_unused(&state, conn_id);
+    }
     list.sort_by_key(|f| f.id);
     list
-}
-
-/// 在浏览器里打开转发过来的端口；地址只能是本机的转发端口，界面只给路径
-#[tauri::command]
-fn open_forward(state: State<'_, AppState>, id: u64, path: String, https: Option<bool>) -> Result<(), String> {
-    let port = state.forwards.lock().unwrap().get(&id).map(|(_, f)| f.local_port).ok_or("这个转发已经停了")?;
-    links::open_localhost(port, &path, https.unwrap_or(false))
 }
 
 /// 本机自己的服务（终端里点了本机的 localhost 地址）：直接打开，不用转发
@@ -1793,7 +1772,7 @@ pub fn run() {
                 editor_windows: Mutex::new(HashMap::new()),
                 screens: Mutex::new(HashMap::new()),
                 screen_windows: Mutex::new(HashMap::new()),
-                screen_held: Mutex::new(Default::default()),
+                held: Mutex::new(Default::default()),
                 next: AtomicU64::new(1),
                 local_conn: AtomicU64::new(0),
             });
@@ -1807,6 +1786,9 @@ pub fn run() {
                 state.remotes.lock().unwrap().insert(conn_id, Arc::new(local));
                 state.local_conn.store(conn_id, Ordering::Relaxed);
             }
+
+            // 记住的端口转发：本机端口先听起来，有连接进来再连对方
+            forwards::restore(app.handle());
 
             #[cfg(desktop)]
             update::auto_install_for_test(app.handle());
@@ -2048,10 +2030,11 @@ pub fn run() {
             editor_take_requests,
             editor_connection,
             list_ports,
-            forward_port,
-            stop_forward,
-            port_forwards,
-            open_forward,
+            forwards::forward_port,
+            forwards::keep_forward,
+            forwards::stop_forward,
+            forwards::port_forwards,
+            forwards::open_forward,
             reverse_info,
             reverse_forward,
             stop_reverse,

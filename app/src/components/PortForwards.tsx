@@ -2,7 +2,7 @@
 // 反过来，把本机的端口接到对方电脑上（反向转发），借网给没有代理的对方也是它
 import { useEffect, useState, type ReactNode } from "react";
 import { Popover } from "@heroui/react";
-import { Cable, Copy, ExternalLink, Globe, LoaderCircle, RefreshCw, Square } from "lucide-react";
+import { Cable, Copy, ExternalLink, Globe, LoaderCircle, Pin, PinOff, RefreshCw, Square, TriangleAlert } from "lucide-react";
 import { api, pathLabel, type ForwardView, type ListeningPort, type PathInfo, type ProxyKind, type ReverseView } from "../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,6 +72,8 @@ function PortForwardsPanel({ active, heading, connId, deviceName, forwards, reve
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
   const [manual, setManual] = useState("");
+  // 手动转发时可以指定本机端口（不填就和对方一样，被占了换一个）
+  const [manualLocal, setManualLocal] = useState("");
   // 反向转发：对方支不支持、设置里的代理（借网默认用它）
   const [reverseInfo, setReverseInfo] = useState<{ supported: boolean; proxy: string | null } | null>(null);
   const [proxyText, setProxyText] = useState("");
@@ -122,13 +124,13 @@ function PortForwardsPanel({ active, heading, connId, deviceName, forwards, reve
     return () => window.clearInterval(timer);
   }, [active, connId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const start = async (port: number, openAfter: boolean) => {
+  const start = async (port: number, openAfter: boolean, localPort?: number) => {
     setBusy(port);
     try {
-      const forward = await api.forwardPort(connId, port);
+      const forward = await api.forwardPort(connId, port, localPort);
       onChanged();
       warnIfRelay();
-      if (forward.local_port !== port) toast.notice(t("本机的 {{port}} 端口被占用了，改用 {{local}}", { port, local: forward.local_port }));
+      if (forward.local_port !== (localPort ?? port)) toast.notice(t("本机的 {{port}} 端口被占用了，改用 {{local}}", { port, local: forward.local_port }));
       if (openAfter) await api.openForward(forward.id);
     } catch (e) {
       toast.error(tr(String(e)));
@@ -139,10 +141,21 @@ function PortForwardsPanel({ active, heading, connId, deviceName, forwards, reve
 
   const submitManual = () => {
     const port = Number(manual.trim());
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return void toast.error(t("端口号是 1 到 65535 之间的数字"));
+    const local = manualLocal.trim() ? Number(manualLocal.trim()) : undefined;
+    const bad = (n: number) => !Number.isInteger(n) || n < 1 || n > 65535;
+    if (bad(port) || (local !== undefined && bad(local))) return void toast.error(t("端口号是 1 到 65535 之间的数字"));
     setManual("");
-    void start(port, false);
+    setManualLocal("");
+    void start(port, false, local);
   };
+
+  /** 记住：本机端口固定成现在这个，下次打开 P2PCLI 自动恢复 */
+  const toggleKeep = (f: ForwardView) => void api.keepForward(f.id, !f.saved).then((v) => {
+    onChanged();
+    toast.success(v.saved
+      ? t("已记住：下次打开 P2PCLI 会自动在 localhost:{{port}} 上恢复这个转发", { port: v.local_port })
+      : t("不再记住这个转发，关掉 P2PCLI 以后就不恢复了"));
+  }).catch((e) => toast.error(tr(String(e))));
 
   const lending = reverses.find((r) => r.proxy);
   const startReverse = async (target: string | null, proxy: ProxyKind | null, remotePort?: number) => {
@@ -184,8 +197,10 @@ function PortForwardsPanel({ active, heading, connId, deviceName, forwards, reve
 
           {forwards.length > 0 && <section className="ports-section">
             <h3>{t("正在转发")}</h3>
+            <p className="ports-note">{t("关了终端标签、网络断了都不停，有连接进来时自动重连。点图钉记住，下次打开 P2PCLI 自动恢复。")}</p>
             {forwards.map((f) => (
-              <div key={f.id} className="ports-row">
+              <div key={f.id} className="ports-item">
+              <div className="ports-row">
                 <span className="ports-port">{f.remote_port}</span>
                 <span className="ports-arrow">→</span>
                 <button type="button" className="ports-link truncate" title={t("在浏览器里打开")}
@@ -195,8 +210,14 @@ function PortForwardsPanel({ active, heading, connId, deviceName, forwards, reve
                   onPress={() => void api.openForward(f.id).catch((e) => toast.error(tr(String(e))))}><ExternalLink /></Button>
                 <Button size="icon-xs" variant="ghost" aria-label={t("复制地址")} title={t("复制地址")}
                   onPress={() => void writeClipboardText(`http://localhost:${f.local_port}/`).then(() => toast.success(t("已复制"))).catch((e) => toast.error(String(e)))}><Copy /></Button>
-                <Button size="icon-xs" variant="ghost" aria-label={t("停止转发")} title={t("停止转发")}
+                <Button size="icon-xs" variant="ghost" data-active={f.saved || undefined} className="ports-keep"
+                  aria-label={f.saved ? t("不再记住") : t("记住这个转发")} aria-pressed={f.saved}
+                  title={f.saved ? t("已记住：下次打开 P2PCLI 自动恢复（本机端口固定为 {{port}}）。点一下不再记住", { port: f.local_port }) : t("记住这个转发：本机端口固定为 {{port}}，下次打开 P2PCLI 自动恢复", { port: f.local_port })}
+                  onPress={() => toggleKeep(f)}>{f.saved ? <Pin /> : <PinOff />}</Button>
+                <Button size="icon-xs" variant="ghost" aria-label={t("停止转发")} title={f.saved ? t("停止转发（也不再记住）") : t("停止转发")}
                   onPress={() => void api.stopForward(f.id).then(onChanged)}><Square /></Button>
+              </div>
+              {f.problem && <p className="ports-note is-warn ports-problem"><TriangleAlert className="inline size-3" /> {tr(f.problem)}</p>}
               </div>
             ))}
           </section>}
@@ -225,6 +246,8 @@ function PortForwardsPanel({ active, heading, connId, deviceName, forwards, reve
           <form className="ports-manual" onSubmit={(e) => { e.preventDefault(); submitManual(); }}>
             <Input value={manual} inputMode="numeric" placeholder={t("端口号，比如 3000")} aria-label={t("要转发的端口")}
               onChange={(e) => setManual(e.target.value.replace(/\D/g, "").slice(0, 5))} />
+            <Input value={manualLocal} inputMode="numeric" placeholder={t("本机端口（可不填）")} aria-label={t("转发到本机的端口")}
+              onChange={(e) => setManualLocal(e.target.value.replace(/\D/g, "").slice(0, 5))} />
             <Button type="submit" size="sm" isDisabled={!manual || busy != null}>{t("转发")}</Button>
           </form>
 

@@ -2801,6 +2801,10 @@ img.agent-icon {
 .ports-link:hover { text-decoration: underline; }
 .ports-meta { flex: 1; min-width: 0; color: var(--muted-foreground); font-size: 12px; }
 .ports-row svg { width: 14px; height: 14px; }
+.ports-item { display: flex; flex-direction: column; min-width: 0; }
+/* 记住了的转发：图钉亮起来 */
+.ports-keep[data-active] { color: var(--accent); }
+.ports-problem { padding-left: 50px; overflow-wrap: anywhere; }
 .ports-manual { display: flex; gap: 6px; }
 .ports-manual input { flex: 1; }
 
