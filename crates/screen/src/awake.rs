@@ -40,6 +40,9 @@ impl ScreenCapture for KeepAwake {
     fn stats(&self) -> Option<p2pcli_core::screen::CaptureStats> {
         self.inner.stats()
     }
+    fn encoder(&self) -> Option<p2pcli_core::screen::EncoderInfo> {
+        self.inner.encoder()
+    }
 }
 
 #[cfg(target_os = "macos")]
