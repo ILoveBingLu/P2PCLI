@@ -18,11 +18,28 @@ use p2pcli_core::screen::{PRIVACY_PRESETS, PrivacyBackground, PrivacyStyle};
 /// 隐私屏拦本机键鼠时，带这个标记的放行
 pub(crate) const INPUT_TAG: u32 = 0x5032_4349;
 
-/// 一团色光：中心（0~1，横向按屏幕比例拉伸）、半径（以屏幕高为 1）、颜色、浓度
+/// 一团色光：中心（0~1）、半径（以屏幕高为 1）、横向拉长多少倍、颜色、浓度
 struct Glow {
     x: f32,
     y: f32,
     r: f32,
+    stretch: f32,
+    color: [u8; 3],
+    a: f32,
+}
+
+/// 一条光带（极光、银河）：沿一条起伏的曲线，下边沿亮、往上慢慢淡，带竖着的光丝
+struct Band {
+    /// 曲线的高度、起伏、起伏的快慢、相位
+    y: f32,
+    amp: f32,
+    freq: f32,
+    phase: f32,
+    /// 往上淡出的距离、下边沿的软硬
+    height: f32,
+    edge: f32,
+    /// 竖光丝的明显程度（0 是没有）
+    rays: f32,
     color: [u8; 3],
     a: f32,
 }
@@ -32,84 +49,104 @@ struct Theme {
     top: [u8; 3],
     bottom: [u8; 3],
     glows: &'static [Glow],
+    bands: &'static [Band],
     /// 每百万像素撒多少颗星
     stars: u32,
 }
 
-const fn g(x: f32, y: f32, r: f32, color: [u8; 3], a: f32) -> Glow {
-    Glow { x, y, r, color, a }
+const fn g(x: f32, y: f32, r: f32, stretch: f32, color: [u8; 3], a: f32) -> Glow {
+    Glow { x, y, r, stretch, color, a }
+}
+
+#[allow(clippy::too_many_arguments)]
+const fn band(y: f32, amp: f32, freq: f32, phase: f32, height: f32, edge: f32, rays: f32, color: [u8; 3], a: f32) -> Band {
+    Band { y, amp, freq, phase, height, edge, rays, color, a }
 }
 
 /// 内置主题，顺序和设置页一致（老版本存的 0~2 还是深海、暮色、森林）
 const THEMES: [Theme; PRIVACY_PRESETS as usize] = [
-    // 深海
+    // 深海：深蓝底，左上一片青光，右下一片靛蓝
     Theme {
-        top: [6, 22, 36],
-        bottom: [4, 14, 26],
-        glows: &[g(0.12, 0.15, 0.75, [22, 96, 128], 0.75), g(0.9, 0.9, 0.8, [28, 62, 120], 0.65), g(0.55, 0.45, 0.45, [18, 128, 150], 0.25)],
+        top: [5, 20, 34],
+        bottom: [3, 10, 22],
+        glows: &[g(0.1, 0.05, 0.8, 1.6, [24, 104, 136], 0.7), g(0.95, 1.0, 0.85, 1.5, [30, 58, 124], 0.6), g(0.55, 0.6, 0.6, 2.2, [16, 96, 120], 0.22)],
+        bands: &[],
         stars: 0,
     },
-    // 暮色
+    // 暮色：紫底，右下晚霞的玫红和橘
     Theme {
-        top: [32, 16, 64],
-        bottom: [22, 10, 44],
-        glows: &[g(0.08, 0.1, 0.7, [84, 36, 140], 0.7), g(0.95, 0.95, 0.85, [206, 82, 104], 0.75), g(0.75, 0.35, 0.45, [236, 128, 92], 0.35)],
+        top: [30, 14, 60],
+        bottom: [40, 16, 58],
+        glows: &[g(0.05, 0.05, 0.8, 1.5, [76, 34, 132], 0.65), g(0.95, 1.05, 0.85, 1.6, [204, 78, 104], 0.7), g(0.8, 0.75, 0.5, 1.8, [236, 132, 96], 0.3)],
+        bands: &[],
         stars: 0,
     },
-    // 森林
+    // 森林：墨绿底，左下一片青绿，右上一点嫩绿
     Theme {
-        top: [8, 38, 34],
-        bottom: [4, 24, 22],
-        glows: &[g(0.15, 0.85, 0.8, [42, 118, 84], 0.75), g(0.88, 0.12, 0.7, [96, 156, 104], 0.5), g(0.5, 0.5, 0.5, [22, 78, 66], 0.4)],
+        top: [8, 34, 32],
+        bottom: [4, 22, 20],
+        glows: &[g(0.1, 0.95, 0.85, 1.6, [40, 114, 82], 0.7), g(0.9, 0.05, 0.75, 1.5, [92, 150, 100], 0.45), g(0.5, 0.5, 0.6, 2.4, [20, 72, 62], 0.35)],
+        bands: &[],
         stars: 0,
     },
-    // 极光
-    Theme {
-        top: [4, 8, 24],
-        bottom: [8, 14, 36],
-        glows: &[g(0.28, 0.32, 0.42, [36, 214, 160], 0.55), g(0.55, 0.22, 0.38, [56, 136, 236], 0.45), g(0.82, 0.4, 0.34, [166, 88, 226], 0.42), g(0.5, 1.05, 0.6, [20, 40, 90], 0.6)],
-        stars: 260,
-    },
-    // 星空
+    // 极光：夜空里三条起伏的光带，绿的最亮，带竖光丝
     Theme {
         top: [2, 5, 16],
-        bottom: [16, 20, 52],
-        glows: &[g(0.5, 1.15, 0.9, [70, 56, 140], 0.55), g(0.15, 0.2, 0.5, [20, 34, 80], 0.4)],
-        stars: 900,
+        bottom: [6, 16, 32],
+        glows: &[g(0.5, 1.1, 0.7, 2.0, [10, 40, 54], 0.6)],
+        bands: &[
+            band(0.58, 0.07, 0.9, 0.3, 0.3, 0.025, 0.35, [56, 232, 160], 0.75),
+            band(0.47, 0.06, 1.4, 1.7, 0.22, 0.02, 0.4, [64, 150, 240], 0.42),
+            band(0.4, 0.05, 1.9, 3.1, 0.16, 0.02, 0.45, [176, 96, 232], 0.32),
+        ],
+        stars: 240,
     },
-    // 日落
+    // 星空：深夜蓝，一道斜跨的淡银河，满天星星
     Theme {
-        top: [44, 22, 70],
-        bottom: [120, 46, 70],
-        glows: &[g(0.5, 1.05, 0.75, [255, 150, 84], 0.8), g(0.15, 0.65, 0.6, [232, 84, 112], 0.5), g(0.85, 0.15, 0.6, [92, 52, 146], 0.55)],
+        top: [2, 4, 14],
+        bottom: [12, 16, 42],
+        glows: &[g(0.5, 1.15, 0.8, 2.0, [64, 50, 130], 0.5)],
+        bands: &[band(0.55, 0.25, 0.45, 2.4, 0.22, 0.12, 0.0, [150, 140, 200], 0.16)],
+        stars: 950,
+    },
+    // 日落：上面紫，地平线一片橘红
+    Theme {
+        top: [36, 20, 68],
+        bottom: [112, 40, 64],
+        glows: &[g(0.5, 1.1, 0.75, 2.2, [255, 148, 80], 0.8), g(0.12, 0.7, 0.6, 1.6, [230, 82, 110], 0.45), g(0.88, 0.15, 0.6, 1.6, [86, 50, 142], 0.5)],
+        bands: &[],
         stars: 0,
     },
-    // 晨雾
+    // 晨雾：灰蓝，柔和的亮雾
     Theme {
-        top: [78, 94, 116],
-        bottom: [58, 70, 92],
-        glows: &[g(0.2, 0.15, 0.75, [146, 166, 190], 0.6), g(0.85, 0.85, 0.75, [96, 112, 146], 0.6), g(0.6, 0.5, 0.5, [124, 140, 160], 0.3)],
+        top: [74, 90, 112],
+        bottom: [52, 64, 86],
+        glows: &[g(0.2, 0.1, 0.8, 1.8, [146, 164, 188], 0.55), g(0.85, 0.95, 0.8, 1.6, [92, 106, 140], 0.55)],
+        bands: &[],
         stars: 0,
     },
-    // 石墨
+    // 石墨：近黑，上方一点冷光
     Theme {
         top: [22, 22, 25],
-        bottom: [12, 12, 14],
-        glows: &[g(0.5, 0.3, 0.75, [62, 64, 72], 0.6), g(0.9, 0.95, 0.6, [36, 38, 46], 0.4)],
+        bottom: [10, 10, 12],
+        glows: &[g(0.5, 0.15, 0.8, 2.2, [64, 66, 74], 0.55)],
+        bands: &[],
         stars: 0,
     },
-    // 樱花
+    // 樱花：粉紫
     Theme {
-        top: [64, 30, 62],
-        bottom: [44, 22, 54],
-        glows: &[g(0.18, 0.25, 0.65, [232, 136, 170], 0.55), g(0.82, 0.75, 0.65, [150, 108, 204], 0.55), g(0.55, 0.05, 0.4, [250, 190, 200], 0.25)],
+        top: [62, 28, 60],
+        bottom: [40, 20, 52],
+        glows: &[g(0.15, 0.2, 0.75, 1.6, [232, 136, 170], 0.5), g(0.85, 0.85, 0.75, 1.6, [148, 106, 204], 0.5), g(0.55, 0.0, 0.5, 2.0, [250, 190, 204], 0.22)],
+        bands: &[],
         stars: 0,
     },
-    // 海湾
+    // 海湾：青绿和海蓝
     Theme {
-        top: [4, 40, 70],
-        bottom: [2, 26, 50],
-        glows: &[g(0.1, 0.9, 0.65, [0, 160, 168], 0.6), g(0.9, 0.1, 0.65, [40, 92, 204], 0.6), g(0.5, 0.55, 0.4, [20, 120, 160], 0.25)],
+        top: [3, 38, 66],
+        bottom: [2, 22, 46],
+        glows: &[g(0.05, 0.95, 0.75, 1.6, [0, 156, 164], 0.55), g(0.95, 0.05, 0.75, 1.6, [40, 90, 200], 0.55), g(0.5, 0.6, 0.5, 2.4, [16, 110, 150], 0.22)],
+        bands: &[],
         stars: 0,
     },
 ];
@@ -129,27 +166,48 @@ impl Rng {
     }
 }
 
-/// 按 w×h 画第 index 个内置主题
-fn render_theme(index: u8, w: u32, h: u32) -> RgbaImage {
-    let theme = &THEMES[(index as usize).min(THEMES.len() - 1)];
+/// 按 w×h 画第 index 个内置主题。text 为真时在中间压一圈柔和的暗晕，白字更清楚
+fn render_theme(index: u8, w: u32, h: u32, text: bool) -> RgbaImage {
+    let index = (index as usize).min(THEMES.len() - 1);
+    let theme = &THEMES[index];
     let (w, h) = (w.max(2), h.max(2));
     let aspect = w as f32 / h as f32;
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ index as u64);
+    let tau = std::f32::consts::TAU;
     let mut img = RgbaImage::from_fn(w, h, |x, y| {
         let (u, v) = (x as f32 / (w - 1) as f32, y as f32 / (h - 1) as f32);
         let mut c: [f32; 3] = std::array::from_fn(|i| theme.top[i] as f32 + (theme.bottom[i] as f32 - theme.top[i] as f32) * v);
         for glow in theme.glows {
-            let (dx, dy) = ((u - glow.x) * aspect, v - glow.y);
-            let d2 = (dx * dx + dy * dy) / (glow.r * glow.r);
-            let k = glow.a * (-2.2 * d2).exp();
+            let (dx, dy) = ((u - glow.x) * aspect / glow.stretch, v - glow.y);
+            let k = glow.a * (-1.6 * (dx * dx + dy * dy) / (glow.r * glow.r)).exp();
             for (ch, target) in c.iter_mut().zip(glow.color) {
                 *ch += (target as f32 - *ch) * k;
             }
         }
-        // 暗角：四周压暗一点，目光落在中间的字上
+        for b in theme.bands {
+            let curve = b.y + b.amp * (u * b.freq * tau + b.phase).sin() + b.amp * 0.35 * (u * b.freq * 2.7 * tau + b.phase * 1.9).sin();
+            let d = v - curve;
+            let mut k = if d > 0.0 { (-(d / b.edge).powi(2)).exp() } else { (d / b.height).exp() };
+            if b.rays > 0.0 {
+                let ray = 0.5 + 0.5 * (u * 140.0 + (u * 11.0).sin() * 6.0).sin() * (u * 37.0 + 1.3).sin();
+                k *= 1.0 - b.rays + b.rays * ray;
+            }
+            // 两头淡出
+            k *= b.a * (u * std::f32::consts::PI).sin().powf(0.6);
+            // 滤色叠加：只会更亮，像光
+            for (ch, light) in c.iter_mut().zip(b.color) {
+                *ch = 255.0 - (255.0 - *ch) * (1.0 - k * light as f32 / 255.0);
+            }
+        }
+        // 暗角：四周压暗一点，目光落在中间
         let (cx, cy) = (u * 2.0 - 1.0, v * 2.0 - 1.0);
-        let vignette = 1.0 - 0.28 * (cx * cx * 0.6 + cy * cy).min(1.6);
-        let px = [0, 1, 2].map(|i| (c[i] * vignette).clamp(0.0, 255.0) as u8);
+        let mut shade = 1.0 - 0.28 * (cx * cx * 0.6 + cy * cy).min(1.6);
+        // 字后面一圈暗晕
+        if text {
+            let (tx, ty) = ((u - 0.5) * aspect / 1.6, (v - 0.5) / 0.5);
+            shade *= 1.0 - 0.3 * (-(tx * tx + ty * ty) * 2.0).exp();
+        }
+        let px = [0, 1, 2].map(|i| (c[i] * shade).clamp(0.0, 255.0) as u8);
         image::Rgba([px[0], px[1], px[2], 255])
     });
     // 一点颗粒：放大以后不出一圈圈的色带
@@ -159,13 +217,13 @@ fn render_theme(index: u8, w: u32, h: u32) -> RgbaImage {
             *c = (*c as i16 + n).clamp(0, 255) as u8;
         }
     }
-    // 星星：大多是一个点，少数亮的带一圈光
+    // 星星：大多是一个点，少数亮的带一圈光；越往下越少（地平线那边亮）
     let count = (theme.stars as u64 * w as u64 * h as u64 / 1_000_000) as u32;
     for _ in 0..count {
-        let (x, y) = ((rng.unit() * (w - 1) as f32) as i32, (rng.unit() * (h - 1) as f32 * 0.92) as i32);
-        let bright = 110.0 + rng.unit().powi(3) * 145.0;
-        let big = rng.unit() > 0.96;
-        let tint = if rng.unit() > 0.7 { [0.85, 0.9, 1.0] } else { [1.0, 1.0, 1.0] };
+        let (x, y) = ((rng.unit() * (w - 1) as f32) as i32, (rng.unit().powf(1.3) * (h - 1) as f32 * 0.9) as i32);
+        let bright = 100.0 + rng.unit().powi(3) * 155.0;
+        let big = rng.unit() > 0.965;
+        let tint = if rng.unit() > 0.7 { [0.82, 0.9, 1.0] } else { [1.0, 1.0, 1.0] };
         let mut add = |px: i32, py: i32, k: f32| {
             if px >= 0 && py >= 0 && (px as u32) < w && (py as u32) < h {
                 let p = img.get_pixel_mut(px as u32, py as u32);
@@ -177,7 +235,7 @@ fn render_theme(index: u8, w: u32, h: u32) -> RgbaImage {
         add(x, y, 1.0);
         if big {
             for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                add(x + dx, y + dy, 0.45);
+                add(x + dx, y + dy, 0.4);
             }
         }
     }
@@ -194,14 +252,19 @@ pub(crate) fn background(style: &PrivacyStyle, width: u32, height: u32) -> Resul
         PrivacyBackground::Preset { index } => {
             // 色光很柔，按一半大小画（长边不超过 1920）再交给系统放大，省时间
             let scale = (0.5f32).min(1920.0 / width.max(height) as f32);
-            Ok(Some(render_theme(*index, ((width as f32 * scale) as u32).max(2), ((height as f32 * scale) as u32).max(2))))
+            Ok(Some(render_theme(*index, ((width as f32 * scale) as u32).max(2), ((height as f32 * scale) as u32).max(2), has_text)))
         }
         PrivacyBackground::Image { path } => {
             let mut img = load_cover(path, width, height)?;
             if has_text {
-                for p in img.pixels_mut() {
+                // 整体压暗一点，字的位置再多压一些
+                let (w, h) = img.dimensions();
+                let aspect = w as f32 / h as f32;
+                for (x, y, p) in img.enumerate_pixels_mut() {
+                    let (tx, ty) = ((x as f32 / w as f32 - 0.5) * aspect / 1.6, (y as f32 / h as f32 - 0.5) / 0.5);
+                    let shade = 0.72 * (1.0 - 0.3 * (-(tx * tx + ty * ty) * 2.0).exp());
                     for c in &mut p.0[..3] {
-                        *c = (*c as u16 * 3 / 5) as u8;
+                        *c = (*c as f32 * shade) as u8;
                     }
                 }
             }
@@ -214,7 +277,7 @@ pub(crate) fn background(style: &PrivacyStyle, width: u32, height: u32) -> Resul
 pub fn thumbnail(background: &PrivacyBackground, w: u32, h: u32) -> Result<Vec<u8>> {
     let img = match background {
         PrivacyBackground::Black => RgbaImage::from_pixel(w.max(1), h.max(1), image::Rgba([0, 0, 0, 255])),
-        PrivacyBackground::Preset { index } => render_theme(*index, w, h),
+        PrivacyBackground::Preset { index } => render_theme(*index, w, h, true),
         PrivacyBackground::Image { path } => load_cover(path, w, h)?,
     };
     let mut png = Vec::new();
@@ -265,7 +328,7 @@ mod tests {
         // 每个主题都画得出来，而且彼此不一样、不是一片黑
         let mut means = Vec::new();
         for index in 0..PRIVACY_PRESETS {
-            let img = render_theme(index, 160, 90);
+            let img = render_theme(index, 160, 90, false);
             let sum: u64 = img.pixels().map(|p| p.0[0] as u64 + p.0[1] as u64 + p.0[2] as u64).sum();
             let mean = sum / (160 * 90 * 3);
             assert!(mean > 8, "主题 {index} 太黑了：{mean}");
@@ -277,9 +340,12 @@ mod tests {
             }
         }
         // 同一个主题每次画得一样（星星不乱跳）
-        assert_eq!(render_theme(4, 200, 100), render_theme(4, 200, 100));
+        assert_eq!(render_theme(4, 200, 100, true), render_theme(4, 200, 100, true));
         // 越界的编号用最后一种
-        assert_eq!(render_theme(99, 50, 50), render_theme(PRIVACY_PRESETS - 1, 50, 50));
+        assert_eq!(render_theme(99, 50, 50, false), render_theme(PRIVACY_PRESETS - 1, 50, 50, false));
+        // 有字时中间压暗
+        let (plain, dim) = (render_theme(6, 160, 90, false), render_theme(6, 160, 90, true));
+        assert!(dim.get_pixel(80, 45).0[0] + 20 < plain.get_pixel(80, 45).0[0]);
         // 小样是 PNG
         let png = thumbnail(&PrivacyBackground::Preset { index: 3 }, 192, 108).unwrap();
         assert_eq!(&png[1..4], b"PNG");
