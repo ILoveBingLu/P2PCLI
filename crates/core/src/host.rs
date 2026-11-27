@@ -26,7 +26,7 @@ use crate::proto::{AGENT_MESSAGE_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
 use crate::presence::{PresenceReq, PresenceResp};
-use crate::screen::{SCREEN_V1, ScreenBackend, ScreenViewerSummary};
+use crate::screen::{SCREEN_V1, SCREENSHOT_V1, ScreenBackend, ScreenViewerSummary};
 use crate::store::{TrustStore, write_private};
 
 /// 本机能回应对面的哪些能力。手机端（关掉 host）不开终端、不让对面碰本机的文件和程序，只剩 AI 协作消息
@@ -102,6 +102,8 @@ pub enum HostEvent {
     TerminalClosed { session: u64 },
     /// 有人开始看本机画面
     ScreenStarted { viewer: ScreenViewerSummary },
+    /// 有设备截了一张本机屏幕（一般是它那边的 AI）
+    ScreenshotTaken { name: String },
     ScreenStopped { id: u64 },
     /// 收到一批文件，已经放好
     FilesReceived {
@@ -628,7 +630,7 @@ impl Host {
                 multiplexer: self.terminals.describe().await,
                 capabilities: capabilities
                     .iter()
-                    .filter(|capability| serves(capability) || (capability.as_str() == SCREEN_V1 && self.screen_backend().is_some()))
+                    .filter(|capability| serves(capability) || (matches!(capability.as_str(), SCREEN_V1 | SCREENSHOT_V1) && self.screen_backend().is_some()))
                     .cloned()
                     .collect(),
             },
@@ -693,6 +695,11 @@ impl Host {
         #[cfg(feature = "host")]
         if let Msg::ScreenOpen { open } = request {
             self.screen(session, &owner, conn, open, send, recv).await;
+            return;
+        }
+        #[cfg(feature = "host")]
+        if let Msg::Screenshot { display, max_width } = request {
+            self.screenshot(session, &owner, conn, display, max_width, send).await;
             return;
         }
         if let Msg::ScreenClip { req } = request {
@@ -902,6 +909,57 @@ impl Host {
         }.await;
         if let Err(e) = result {
             warn!(session, %owner, "会话操作失败：{e:#}");
+            let _ = write_msg(&mut send, &Msg::Error { message: format!("{e:#}") }).await;
+        }
+        let _ = send.finish();
+    }
+
+    /// 有设备要截一张本机屏幕：和查看画面一样问过主人（受信设备按设置直接放行）、查过录屏权限再截
+    #[cfg(feature = "host")]
+    async fn screenshot(self: Arc<Self>, session: u64, owner: &str, conn: Connection, display: Option<String>, max_width: u32, mut send: SendStream) {
+        let result: Result<()> = async {
+            let Some(backend) = self.screen_backend() else {
+                bail!("对方电脑不支持截屏");
+            };
+            let remote: EndpointId = owner.parse()?;
+            let (name, platform) = self.sessions.lock().unwrap().get(&session).map(|e| (e.summary.name.clone(), e.summary.platform.clone())).unwrap_or_default();
+            let id = self.next();
+            let req = ScreenRequest { id, remote: owner.to_string(), name: name.clone(), platform, trusted: self.trust.contains(&remote), control: false };
+            let decision = tokio::select! {
+                d = self.delegate.approve_screen(req) => d,
+                _ = tokio::time::sleep(APPROVE_TIMEOUT) => {
+                    self.delegate.event(HostEvent::RequestCancelled { id });
+                    bail!("对方没有响应查看画面的请求");
+                }
+                _ = conn.closed() => {
+                    self.delegate.event(HostEvent::RequestCancelled { id });
+                    return Ok(());
+                }
+            };
+            if !decision.allow {
+                bail!("denied: 对方没有允许查看画面");
+            }
+            backend.check_capture()?;
+            let displays = backend.displays()?;
+            let display = display
+                .and_then(|want| displays.iter().find(|d| d.id == want).map(|d| d.id.clone()))
+                .or_else(|| displays.iter().find(|d| d.primary).map(|d| d.id.clone()))
+                .or_else(|| displays.first().map(|d| d.id.clone()))
+                .ok_or_else(|| anyhow::anyhow!("本机没有可以截的屏幕"))?;
+            let max_width = max_width.clamp(320, 3840);
+            let (b, d) = (backend.clone(), display.clone());
+            let shot = tokio::task::spawn_blocking(move || b.screenshot(&d, max_width)).await??;
+            info!(session, width = shot.width, height = shot.height, bytes = shot.png.len(), "对面截了一张本机屏幕");
+            self.delegate.event(HostEvent::ScreenshotTaken { name });
+            write_msg(&mut send, &Msg::ScreenshotTaken { width: shot.width, height: shot.height, size: shot.png.len() as u64, display }).await?;
+            for chunk in shot.png.chunks(EDIT_CHUNK) {
+                write_data(&mut send, chunk).await?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            warn!(session, "截屏没成功：{e:#}");
             let _ = write_msg(&mut send, &Msg::Error { message: format!("{e:#}") }).await;
         }
         let _ = send.finish();

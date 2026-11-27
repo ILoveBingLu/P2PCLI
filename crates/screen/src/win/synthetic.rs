@@ -46,6 +46,10 @@ impl ScreenBackend for SyntheticBackend {
         debug!(screen, ?ev, "合成画面不注入键鼠");
         Ok(())
     }
+
+    fn screenshot(&self, _display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
+        super::shot::synthetic(WIDTH, HEIGHT, max_width)
+    }
 }
 
 /// 在抓屏线程上建合成屏幕：和真抓屏一样用默认的显卡，画面传上去，开始定时出帧

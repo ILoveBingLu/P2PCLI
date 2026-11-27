@@ -20,6 +20,7 @@ pub(crate) mod clip;
 mod cursor;
 mod encode;
 mod input;
+pub(crate) mod shot;
 mod synthetic;
 mod yuv444;
 
@@ -125,5 +126,9 @@ impl ScreenBackend for WinBackend {
 
     fn clipboard(&self) -> Option<Arc<dyn p2pcli_core::screen_clip::ClipPlatform>> {
         crate::clipboard()
+    }
+
+    fn screenshot(&self, display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
+        shot::capture(find_monitor(display)?.rect, max_width)
     }
 }

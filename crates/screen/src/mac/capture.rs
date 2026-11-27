@@ -77,7 +77,7 @@ impl Sink {
 }
 
 /// 一块屏幕的像素尺寸（Retina 屏是实际像素，不是点）
-fn pixel_size(id: CGDirectDisplayID) -> (u32, u32) {
+pub(crate) fn pixel_size(id: CGDirectDisplayID) -> (u32, u32) {
     let mode = CGDisplayCopyDisplayMode(id);
     let w = CGDisplayMode::pixel_width(mode.as_deref());
     let h = CGDisplayMode::pixel_height(mode.as_deref());
@@ -109,16 +109,16 @@ pub fn displays() -> Result<Vec<DisplayInfo>> {
 }
 
 /// 等一个带完成回调的系统调用，最多等 timeout
-fn wait<T: Send + 'static>(timeout: Duration, start: impl FnOnce(std::sync::mpsc::Sender<T>)) -> Result<T> {
+pub(crate) fn wait<T: Send + 'static>(timeout: Duration, start: impl FnOnce(std::sync::mpsc::Sender<T>)) -> Result<T> {
     let (tx, rx) = std::sync::mpsc::channel();
     start(tx);
     rx.recv_timeout(timeout).map_err(|_| anyhow!("系统没有及时响应"))
 }
 
-struct SendRetained<T>(T);
+pub(crate) struct SendRetained<T>(pub(crate) T);
 unsafe impl<T> Send for SendRetained<T> {}
 
-fn find_display(id: CGDirectDisplayID) -> Result<Retained<SCDisplay>> {
+pub(crate) fn find_display(id: CGDirectDisplayID) -> Result<Retained<SCDisplay>> {
     let content = wait(Duration::from_secs(5), |tx| {
         let block = block2::RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
             let result = if content.is_null() {

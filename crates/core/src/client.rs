@@ -117,7 +117,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into(), REVERSE_FORWARD_V1.into(), SSH_V1.into(), crate::screen::SCREEN_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into(), REVERSE_FORWARD_V1.into(), SSH_V1.into(), crate::screen::SCREEN_V1.into(), crate::screen::SCREENSHOT_V1.into()],
         },
     )
     .await?;
@@ -523,6 +523,48 @@ impl RemoteHost {
     }
 
     /// 对方能不能给看画面（新版本、支持的系统）
+    /// 对方能不能截屏（新版本、有远程画面实现）
+    pub fn supports_screenshot(&self) -> bool {
+        matches!(&self.link, Link::Net { capabilities, .. } if capabilities.iter().any(|c| c == crate::screen::SCREENSHOT_V1))
+    }
+
+    /// 截对方一张屏幕：对方要像查看画面一样同意（受信设备按它的设置直接放行）。
+    /// 直连优先：还在中继上的话先等一会儿直连；只能走中继时也截，但图缩到宽 1024，少占中继。返回图和这次是否走了中继
+    pub async fn screenshot(&self, display: Option<String>, max_width: u32) -> Result<(crate::screen::Screenshot, String, bool)> {
+        if self.is_local() {
+            bail!("这是本机，直接截屏就行");
+        }
+        if !self.supports_screenshot() {
+            bail!("对方的 P2PCLI 版本较旧或系统不支持截屏，请更新对方的 P2PCLI");
+        }
+        let relay = self.wait_direct(crate::path::DIRECT_WAIT).await.kind == crate::path::PathKind::Relay;
+        let max_width = if relay { max_width.min(1024) } else { max_width };
+        let (_send, mut recv) = self.open_stream(&Msg::Screenshot { display, max_width }).await?;
+        // 对方可能要弹窗等主人点
+        let (width, height, size, display) = match timeout(APPROVE_TIMEOUT + Duration::from_secs(30), read_msg(&mut recv)).await.map_err(|_| anyhow!("对方一直没有响应"))?? {
+            Msg::ScreenshotTaken { width, height, size, display } => (width, height, size, display),
+            Msg::Error { message } => bail!("{message}"),
+            other => bail!("意外的回复：{other:?}"),
+        };
+        let png = timeout(Duration::from_secs(120), async {
+            let mut body = Vec::with_capacity(size as usize);
+            while let Some(frame) = read_frame(&mut recv).await? {
+                match frame {
+                    Frame::Data(chunk) if (body.len() + chunk.len()) as u64 <= size => body.extend_from_slice(&chunk),
+                    Frame::Msg(Msg::Error { message }) => bail!("{message}"),
+                    _ => bail!("截图内容不对"),
+                }
+            }
+            if body.len() as u64 != size {
+                bail!("截图没有传完整，连接可能中断了");
+            }
+            Ok(body)
+        })
+        .await
+        .map_err(|_| anyhow!("传截图超时"))??;
+        Ok((crate::screen::Screenshot { png, width, height }, display, relay))
+    }
+
     pub fn supports_screen(&self) -> bool {
         matches!(&self.link, Link::Net { capabilities, .. } if capabilities.iter().any(|c| c == crate::screen::SCREEN_V1))
     }

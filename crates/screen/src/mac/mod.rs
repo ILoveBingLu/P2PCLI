@@ -9,6 +9,7 @@ use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend
 
 mod capture;
 pub(crate) mod clip;
+mod shot;
 mod cursor;
 pub mod encode;
 mod flow;
@@ -91,5 +92,9 @@ impl ScreenBackend for MacBackend {
 
     fn clipboard(&self) -> Option<Arc<dyn p2pcli_core::screen_clip::ClipPlatform>> {
         crate::clipboard()
+    }
+
+    fn screenshot(&self, display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
+        shot::capture(display, max_width)
     }
 }

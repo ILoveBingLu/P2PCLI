@@ -29,6 +29,16 @@ use crate::path::{self, PathKind};
 
 /// 能力名：两边都有才显示远程画面的按钮
 pub const SCREEN_V1: &str = "screen_v1";
+/// 单帧截屏（给 AI 看对方屏幕）：被连方有远程画面实现时才报
+pub const SCREENSHOT_V1: &str = "screenshot_v1";
+
+/// 截的一张图
+#[derive(Debug, Clone)]
+pub struct Screenshot {
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
 
 const KIND_MSG: u8 = 1;
 const KIND_VIDEO: u8 = 2;
@@ -301,6 +311,10 @@ pub trait ScreenBackend: Send + Sync + 'static {
     /// 本机剪贴板：远程控制时和观看方互通。不支持就是空
     fn clipboard(&self) -> Option<Arc<dyn crate::screen_clip::ClipPlatform>> {
         None
+    }
+    /// 截一张屏幕，宽度不超过 max_width（等比缩小），编成 PNG。会阻塞，别在异步任务里直接调
+    fn screenshot(&self, _display: &str, _max_width: u32) -> Result<Screenshot> {
+        bail!("这台电脑还不支持截屏")
     }
 }
 

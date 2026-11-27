@@ -140,6 +140,11 @@ impl ScreenBackend for FakeBackend {
     fn clipboard(&self) -> Option<Arc<dyn ClipPlatform>> {
         self.0.clip.clone().map(|c| c as Arc<dyn ClipPlatform>)
     }
+    fn screenshot(&self, display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
+        // 假的“PNG”：带上屏幕编号和宽度，测试里核对传对了
+        let png: Vec<u8> = format!("PNG:{display}:{max_width}:").bytes().chain((0..2_500_000u32).map(|i| (i % 251) as u8)).collect();
+        Ok(p2pcli_core::screen::Screenshot { png, width: max_width, height: max_width * 10 / 16 })
+    }
     fn cursor(&self, _display: &str) -> Option<p2pcli_core::screen::CursorInfo> {
         if !self.0.cursor {
             return None;
@@ -602,5 +607,40 @@ async fn clipboard_is_shared_while_controlling() {
     let (n, _) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
     let (started, _input, _output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
     assert!(!started.clipboard);
+    n.shutdown().await;
+}
+
+/// 单帧截屏：要对方同意；同意了传回整张图（比一帧上限大，分块传）；不同意、没有画面实现都说清楚
+#[tokio::test(flavor = "multi_thread")]
+async fn screenshot_needs_approval_and_arrives_whole() {
+    let fake = Arc::new(Fake::default());
+    let (n, delegate) = pair(ScreenDecision { allow: true, control: true }, Some(fake.clone())).await;
+    assert!(n.remote.supports_screenshot());
+    let (shot, display, relay) = n.remote.screenshot(Some("2".into()), 800).await.unwrap();
+    assert_eq!(display, "2");
+    assert!(!relay, "本机回环是直连");
+    assert_eq!((shot.width, shot.height), (800, 500));
+    assert!(shot.png.starts_with(b"PNG:2:800:"));
+    assert_eq!(shot.png.len(), "PNG:2:800:".len() + 2_500_000);
+    // 不写屏幕就是主屏；宽度按上限收住
+    let (shot, display, _) = n.remote.screenshot(None, 10_000).await.unwrap();
+    assert_eq!(display, "1");
+    assert_eq!(shot.width, 3840);
+    let req = delegate.screen_requests.lock().unwrap().last().cloned().unwrap();
+    assert!(!req.control, "截屏只是看");
+    assert!(delegate.events.lock().unwrap().iter().any(|e| matches!(e, HostEvent::ScreenshotTaken { .. })));
+    n.shutdown().await;
+
+    // 对方不同意
+    let fake = Arc::new(Fake::default());
+    let (n, _) = pair(ScreenDecision { allow: false, control: false }, Some(fake)).await;
+    let err = n.remote.screenshot(None, 800).await.err().unwrap();
+    assert!(format!("{err:#}").contains("denied"), "{err:#}");
+    n.shutdown().await;
+
+    // 对方没有远程画面实现：不报能力，直接说
+    let (n, _) = pair(ScreenDecision { allow: true, control: true }, None).await;
+    assert!(!n.remote.supports_screenshot());
+    assert!(n.remote.screenshot(None, 800).await.is_err());
     n.shutdown().await;
 }

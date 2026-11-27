@@ -198,6 +198,9 @@ impl HostDelegate for UiDelegate {
             let what = if viewer.control { "正在查看并操作本机画面" } else { "正在查看本机画面" };
             let _ = self.app.notification().builder().title(format!("{} {what}", viewer.name)).body("可以在 P2PCLI 标题栏右边随时停止").show();
         }
+        if let HostEvent::ScreenshotTaken { name } = &ev {
+            let _ = self.app.notification().builder().title(format!("{name} 截了一张本机屏幕")).body("一般是它那边的 AI 要看你的屏幕；不想让它看，可以在 设置 → 远程控制 里关掉").show();
+        }
         if let HostEvent::Connected { name, .. } = &ev {
             let _ = self
                 .app

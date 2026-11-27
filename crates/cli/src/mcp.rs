@@ -95,8 +95,12 @@ pub async fn run(dir: &Path) -> Result<()> {
                 let key = id.to_string();
                 let (dir, out, running2, key2) = (dir.to_path_buf(), out_tx.clone(), running.clone(), key.clone());
                 let task = tokio::spawn(async move {
-                    let reply = match call(&dir, &name, &args).await {
-                        Ok(text) => json!({ "content": [{ "type": "text", "text": clip(text) }], "isError": false }),
+                    let reply = match call_tool(&dir, &name, &args).await {
+                        Ok(Output::Text(text)) => json!({ "content": [{ "type": "text", "text": clip(text) }], "isError": false }),
+                        Ok(Output::Image { png, note }) => json!({
+                            "content": [{ "type": "image", "data": png, "mimeType": "image/png" }, { "type": "text", "text": note }],
+                            "isError": false,
+                        }),
                         Err(e) => json!({ "content": [{ "type": "text", "text": format!("{e:#}") }], "isError": true }),
                     };
                     running2.lock().unwrap().remove(&key2);
@@ -277,6 +281,21 @@ fn tools() -> Value {
             "annotations": { "destructiveHint": true },
         },
         {
+            "name": "p2p_screenshot",
+            "title": "Screenshot",
+            "description": "Take a screenshot of another device's screen (to see error dialogs, browser pages, app windows). The owner of that computer must allow viewing the screen (trusted devices may be allowed automatically). Returns a PNG image.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device": dev,
+                    "display": { "type": "string", "description": "Display id; defaults to the main display" },
+                    "max_width": { "type": "integer", "minimum": 320, "maximum": 3840, "description": "Scale the image down to at most this width (default 1440)" },
+                },
+                "required": ["device"],
+            },
+            "annotations": { "readOnlyHint": true },
+        },
+        {
             "name": "p2p_send_files",
             "title": "Send files",
             "description": "Send files or folders from this computer to another device. Without `to` they go to the remote inbox; with `to` they go to that remote directory (created if missing, same-name files are overwritten). Returns the paths on the remote device.",
@@ -332,6 +351,30 @@ fn list(args: &Value, key: &str) -> Result<Vec<String>> {
         bail!("缺少参数 {key}");
     }
     Ok(v)
+}
+
+/// 工具的结果：文字，或者图片加一句说明
+enum Output {
+    Text(String),
+    Image { png: String, note: String },
+}
+
+async fn call_tool(dir: &Path, name: &str, args: &Value) -> Result<Output> {
+    if name == "p2p_screenshot" {
+        let request = Request::Screenshot { target: s(args, "device")?, display: opt_s(args, "display"), max_width: opt_u(args, "max_width").map(|v| v as u32) };
+        let shot = ask(dir, request, |r| match r {
+            Reply::Screenshot { width, height, display, relay, png } => Some((width, height, display, relay, png)),
+            _ => None,
+        })
+        .await?;
+        let (width, height, display, relay, png) = shot;
+        let mut note = format!("屏幕 {display}，{width}×{height}");
+        if relay {
+            note.push_str("（现在走的是中继，图缩小过）");
+        }
+        return Ok(Output::Image { png, note });
+    }
+    call(dir, name, args).await.map(Output::Text)
 }
 
 async fn call(dir: &Path, name: &str, args: &Value) -> Result<String> {

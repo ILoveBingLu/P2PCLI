@@ -196,6 +196,14 @@ pub enum Msg {
     /// 远程画面：看对方的屏幕（可以操作）。对方同意后回 ScreenStarted，之后这条流按 screen 模块的格式走。需要 screen_v1
     ScreenOpen { open: crate::screen::ScreenOpen },
     ScreenStarted { started: crate::screen::ScreenStarted },
+    /// 截一张屏幕（给 AI 看）：对方像查看画面一样问过主人（受信设备直接放行），回 ScreenshotTaken，
+    /// 后面跟 PNG 的原始字节帧，流结束就是传完。需要 screenshot_v1
+    Screenshot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+        max_width: u32,
+    },
+    ScreenshotTaken { width: u32, height: u32, size: u64, display: String },
     /// 远程控制时剪贴板里的内容（文件、大图片……），粘贴时才传。观看方开，被连方按 token 找到那一路画面。
     /// 只在 ScreenStarted.clipboard 为真时用
     ScreenClip { req: crate::screen_clip::ClipStreamReq },

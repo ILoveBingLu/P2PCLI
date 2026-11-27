@@ -74,6 +74,14 @@ pub enum Request {
     ListEntries { target: String, path: String },
     /// 编辑器的其他文件操作：找文件、搜内容、新建目录、改名、移到废纸篓
     Edit { target: String, request: crate::remote_ops::EditRequest },
+    /// 截对方一张屏幕（MCP 的 p2p_screenshot 用）：对方要同意，和查看画面一样
+    Screenshot {
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_width: Option<u32>,
+    },
     /// 接到对方电脑 localhost 的某个端口：回 PipeOpened 以后这条控制连接上就是原样的字节（给 OpenSSH 的 ProxyCommand 用）。
     /// ssh 为真时不看 port，接对方的 SSH 服务（由对方挑），pubkey 交给对方记下、免密码登录
     Pipe {
@@ -97,6 +105,8 @@ pub enum Reply {
     Transfers { transfers: Vec<Transfer> },
     /// 还在连对方（对方可能要点同意），每秒报一次，命令行好给出提示
     Status { message: String },
+    /// 截好的图：PNG 的 base64。relay：这次走的是中继（图缩小过）
+    Screenshot { width: u32, height: u32, display: String, relay: bool, png: String },
     /// 端口接通了，之后是原样的字节。relay：现在走的是中继（直连优先，中继只是兜底，会比较慢）
     PipeOpened { relay: bool },
     /// 命令的一段输出，原始字节的 base64
@@ -297,6 +307,17 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, node: NodeSource) 
         Request::Edit { target, request } => {
             let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
             let reply = remote.edit(request).await.map(|reply| Reply::EditDone { reply });
+            send(&mut w, &reply_or_error(reply)).await?
+        }
+        Request::Screenshot { target, display, max_width } => {
+            let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
+            let reply = remote.screenshot(display, max_width.unwrap_or(1440)).await.map(|(shot, display, relay)| Reply::Screenshot {
+                width: shot.width,
+                height: shot.height,
+                display,
+                relay,
+                png: B64.encode(&shot.png),
+            });
             send(&mut w, &reply_or_error(reply)).await?
         }
         Request::Pipe { target, port, ssh, pubkey } => {
