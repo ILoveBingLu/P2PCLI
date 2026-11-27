@@ -11,6 +11,7 @@ mod audio;
 mod capture;
 pub(crate) mod clip;
 mod shot;
+mod virtual_display;
 mod cursor;
 pub mod encode;
 mod flow;
@@ -52,11 +53,18 @@ pub struct MacBackend {
     cursor: cursor::CursorReader,
     /// 上次看的前台程序是不是终端、什么时候看的：一串快捷键里只问一次系统
     terminal: Mutex<Option<(std::time::Instant, bool)>>,
+    /// 无头模式：一块显示器都没有时建的虚拟显示器
+    headless: virtual_display::Headless,
 }
 
 impl MacBackend {
     pub fn new() -> Self {
-        MacBackend { input: Mutex::new(input::Injector::new()), cursor: cursor::CursorReader::default(), terminal: Mutex::new(None) }
+        MacBackend {
+            input: Mutex::new(input::Injector::new()),
+            cursor: cursor::CursorReader::default(),
+            terminal: Mutex::new(None),
+            headless: virtual_display::Headless::default(),
+        }
     }
 }
 
@@ -83,7 +91,20 @@ fn frontmost_bundle() -> Option<String> {
 
 impl ScreenBackend for MacBackend {
     fn displays(&self) -> Result<Vec<DisplayInfo>> {
-        capture::displays()
+        let mut list = capture::displays()?;
+        let real = list.iter().filter(|d| !d.id.parse().is_ok_and(|id| self.headless.is_virtual(id))).count();
+        // 无头模式：一块屏幕都没有时自己建一块虚拟的，远程画面照样能看、能操作
+        if let Some(id) = self.headless.ensure(real) {
+            let id = id.to_string();
+            if !list.iter().any(|d| d.id == id) {
+                list = capture::displays()?;
+            }
+            for d in list.iter_mut().filter(|d| d.id == id) {
+                d.name = "虚拟显示器（没接屏幕时用）".into();
+                d.primary |= real == 0;
+            }
+        }
+        Ok(list)
     }
 
     fn check_capture(&self) -> Result<()> {
@@ -105,7 +126,9 @@ impl ScreenBackend for MacBackend {
     }
 
     fn start(&self, opts: CaptureOptions) -> Result<Arc<dyn ScreenCapture>> {
-        crate::awake::KeepAwake::start(|| Ok(Arc::new(capture::MacCapture::start(opts)?)))
+        // 抓的是虚拟显示器：抓屏期间拿着它，画面关了它才可能被收掉
+        let hold = opts.display.parse().ok().and_then(|id| self.headless.hold(id)).map(|d| Box::new(d) as Box<dyn std::any::Any + Send + Sync>);
+        crate::awake::KeepAwake::start_holding(|| Ok(Arc::new(capture::MacCapture::start(opts)?)), hold)
     }
 
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
@@ -151,6 +174,87 @@ impl ScreenBackend for MacBackend {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use p2pcli_core::screen::{CaptureOptions, Quality, VideoCodec};
+
+    /// 无头模式走一遍：强制建虚拟显示器，屏幕列表里有它；抓它能拿到 1920×1080 的关键帧；
+    /// 抓屏停了 30 多秒以后它被收掉。会在本机多出一块屏幕约 40 秒，默认不跑：
+    /// cargo test -p p2pcli-screen --lib -- --ignored headless_flow --nocapture
+    #[test]
+    #[ignore]
+    fn headless_flow() {
+        let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
+        unsafe { std::env::set_var("P2PCLI_VIRTUAL_DISPLAY", "1") };
+        let backend = MacBackend::new();
+        let list = backend.displays().unwrap();
+        let v = list.iter().find(|d| d.name.starts_with("虚拟显示器")).expect("屏幕列表里没有虚拟显示器").clone();
+        println!("屏幕列表：{:?}", list.iter().map(|d| format!("{} {} {}×{}", d.id, d.name, d.width, d.height)).collect::<Vec<_>>());
+        let q = Quality::Balanced;
+        let cap = backend
+            .start(CaptureOptions {
+                display: v.id.clone(),
+                max_long_edge: q.max_long_edge(VideoCodec::H265),
+                fps: 60,
+                bitrate: q.start_bitrate(),
+                show_cursor: true,
+                codec: VideoCodec::H265,
+                full_range: false,
+                wide_gamut: false,
+                yuv444: false,
+            })
+            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let frame = rt.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(5), cap.next_frame()).await }).expect("等不到虚拟显示器的画面").unwrap();
+        let c = frame.config.expect("第一帧要带解码配置");
+        println!("虚拟显示器的画面：{} {}×{}", c.codec, c.width, c.height);
+        assert_eq!((c.width, c.height), (1920, 1080));
+        // 键鼠能打到它上面：挪到它中间，读回指针位置
+        let id: u32 = v.id.parse().unwrap();
+        backend.inject(&v.id, &InputEvent::Move { x: 0.5, y: 0.5 }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let b = objc2_core_graphics::CGDisplayBounds(id);
+        let at = objc2_core_graphics::CGEvent::location(objc2_core_graphics::CGEvent::new(None).as_deref());
+        println!("指针 {:?}，虚拟显示器范围 {:?}", (at.x, at.y), (b.origin.x, b.origin.y, b.size.width, b.size.height));
+        assert!(at.x >= b.origin.x && at.x < b.origin.x + b.size.width && at.y >= b.origin.y && at.y < b.origin.y + b.size.height, "指针没挪到虚拟显示器上");
+        drop(cap);
+        // 没人看 30 秒以后收掉（每 5 秒查一次）
+        std::thread::sleep(std::time::Duration::from_secs(42));
+        assert!(!backend.headless.is_virtual(id), "没人看了虚拟显示器还在");
+        unsafe { std::env::remove_var("P2PCLI_VIRTUAL_DISPLAY") };
+        let after = capture::displays().unwrap();
+        assert!(!after.iter().any(|d| d.id == v.id), "虚拟显示器收掉了还在屏幕列表里");
+    }
+
+    /// 锁屏时能不能隔着远程打字：往锁屏界面打一个 a，截图存成 /tmp/p2pcli-lock-typed.png（看密码框里有没有圆点），
+    /// 再按两下退格删掉。不按回车，不会去解锁。默认不跑
+    #[test]
+    #[ignore]
+    fn lock_screen_typing_probe() {
+        let backend = MacBackend::new();
+        let main = objc2_core_graphics::CGMainDisplayID().to_string();
+        for (code, down) in [("KeyA", true), ("KeyA", false)] {
+            backend.inject(&main, &InputEvent::Key { code: code.into(), down }).unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let shot = shot::capture(&main, 640).unwrap();
+        std::fs::write("/tmp/p2pcli-lock-typed.png", &shot.png).unwrap();
+        println!("打了一个 a，截图 {}×{}", shot.width, shot.height);
+        for _ in 0..2 {
+            for down in [true, false] {
+                backend.inject(&main, &InputEvent::Key { code: "Backspace".into(), down }).unwrap();
+            }
+        }
+    }
+
+    /// 锁屏时系统抓屏拿到的是什么：打印锁没锁，截主屏存成 /tmp/p2pcli-lock-probe.png。默认不跑
+    #[test]
+    #[ignore]
+    fn lock_screen_probe() {
+        let main = objc2_core_graphics::CGMainDisplayID();
+        let shot = shot::capture(&main.to_string(), 640).unwrap();
+        std::fs::write("/tmp/p2pcli-lock-probe.png", &shot.png).unwrap();
+        println!("截到 {}×{}，存在 /tmp/p2pcli-lock-probe.png", shot.width, shot.height);
+    }
     /// 能读出前台程序的包名（快捷键转换靠它判断是不是终端）。要有前台程序，默认不跑：
     /// cargo test -p p2pcli-screen --lib -- --ignored frontmost
     #[test]

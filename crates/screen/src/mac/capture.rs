@@ -82,12 +82,20 @@ pub(crate) fn refresh_hz(id: CGDirectDisplayID) -> u32 {
     if hz.is_finite() && hz >= 1.0 { hz.round() as u32 } else { 0 }
 }
 
-/// 一块屏幕的像素尺寸（Retina 屏是实际像素，不是点）
+/// 一块屏幕的像素尺寸（Retina 屏是实际像素，不是点）。
+/// 显示模式读不到时（刚挂上的虚拟显示器有时这样）退回按像素读、再退回按点读
 pub(crate) fn pixel_size(id: CGDirectDisplayID) -> (u32, u32) {
     let mode = CGDisplayCopyDisplayMode(id);
-    let w = CGDisplayMode::pixel_width(mode.as_deref());
-    let h = CGDisplayMode::pixel_height(mode.as_deref());
-    (w as u32, h as u32)
+    let (w, h) = (CGDisplayMode::pixel_width(mode.as_deref()), CGDisplayMode::pixel_height(mode.as_deref()));
+    if w > 0 && h > 0 {
+        return (w as u32, h as u32);
+    }
+    let (w, h) = (objc2_core_graphics::CGDisplayPixelsWide(id), objc2_core_graphics::CGDisplayPixelsHigh(id));
+    if w > 0 && h > 0 {
+        return (w as u32, h as u32);
+    }
+    let b = objc2_core_graphics::CGDisplayBounds(id);
+    (b.size.width.max(0.0) as u32, b.size.height.max(0.0) as u32)
 }
 
 pub fn displays() -> Result<Vec<DisplayInfo>> {

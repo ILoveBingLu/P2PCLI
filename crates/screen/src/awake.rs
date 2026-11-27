@@ -13,14 +13,25 @@ use p2pcli_core::screen::{EncodedFrame, ScreenCapture};
 pub(crate) struct KeepAwake {
     inner: Arc<dyn ScreenCapture>,
     _guard: Guard,
+    /// 抓屏期间要一起留着的东西（比如无头模式的虚拟显示器）
+    _hold: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl KeepAwake {
-    /// 先叫醒屏幕再开始抓
+    /// 先叫醒屏幕再开始抓（Windows 用；Mac 要留着无头模式的虚拟显示器，用 start_holding）
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn start(start: impl FnOnce() -> Result<Arc<dyn ScreenCapture>>) -> Result<Arc<dyn ScreenCapture>> {
+        Self::start_holding(start, None)
+    }
+
+    /// 和 start 一样，另外抓屏期间留着 hold，抓屏停了才放
+    pub(crate) fn start_holding(
+        start: impl FnOnce() -> Result<Arc<dyn ScreenCapture>>,
+        hold: Option<Box<dyn std::any::Any + Send + Sync>>,
+    ) -> Result<Arc<dyn ScreenCapture>> {
         let guard = Guard::new();
         let inner = start()?;
-        Ok(Arc::new(KeepAwake { inner, _guard: guard }))
+        Ok(Arc::new(KeepAwake { inner, _guard: guard, _hold: hold }))
     }
 }
 
