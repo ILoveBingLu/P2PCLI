@@ -629,7 +629,7 @@ mod probe {
                                 input.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).unwrap();
                             }
                             let r = unsafe { t.SetInputType(0, &input, 0) };
-                            println!("     输入 {n}：{}", if r.is_ok() { "能收".to_string() } else { format!("不收（{}）", r.unwrap_err()) });
+                            println!("     输入 {n}：{}", match r { Ok(()) => "能收".to_string(), Err(e) => format!("不收（{e}）") });
                         }
                         // 真正生效的档次（有的编码器嘴上接受、实际按 Main 编）
                         if let Ok(cur) = unsafe { t.GetOutputCurrentType(0) } {

@@ -103,6 +103,9 @@ enum Cmd {
         /// 假装本机屏幕的刷新率（Hz）：对方帧率不超过它。0 是不报，对方只看自己的屏幕
         #[arg(long, default_value_t = 0)]
         hz: u32,
+        /// 同时收对方的声音：每秒打印收到几包、解出来的音量
+        #[arg(long)]
+        audio: bool,
     },
     /// 网络诊断：IPv6、NAT 类型、中继
     Diag,
@@ -265,7 +268,7 @@ async fn main() -> Result<()> {
     }
 
     match cli.cmd {
-        Cmd::Screen { target, password, seconds, quality, save, h265, yuv444, hz } => {
+        Cmd::Screen { target, password, seconds, quality, save, h265, yuv444, hz, audio } => {
             let remote = match connect_target(&node, &target, password).await {
                 Ok(r) => r,
                 Err(ConnectError::Rejected(c)) => bail!("被拒：{}", c.describe()),
@@ -284,7 +287,7 @@ async fn main() -> Result<()> {
                 "smooth" => p2pcli_core::screen::Quality::Smooth,
                 _ => p2pcli_core::screen::Quality::Balanced,
             };
-            watch_screen(&remote, &node.endpoint, quality, seconds, save, h265, yuv444, hz).await?;
+            watch_screen(&remote, &node.endpoint, quality, seconds, save, h265, yuv444, hz, audio).await?;
             remote.close();
             node.shutdown().await;
             Ok(())
@@ -432,7 +435,7 @@ async fn connect_target(node: &Node, target: &str, password: Option<String>) -> 
 
 /// 只看不操作：收画面、马上回确认，每秒打印一行
 #[allow(clippy::too_many_arguments)]
-async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool, yuv444: bool, hz: u32) -> Result<()> {
+async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p2pcli_core::screen::Quality, seconds: u64, save: Option<PathBuf>, h265: bool, yuv444: bool, hz: u32, audio: bool) -> Result<()> {
     use p2pcli_core::screen::{HostMsg, ScreenEvent, ScreenOpen, ViewerMsg};
     let started = Instant::now();
     let (info, mut input, mut output) = remote.open_screen(ScreenOpen {
@@ -448,7 +451,35 @@ async fn watch_screen(remote: &RemoteHost, endpoint: &iroh::Endpoint, quality: p
         refresh_hz: hz,
         keyboard: None,
         translate_keys: false,
+        audio,
     }).await?;
+    if audio {
+        if info.audio_token == 0 {
+            eprintln!("对方不能传声音");
+        } else {
+            let mut rx = remote.open_screen_audio(info.audio_token).await?;
+            tokio::spawn(async move {
+                let Ok(mut decoder) = p2pcli_core::screen_audio::Decoder::new() else { return };
+                let (mut packets, mut bytes, mut sum, mut samples) = (0u32, 0usize, 0f64, 0usize);
+                let mut tick = Instant::now();
+                while let Ok(Some((_ts, packet))) = rx.next().await {
+                    packets += 1;
+                    bytes += packet.len();
+                    if let Ok(pcm) = decoder.decode(&packet) {
+                        samples += pcm.len();
+                        sum += pcm.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>();
+                    }
+                    if tick.elapsed() >= Duration::from_secs(1) {
+                        let rms = if samples > 0 { (sum / samples as f64).sqrt() } else { 0.0 };
+                        eprintln!("声音：{packets} 包/秒，{:.0} kbps，均方根 {rms:.4}", bytes as f64 * 8.0 / 1000.0);
+                        (packets, bytes, sum, samples) = (0, 0, 0.0, 0);
+                        tick = Instant::now();
+                    }
+                }
+                eprintln!("声音流结束");
+            });
+        }
+    }
     // 帧间隔：看稳不稳。整段的都留着，最后算分位数；每秒打印这一秒最长的和超过 25 毫秒的次数
     let mut last_frame: Option<Instant> = None;
     let mut gaps: Vec<f64> = Vec::new();

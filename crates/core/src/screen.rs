@@ -292,6 +292,15 @@ pub trait ScreenBackend: Send + Sync + 'static {
     fn clipboard(&self) -> Option<Arc<dyn crate::screen_clip::ClipPlatform>> {
         None
     }
+    /// 能抓本机正在放的声音
+    fn audio_supported(&self) -> bool {
+        false
+    }
+    /// 开始抓本机正在放的声音，一段段送进 sink（48 kHz、立体声、交错的 f32，见 [`crate::screen_audio::AudioSink`]）。
+    /// 返回的东西丢掉就停。会阻塞，别在异步任务里直接调
+    fn start_audio(&self, _sink: crate::screen_audio::AudioSink) -> Result<Box<dyn std::any::Any + Send>> {
+        bail!("这台电脑还不能传声音")
+    }
     /// 前台程序是不是终端：Windows 的人在 Mac 的终端里按 Ctrl+C 是想中断，不是复制。读不了就是假
     fn frontmost_terminal(&self) -> bool {
         false
@@ -425,6 +434,9 @@ pub struct ScreenOpen {
     /// 一开始要不要转换快捷键（画面窗口里的开关）
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub translate_keys: bool,
+    /// 观看方能放声音（认得 [`crate::screen_audio`] 的 Opus 流）。老版本不带，就不传声音
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio: bool,
 }
 
 /// 视频编码格式。H.265 同样画质码率省三到五成，同样码率更清楚；H.264 哪儿都能用，兜底
@@ -459,6 +471,9 @@ pub struct ScreenStarted {
     /// 被连方在转换快捷键（观看方带了键盘习惯、能操作）：观看方发原样的键，开关用 [`ViewerMsg::TranslateKeys`]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub translate_keys: bool,
+    /// 被连方能传声音：观看方开一条 [`crate::proto::Msg::ScreenAudio`] 流带上这个号来收。0 是没有声音
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub audio_token: u64,
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -1018,6 +1033,8 @@ where
         _ => None,
     };
     drop(clip_tx);
+    // 声音：观看方能放、本机能抓才有。观看方另开一条流来收
+    let host_audio = (open.audio && backend.audio_supported()).then(|| crate::screen_audio::HostAudio::register(conn.remote_id(), backend.clone()));
     let mut running = match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, format).await {
         Ok(r) => r,
         Err(e) => {
@@ -1041,6 +1058,7 @@ where
                 clip_token: clip.as_ref().map_or(0, |c| c.token()),
                 input_v2: control && backend.input_v2(),
                 translate_keys: control && open.keyboard.is_some(),
+                audio_token: host_audio.as_ref().map_or(0, |a| a.token()),
             },
         },
     )
@@ -1192,6 +1210,13 @@ where
         paused = Some(reason);
         let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Paused { reason } })).await;
     }
+    // 声音跟着画面暂停、恢复
+    let set_audio_paused = |p: bool| {
+        if let Some(a) = &host_audio {
+            a.set_paused(p);
+        }
+    };
+    set_audio_paused(paused.is_some());
 
     let result: Result<()> = loop {
         // 能发就要下一帧
@@ -1320,6 +1345,7 @@ where
                         }
                     }
                     paused = now_path;
+                    set_audio_paused(paused.is_some());
                 }
                 if let Some((min_rtt, link_bps)) = link_info(&conn) {
                     rate.set_link(min_rtt, link_bps);

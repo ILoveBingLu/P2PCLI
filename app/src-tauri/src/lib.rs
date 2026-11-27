@@ -1978,6 +1978,7 @@ pub fn run() {
             screen::screen_open,
             screen::screen_send,
             screen::screen_set_clipboard,
+            screen::screen_set_audio,
             screen::screen_close,
             screen::screen_connection,
             screen::screen_report,

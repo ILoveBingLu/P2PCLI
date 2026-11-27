@@ -7,6 +7,7 @@ use objc2_core_foundation::{CFBoolean, CFDictionary, CFString};
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend, ScreenCapture};
 
+mod audio;
 mod capture;
 pub(crate) mod clip;
 mod shot;
@@ -113,6 +114,14 @@ impl ScreenBackend for MacBackend {
 
     fn input_v2(&self) -> bool {
         true
+    }
+
+    fn audio_supported(&self) -> bool {
+        true
+    }
+
+    fn start_audio(&self, sink: p2pcli_core::screen_audio::AudioSink) -> Result<Box<dyn std::any::Any + Send>> {
+        Ok(Box::new(audio::MacAudio::start(sink)?))
     }
 
     fn frontmost_terminal(&self) -> bool {

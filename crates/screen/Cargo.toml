@@ -20,6 +20,8 @@ objc2-foundation = "0.3"
 objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
 objc2-core-media = "0.3"
+# 远程画面的声音：系统给的声音数据（AudioBufferList）
+objc2-core-audio-types = "0.3"
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-screen-capture-kit = "0.3"
@@ -61,6 +63,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    # 远程画面的声音：WASAPI 回环录播放设备
+    "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",

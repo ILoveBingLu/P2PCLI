@@ -706,6 +706,11 @@ impl Host {
             crate::screen_clip::handle_stream(conn.remote_id(), req, send, recv).await;
             return;
         }
+        if let Msg::ScreenAudio { token } = request {
+            drop(recv);
+            crate::screen_audio::handle_stream(conn.remote_id(), token, send).await;
+            return;
+        }
         #[cfg(not(feature = "host"))]
         let _ = conn;
         let result: Result<()> = async {

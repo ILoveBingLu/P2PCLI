@@ -24,6 +24,8 @@ const TITLEBAR_HEIGHT: u32 = 44;
 /// 发给画面窗口的二进制消息：第一个字节是类型
 const EV_JSON: u8 = 1;
 const EV_FRAME: u8 = 2;
+/// 一段解好的声音：[3, 0, 0, 0] + 48 kHz 立体声左右交错的 f32（小端）。前面补齐 4 字节，页面那边直接当 Float32Array 用
+const EV_AUDIO: u8 = 3;
 
 // ---------------------------------------------------------------- 本机被看
 
@@ -358,6 +360,7 @@ pub(crate) async fn screen_open(
     refresh_hz: Option<u32>,
     keyboard: Option<p2pcli_core::screen_keys::KeyboardKind>,
     translate_keys: Option<bool>,
+    audio_on: Option<bool>,
     events: Channel<InvokeResponseBody>,
 ) -> Result<ScreenOpened, String> {
     let remote = state.remote(conn_id)?;
@@ -373,6 +376,8 @@ pub(crate) async fn screen_open(
         refresh_hz: refresh_hz.unwrap_or(0),
         keyboard,
         translate_keys: translate_keys.unwrap_or(false),
+        // Opus 用纯 Rust 解，哪个平台都能放
+        audio: true,
     };
     let (started, mut input, mut output) = remote.open_screen(open).await.map_err(|e| format!("{e:#}"))?;
     let screen_id = state.next();
@@ -388,7 +393,15 @@ pub(crate) async fn screen_open(
     };
     state.screens.lock().unwrap().insert(
         screen_id,
-        ScreenEntry { window: window.label().to_string(), conn_id, tx: tx.clone(), clip: clip.clone() },
+        ScreenEntry {
+            window: window.label().to_string(),
+            conn_id,
+            tx: tx.clone(),
+            clip: clip.clone(),
+            audio_token: started.audio_token,
+            events: events.clone(),
+            audio: None,
+        },
     );
     if let Some(clip) = &clip {
         spawn_clip_poll(clip.clone(), tx.downgrade());
@@ -415,7 +428,10 @@ pub(crate) async fn screen_open(
             }
         });
     }
-    info!(conn_id, screen_id, control = started.control, "开始看对方画面");
+    info!(conn_id, screen_id, control = started.control, audio = started.audio_token != 0, "开始看对方画面");
+    if audio_on.unwrap_or(true) {
+        set_audio(&state, screen_id, true);
+    }
 
     // 发：确认、键鼠、换屏
     tauri::async_runtime::spawn(async move {
@@ -632,6 +648,50 @@ pub(crate) fn screen_set_clipboard(state: State<'_, AppState>, screen_id: u64, o
     }
 }
 
+/// 观看窗口里开关声音：关的时候把声音流关掉，对方就不录了，不白占带宽
+#[tauri::command]
+pub(crate) fn screen_set_audio(state: State<'_, AppState>, screen_id: u64, on: bool) {
+    set_audio(&state, screen_id, on);
+}
+
+fn set_audio(state: &AppState, screen_id: u64, on: bool) {
+    let mut screens = state.screens.lock().unwrap();
+    let Some(entry) = screens.get_mut(&screen_id) else { return };
+    if let Some(task) = entry.audio.take() {
+        task.abort();
+    }
+    if !on || entry.audio_token == 0 {
+        return;
+    }
+    let Ok(remote) = state.remote(entry.conn_id) else { return };
+    let (token, events) = (entry.audio_token, entry.events.clone());
+    entry.audio = Some(tauri::async_runtime::spawn(async move {
+        if let Err(e) = play_audio(remote, token, events).await {
+            warn!("收对方的声音出错：{e:#}");
+        }
+    }));
+}
+
+/// 收对方的声音、解成 PCM 交给窗口去放。任务被取消时收的流跟着丢掉，对方读到就停
+async fn play_audio(remote: Arc<p2pcli_core::client::RemoteHost>, token: u64, events: Channel<InvokeResponseBody>) -> anyhow::Result<()> {
+    let mut rx = remote.open_screen_audio(token).await?;
+    let mut decoder = p2pcli_core::screen_audio::Decoder::new()?;
+    info!("开始收对方的声音");
+    while let Some((_ts, packet)) = rx.next().await? {
+        let pcm = decoder.decode(&packet)?;
+        let mut buf = Vec::with_capacity(4 + pcm.len() * 4);
+        buf.extend_from_slice(&[EV_AUDIO, 0, 0, 0]);
+        for v in pcm {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        if events.send(InvokeResponseBody::Raw(buf)).is_err() {
+            break;
+        }
+    }
+    info!("不再收对方的声音");
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) fn screen_close(state: State<'_, AppState>, screen_id: u64) {
     // 丢掉发送端，对方读到流结束就停
@@ -657,6 +717,21 @@ pub(crate) struct ScreenEntry {
     tx: mpsc::UnboundedSender<ViewerMsg>,
     /// 剪贴板互通（对方同意了才有）
     clip: Option<Arc<ViewerClip>>,
+    /// 对方给的声音号：0 是对方不传声音
+    audio_token: u64,
+    /// 往窗口送画面、声音的通道
+    events: Channel<InvokeResponseBody>,
+    /// 正在收声音的任务（静音时没有）
+    audio: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl Drop for ScreenEntry {
+    fn drop(&mut self) {
+        // 不看了：声音也停
+        if let Some(task) = self.audio.take() {
+            task.abort();
+        }
+    }
 }
 
 pub(crate) type ScreenSenders = std::collections::HashMap<u64, ScreenEntry>;

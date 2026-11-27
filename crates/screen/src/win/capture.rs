@@ -722,7 +722,10 @@ impl State {
     /// 换上新开的编码器，名字和是不是硬件记给观看方看
     fn set_encoder(&mut self, enc: Encoder) {
         // 名字是系统给编码器起的，像“NVIDIA HEVC Encoder MFT”，本身就带着格式
-        let name = if enc.name.is_empty() { format!("Media Foundation {:?}", enc.format) } else { enc.name.clone() };
+        let mut name = if enc.name.is_empty() { format!("Media Foundation {:?}", enc.format) } else { enc.name.clone() };
+        if enc.chroma444 {
+            name.push_str(" · 4:4:4");
+        }
         *self.shared.encoder.lock().unwrap() = Some(EncoderInfo { name, hardware: enc.hardware });
         self.encoder = Some(enc);
     }

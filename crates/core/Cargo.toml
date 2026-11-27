@@ -18,6 +18,8 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 rand.workspace = true
+# 远程画面的声音：纯 Rust 的 Opus 编解码，不用编 C 代码，手机上也能直接编
+opus-pure = "0.2.5"
 bytes.workspace = true
 portable-pty = { version = "0.9", optional = true }
 whoami = "2"

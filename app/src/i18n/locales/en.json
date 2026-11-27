@@ -1385,5 +1385,15 @@
   "按键原样发送（Ctrl 就是 Mac 的 ⌃），点一下改成按 Windows 的习惯": "Keys are sent as they are (Ctrl is ⌃ on the Mac). Click to use Windows habits",
   "按本机习惯用快捷键": "Use this computer's shortcuts",
   "4:2:0（本机解码器把 4:4:4 降成了 4:2:0）": "4:2:0 (this computer's decoder reduced the 4:4:4 stream to 4:2:0)",
-  "4:4:4 是每个像素都有自己的颜色，彩色小字、细线清楚；4:2:0 是四个像素共用一份颜色。两边显卡都支持 H.265 的 4:4:4 时才有，不支持就是 4:2:0": "4:4:4 gives every pixel its own color, so small colored text and thin lines stay sharp; 4:2:0 shares one color between four pixels. You only get 4:4:4 when both graphics cards support H.265 4:4:4; otherwise it's 4:2:0"
+  "4:4:4 是每个像素都有自己的颜色，彩色小字、细线清楚；4:2:0 是四个像素共用一份颜色。两边显卡都支持 H.265 的 4:4:4 时才有，不支持就是 4:2:0": "4:4:4 gives every pixel its own color, so small colored text and thin lines stay sharp; 4:2:0 shares one color between four pixels. You only get 4:4:4 when both graphics cards support H.265 4:4:4; otherwise it's 4:2:0",
+  "正在放对方电脑的声音，点一下静音": "Playing sound from the other computer. Click to mute",
+  "对方电脑的声音已静音，点一下打开": "Sound from the other computer is muted. Click to turn it on",
+  "静音": "Mute",
+  "打开声音": "Turn sound on",
+  "点一下画面就能听到对方的声音": "Click the picture to hear the other computer",
+  "声音": "Sound",
+  "对方不能传声音": "Not available from the other computer",
+  "Opus 48 kHz 立体声": "Opus 48 kHz stereo",
+  "已静音": "Muted",
+  "对方电脑正在放的声音。静音时对方不录，不占带宽；对方是老版本或者系统不支持时没有声音": "Sound playing on the other computer. While muted it isn't captured, so it uses no bandwidth. There's no sound when the other computer runs an older version or its system doesn't support it"
 }

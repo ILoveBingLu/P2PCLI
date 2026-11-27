@@ -207,6 +207,9 @@ pub enum Msg {
     /// 远程控制时剪贴板里的内容（文件、大图片……），粘贴时才传。观看方开，被连方按 token 找到那一路画面。
     /// 只在 ScreenStarted.clipboard 为真时用
     ScreenClip { req: crate::screen_clip::ClipStreamReq },
+    /// 远程画面的声音：观看方开，带上 ScreenStarted.audio_token，被连方往这条流里写 Opus 包（见 screen_audio）。
+    /// 只在 audio_token 不是 0 时用
+    ScreenAudio { token: u64 },
     /// 在对方电脑上跑一条命令，不开终端：输出走原始字节帧，第一个字节是 1（标准输出）或 2（标准错误）
     Exec {
         command: String,

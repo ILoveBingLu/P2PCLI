@@ -7,7 +7,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, ClipboardCopy, Crosshair, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Send, Shrink, Type, Upload, X } from "lucide-react";
+import { ChevronDown, ClipboardCopy, Crosshair, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Send, Shrink, Type, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { PcmPlayer } from "./audioPlayer";
 import {
   api,
   type ScreenDisplay,
@@ -84,7 +85,8 @@ function supportsHevc444(): Promise<boolean> {
     if (typeof VideoDecoder === "undefined") return false;
     if (!(await supportedCodecs()).includes("h265")) return false;
     // 档次 4（Range Extensions），几种常见的等级写法都试一下
-    for (const codec of ["hvc1.4.10.L123.90", "hvc1.4.10.H150.90", "hev1.4.10.L123.90"]) {
+    // 第一个是 NVIDIA 编码器实际出的 4:4:4 码流的写法（8 位、4:4:4 的限制标志），后面几个是别的常见写法
+    for (const codec of ["hvc1.4.10.L123.9E.8", "hvc1.4.10.L153.9E.8", "hvc1.4.10.L123.90", "hev1.4.10.L123.90"]) {
       try {
         const s = await VideoDecoder.isConfigSupported({ codec, codedWidth: 1920, codedHeight: 1080, hardwareAcceleration: "prefer-hardware" });
         if (s.supported) return true;
@@ -148,6 +150,10 @@ const CLIPBOARD_KEY = "p2pcli.screen.clipboard";
 function loadShareClipboard() {
   try { return localStorage.getItem(CLIPBOARD_KEY) !== "off"; } catch { return true; }
 }
+const AUDIO_KEY = "p2pcli.screen.audio";
+function loadAudioOn() {
+  try { return localStorage.getItem(AUDIO_KEY) !== "off"; } catch { return true; }
+}
 
 export default function ScreenWindow() {
   const [device, setDevice] = useState<{ endpointId: string; name: string; platform: string } | null>(null);
@@ -161,6 +167,13 @@ export default function ScreenWindow() {
   const [control, setControl] = useState(true);
   const [swapMeta, setSwapMeta] = useState(true);
   const [shareClipboard, setShareClipboard] = useState(loadShareClipboard);
+  /** 放对方的声音；关掉时对方也不录了 */
+  const [audioOn, setAudioOn] = useState(loadAudioOn);
+  const audioOnRef = useRef(audioOn);
+  audioOnRef.current = audioOn;
+  /** 浏览器不让自动出声（这个窗口还没被点过）：提示点一下 */
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  const player = useRef<PcmPlayer | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [hwNote, setHwNote] = useState<string | null>(null);
@@ -496,6 +509,15 @@ export default function ScreenWindow() {
           }
         });
         return;
+      case "audio": {
+        if (!player.current) {
+          player.current = new PcmPlayer();
+          player.current.onBlocked = setAudioBlocked;
+        }
+        player.current.setMuted(!audioOnRef.current);
+        player.current.push(ev.pcm);
+        return;
+      }
       case "frame":
         recvFrames.current += 1;
         recvBytes.current += ev.data.byteLength;
@@ -547,7 +569,7 @@ export default function ScreenWindow() {
       try {
         const [codecs, chroma444] = await Promise.all([supportedCodecs(), supportsHevc444()]);
         if (cancelled) return;
-        const opened = await api.screenOpen(connId, quality, true, display, codecs, chroma444, isMac ? "mac" : "pc", swapRef.current, onEvent);
+        const opened = await api.screenOpen(connId, quality, true, display, codecs, chroma444, isMac ? "mac" : "pc", swapRef.current, audioOnRef.current, onEvent);
         if (cancelled) { void api.screenClose(opened.screen_id); return; }
         screenId.current = opened.screen_id;
         setStarted(opened.started);
@@ -754,6 +776,28 @@ export default function ScreenWindow() {
     };
   }, [device, send, releaseAll]);
 
+  // 浏览器要用户点过、按过键才让出声：窗口里随便点一下就开
+  useEffect(() => {
+    const wake = () => player.current?.resume();
+    window.addEventListener("pointerdown", wake, true);
+    window.addEventListener("keydown", wake, true);
+    return () => {
+      window.removeEventListener("pointerdown", wake, true);
+      window.removeEventListener("keydown", wake, true);
+      player.current?.close();
+      player.current = null;
+    };
+  }, []);
+  const toggleAudio = () => {
+    const on = !audioOn;
+    setAudioOn(on);
+    try { localStorage.setItem(AUDIO_KEY, on ? "on" : "off"); } catch { /* 存不了就只管这次 */ }
+    player.current?.setMuted(!on);
+    if (on) player.current?.resume();
+    if (screenId.current != null) void api.screenSetAudio(screenId.current, on).catch(() => {});
+  };
+  const hasAudio = !!started?.audio_token;
+
   const toggleShareClipboard = () => {
     const on = !shareClipboard;
     setShareClipboard(on);
@@ -959,6 +1003,8 @@ export default function ScreenWindow() {
                   hint={t("对方用哪个编码器压画面。软件编码会卡、很费对方的 CPU，一般是对方显卡驱动有问题")} />
                 <Row label={t("延迟（估计）")} value={latency != null ? t("约 {{ms}} 毫秒", { ms: Math.round(latency) }) : "—"}
                   hint={latency != null ? t("对方编码 {{e}} 毫秒 + 网络单程约 {{n}} 毫秒 + 本机解码显示 {{d}} 毫秒。不算对方屏幕刷新、抓屏和本机屏幕刷新的时间", { e: stats!.encodeMs!.toFixed(1), n: Math.round(path!.rtt_ms! / 2), d: decodeShown!.toFixed(1) }) : t("对方是老版本，或者还在统计")} />
+                <Row label={t("声音")} value={!hasAudio ? t("对方不能传声音") : audioOn ? t("Opus 48 kHz 立体声") : t("已静音")}
+                  hint={t("对方电脑正在放的声音。静音时对方不录，不占带宽；对方是老版本或者系统不支持时没有声音")} />
                 <Row label={t("首帧")} value={firstFrameMs != null ? t("{{ms}} 毫秒", { ms: firstFrameMs }) : "—"} hint={t("对方同意以后，过了多久画面出来")} />
               </Section>
             ) : undefined} />
@@ -1009,6 +1055,14 @@ export default function ScreenWindow() {
             aria-label={t("剪贴板互通")}
             onPress={toggleShareClipboard}>
             <ClipboardCopy />
+          </Button>
+        )}
+        {live && hasAudio && (
+          <Button variant="ghost" size="icon-sm" className="screen-tool"
+            title={audioOn ? t("正在放对方电脑的声音，点一下静音") : t("对方电脑的声音已静音，点一下打开")}
+            aria-label={audioOn ? t("静音") : t("打开声音")}
+            onPress={toggleAudio}>
+            {audioOn ? <Volume2 /> : <VolumeX />}
           </Button>
         )}
         {canExtraInput && (
@@ -1071,6 +1125,11 @@ export default function ScreenWindow() {
               <Button size="sm" isDisabled={!textValue} onPress={sendText}><Send data-icon="inline-start" />{t("发送")}</Button>
             </div>
           </div>
+        )}
+        {live && hasAudio && audioOn && audioBlocked && (
+          <button type="button" className="screen-audio-hint" onClick={() => player.current?.resume()}>
+            <Volume2 />{t("点一下画面就能听到对方的声音")}
+          </button>
         )}
         {dropHint && device && (
           <div className="screen-overlay screen-overlay-soft screen-drop-hint">

@@ -4412,6 +4412,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "opus-pure"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da6dcc20af557d030b6f206e75c764bcda8c28a5bd03c73935c7e8fcf5f4f4a"
+
+[[package]]
 name = "ordered-stream"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4506,6 +4512,7 @@ dependencies = [
  "netdev 0.46.3",
  "noq-proto",
  "noq-udp",
+ "opus-pure",
  "portable-pty",
  "rand 0.10.3",
  "regex",
@@ -4577,6 +4584,7 @@ dependencies = [
  "dispatch2",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-audio-types",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-media",

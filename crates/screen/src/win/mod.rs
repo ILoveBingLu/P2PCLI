@@ -15,6 +15,7 @@ use windows::core::{BOOL, PCWSTR};
 
 #[cfg(test)]
 mod bench;
+mod audio;
 mod capture;
 pub(crate) mod clip;
 mod cursor;
@@ -133,6 +134,14 @@ impl ScreenBackend for WinBackend {
 
     fn input_v2(&self) -> bool {
         true
+    }
+
+    fn audio_supported(&self) -> bool {
+        true
+    }
+
+    fn start_audio(&self, sink: p2pcli_core::screen_audio::AudioSink) -> Result<Box<dyn std::any::Any + Send>> {
+        Ok(Box::new(audio::WinAudio::start(sink)?))
     }
 
     fn cursor(&self, display: &str) -> Option<p2pcli_core::screen::CursorInfo> {

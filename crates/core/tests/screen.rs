@@ -59,6 +59,18 @@ struct Fake {
     order: Arc<Mutex<Vec<String>>>,
     /// 认得后加的键鼠事件（送文字、锁定鼠标）
     input_v2: bool,
+    /// 能抓声音；抓的时候是真（停了变回假）
+    audio: bool,
+    audio_running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// 假的抓声音：一个线程每 10 毫秒送 10 毫秒的 440 Hz 正弦波，丢掉就停
+struct FakeAudio(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for FakeAudio {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 /// 内存里的剪贴板
@@ -144,6 +156,29 @@ impl ScreenBackend for FakeBackend {
     }
     fn input_v2(&self) -> bool {
         self.0.input_v2
+    }
+    fn audio_supported(&self) -> bool {
+        self.0.audio
+    }
+    fn start_audio(&self, sink: p2pcli_core::screen_audio::AudioSink) -> Result<Box<dyn std::any::Any + Send>> {
+        let running = self.0.audio_running.clone();
+        running.store(true, Ordering::SeqCst);
+        let flag = running.clone();
+        std::thread::spawn(move || {
+            let mut n = 0usize;
+            while flag.load(Ordering::SeqCst) {
+                let chunk: Vec<f32> = (0..480)
+                    .flat_map(|i| {
+                        let v = 0.4 * (2.0 * std::f32::consts::PI * 440.0 * (n + i) as f32 / 48_000.0).sin();
+                        [v, v]
+                    })
+                    .collect();
+                n += 480;
+                let _ = sink.try_send(chunk);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        Ok(Box::new(FakeAudio(running)))
     }
     fn screenshot(&self, display: &str, max_width: u32) -> Result<p2pcli_core::screen::Screenshot> {
         // 假的“PNG”：带上屏幕编号和宽度，测试里核对传对了
@@ -528,6 +563,52 @@ async fn shortcuts_are_translated_on_host() {
     }
     assert_eq!(injected(&fake), copy.to_vec());
     n.shutdown().await;
+}
+
+/// 声音：被连方能抓、观看方能放才给号；观看方凭号开流收到 Opus 包，解出来是那段正弦波；
+/// 观看方关了流，被连方就不抓了
+#[tokio::test(flavor = "multi_thread")]
+async fn audio_streams_and_stops() {
+    use p2pcli_core::screen_audio::{CHANNELS, Decoder, FRAME};
+    let fake = Arc::new(Fake { audio: true, ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake.clone())).await;
+    let (started, _input, _output) = n.remote.open_screen(ScreenOpen { audio: true, ..Default::default() }).await.unwrap();
+    assert_ne!(started.audio_token, 0, "能抓能放该给号");
+    let mut rx = n.remote.open_screen_audio(started.audio_token).await.unwrap();
+    let mut decoder = Decoder::new().unwrap();
+    let mut pcm = Vec::new();
+    let mut packets = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while packets < 40 && tokio::time::Instant::now() < deadline {
+        let Ok(Some((_ts, packet))) = tokio::time::timeout_at(deadline, rx.next()).await.unwrap() else { break };
+        let out = decoder.decode(&packet).unwrap();
+        assert_eq!(out.len(), FRAME * CHANNELS, "一包 20 毫秒");
+        pcm.extend_from_slice(out);
+        packets += 1;
+    }
+    assert!(packets >= 40, "5 秒里只收到 {packets} 包");
+    // 后半段：音量对、频率对（0.4 的正弦，均方根约 0.283；半秒 220 个周期）
+    let tail = &pcm[pcm.len() / 2..];
+    let rms = (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt();
+    assert!((rms - 0.283).abs() < 0.05, "音量不对：{rms}");
+    assert!(fake.audio_running.load(Ordering::SeqCst));
+    // 关流：被连方停抓
+    rx.close().await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while fake.audio_running.load(Ordering::SeqCst) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!fake.audio_running.load(Ordering::SeqCst), "观看方关了流，被连方还在抓声音");
+    n.shutdown().await;
+
+    // 观看方不能放（老版本）、被连方不能抓：都没有号
+    for (viewer, host) in [(false, true), (true, false)] {
+        let fake = Arc::new(Fake { audio: host, ..Default::default() });
+        let (n, _) = pair(ScreenDecision { allow: true, control: false }, Some(fake)).await;
+        let (started, _input, _output) = n.remote.open_screen(ScreenOpen { audio: viewer, ..Default::default() }).await.unwrap();
+        assert_eq!(started.audio_token, 0, "viewer={viewer} host={host}");
+        n.shutdown().await;
+    }
 }
 
 /// 编码格式协商：观看方说能解 H.265 就请编码器用 H.265，没说（老版本）就是 H.264

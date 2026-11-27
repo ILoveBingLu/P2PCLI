@@ -698,6 +698,12 @@ impl RemoteHost {
         .map_err(|_| anyhow!("对方没有响应"))?
     }
 
+    /// 收远程画面的声音：token 是对方 ScreenStarted.audio_token。丢掉（或者 close）就告诉对方停
+    pub async fn open_screen_audio(&self, token: u64) -> Result<crate::screen_audio::AudioReceiver> {
+        let (send, recv) = self.open_stream(&Msg::ScreenAudio { token }).await?;
+        Ok(crate::screen_audio::AudioReceiver::new(send, recv))
+    }
+
     /// 在对方电脑上跑一条命令，不开终端；用返回的流收输出和退出码。
     /// 流被丢掉就等于取消，对方会结束这条命令。
     pub async fn exec(&self, command: &str, cwd: Option<String>, timeout_secs: Option<u64>) -> Result<ExecStream> {

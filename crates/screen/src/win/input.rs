@@ -69,7 +69,7 @@ fn unicode(unit: u16, down: bool) -> INPUT {
 /// 回车、Tab 按真键发（有的程序不认 Unicode 的换行），别的字按 Unicode 发
 fn text_inputs(text: &str) -> Vec<INPUT> {
     let mut inputs = Vec::new();
-    let mut real = |scan: u16, inputs: &mut Vec<INPUT>| {
+    let real = |scan: u16, inputs: &mut Vec<INPUT>| {
         inputs.push(key(scan, false, true));
         inputs.push(key(scan, false, false));
     };

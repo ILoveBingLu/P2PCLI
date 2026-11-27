@@ -353,6 +353,8 @@ export interface ScreenStarted {
   input_v2?: boolean;
   /** 对方替我们转换快捷键（⌘ 和 Ctrl、行首行尾这些）：发原样的键；老版本没有这项，那时自己对调 ⌘ 和 Ctrl */
   translate_keys?: boolean;
+  /** 对方能传声音；0 或者没有是不能（老版本、系统不支持） */
+  audio_token?: number;
 }
 
 /** 对方在用的编码器 */
@@ -422,7 +424,9 @@ export type ScreenStreamEvent =
   | { t: "closed"; reason: string | null }
   /** 提示：剪贴板内容走中继传（中继只是兜底，会比较慢） */
   | { t: "notice"; kind: "clip_relay" }
-  | { t: "frame"; key: boolean; seq: number; data: Uint8Array };
+  | { t: "frame"; key: boolean; seq: number; data: Uint8Array }
+  /** 一段解好的声音：48 kHz 立体声，左右交错 */
+  | { t: "audio"; pcm: Float32Array };
 
 export type PresenceState = "checking" | "online" | "offline" | "old_version";
 
@@ -788,7 +792,7 @@ export const api = {
   screenWindowInfo: () => invoke<{ endpoint_id: string; device_name: string; platform: string }>("screen_window_info"),
   /** 对方点了同意才返回；画面和状态从 onEvent 送来 */
   /** keyboard：本机键盘是 Mac 的还是 PC 的；translateKeys：一开始要不要让对方转换快捷键 */
-  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], chroma444: boolean, keyboard: "mac" | "pc", translateKeys: boolean, onEvent: (ev: ScreenStreamEvent) => void) => {
+  screenOpen: (connId: number, quality: ScreenQuality, control: boolean, display: string | null, codecs: ScreenCodec[], chroma444: boolean, keyboard: "mac" | "pc", translateKeys: boolean, audioOn: boolean, onEvent: (ev: ScreenStreamEvent) => void) => {
     const events = new Channel<ArrayBuffer>();
     const decoder = new TextDecoder();
     events.onmessage = (raw) => {
@@ -796,6 +800,13 @@ export const api = {
       if (buf[0] === 2) {
         const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
         onEvent({ t: "frame", key: buf[1] === 1, seq: Number(view.getBigUint64(2)), data: buf.subarray(10) });
+      } else if (buf[0] === 3) {
+        // 前面补了 3 个 0，样本从第 4 个字节开始，正好 4 字节对齐（不对齐就拷一份）
+        const bytes = buf.byteLength - 4;
+        const pcm = (buf.byteOffset + 4) % 4 === 0
+          ? new Float32Array(buf.buffer, buf.byteOffset + 4, bytes >> 2)
+          : new Float32Array(buf.slice(4).buffer, 0, bytes >> 2);
+        onEvent({ t: "audio", pcm });
       } else {
         onEvent(JSON.parse(decoder.decode(buf.subarray(1))) as ScreenStreamEvent);
       }
@@ -803,11 +814,13 @@ export const api = {
     // 认得解码配置里的范围、色域标记；屏幕是广色域就请对方按 P3 传
     const wideGamut = typeof matchMedia === "function" && matchMedia("(color-gamut: p3)").matches && supportsP3Video();
     return displayRefreshHz().then((refreshHz) =>
-      invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, chroma444, clipboard: true, refreshHz, keyboard, translateKeys, events }));
+      invoke<{ screen_id: number; started: ScreenStarted }>("screen_open", { connId, quality, control, display, codecs, colorTags: true, wideGamut, chroma444, clipboard: true, refreshHz, keyboard, translateKeys, audioOn, events }));
   },
   /** clipboard：先看一眼本机剪贴板，变了就先把清单发过去，再发这批消息 */
   screenSend: (screenId: number, msgs: ScreenViewerMsg[], clipboard = false) => invoke<void>("screen_send", { screenId, msgs, clipboard }),
   screenSetClipboard: (screenId: number, on: boolean) => invoke<void>("screen_set_clipboard", { screenId, on }),
+  /** 开关对方的声音：关的时候对方就不录了 */
+  screenSetAudio: (screenId: number, on: boolean) => invoke<void>("screen_set_audio", { screenId, on }),
   screenClose: (screenId: number) => invoke<void>("screen_close", { screenId }),
   /** 每 5 秒报一次本机解码的情况，记进日志排查卡顿 */
   screenReport: (screenId: number, decoded: number, errors: number, queue: number, hardware: boolean, seconds: number) =>

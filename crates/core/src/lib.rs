@@ -40,6 +40,7 @@ pub mod reverse;
 #[cfg(feature = "host")]
 pub mod ssh_host;
 pub mod screen;
+pub mod screen_audio;
 pub mod screen_clip;
 pub mod screen_keys;
 pub mod store;

@@ -3122,6 +3122,25 @@ html[data-mobile] [role="dialog"] {
 .screen-overlay > p { margin: 0; max-width: 460px; }
 .screen-overlay-note { font-size: 12px; color: var(--muted); }
 .screen-overlay-soft { background: rgb(0 0 0 / 0.6); }
+/* 浏览器还不让出声：画面下方一个小提示，点了就开 */
+.screen-audio-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 11;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.screen-audio-hint > svg { width: 14px; height: 14px; }
 /* 拖文件进画面窗口时的提示：不挡拖放 */
 .screen-drop-hint { pointer-events: none; z-index: 15; border: 2px dashed var(--accent); }
 /* 送文字的小框：浮在画面右上角，打字用本机输入法，回车发过去 */
