@@ -1,4 +1,4 @@
-# 推 vX.Y.Z 标签时，Mac 两种芯片、Windows 三种架构、Linux 两种架构的安装包，和手机的安卓 APK、iOS IPA 同时开编，
+# 推 vX.Y.Z 标签时，Mac 两种芯片、Windows 三种架构（安装包和便携版 zip）、Linux 两种架构的安装包，和手机的安卓 APK、iOS IPA 同时开编，
 # 编完由“发布”汇总，连同在线更新用的 latest.json 一起发到发布页，并标成最新版本。
 # 推 ci/ 开头的分支只编不发，改了打包配置先用它试，编出来的包在这次运行的 Artifacts 里。
 # 各平台共用的步骤在 .github/actions/build-app。
@@ -188,6 +188,7 @@ jobs:
           - Windows（大多数电脑）：\`P2PCLI_${ver}_x64-setup.exe\`
           - Windows（骁龙等 ARM 芯片）：\`P2PCLI_${ver}_arm64-setup.exe\`
           - Windows（32 位系统）：\`P2PCLI_${ver}_x86-setup.exe\`
+          - Windows 便携版（不用安装，解压就能用，数据放在旁边的 data 文件夹，可以拷到 U 盘带着走）：\`P2PCLI_${ver}_x64-portable.zip\`、\`P2PCLI_${ver}_arm64-portable.zip\`、\`P2PCLI_${ver}_x86-portable.zip\`
           - Linux（Intel / AMD 64 位）：\`P2PCLI_${ver}_x64.AppImage\`、\`P2PCLI_${ver}_x64.deb\`、\`P2PCLI_${ver}_x64.rpm\`
           - Linux（ARM64）：\`P2PCLI_${ver}_arm64.AppImage\`、\`P2PCLI_${ver}_arm64.deb\`、\`P2PCLI_${ver}_arm64.rpm\`${mobile}
 
@@ -196,7 +197,7 @@ jobs:
           安装包没有付费签名，第一次打开会被系统拦一下：Mac 弹窗说 Apple 无法验证时点 完成（弹窗里没有 仍要打开），再到 系统设置 → 隐私与安全性，往下翻到 安全性 点 仍要打开、输入开机密码，再弹的窗里点 仍要打开，只用放行这一次；Windows 点 更多信息 → 仍要运行。
           Linux 使用 Ubuntu 22.04 原生构建，桌面环境需支持 WebKitGTK 4.1；AppImage 先赋予执行权限，Ubuntu 缺 FUSE 时安装 libfuse2（24.04 为 libfuse2t64）。Debian / Ubuntu 选 DEB，Fedora 等 RPM 发行版选 RPM，包管理器负责安装依赖。内置 tmux，无需另装。SHA256SUMS 可核对下载完整性。
           手机端只当连接的一方，用来连电脑上的 P2PCLI；安卓包第一次安装时系统会提示来自未知来源，允许即可。
-          装好以后软件会自动检查更新，有新版本在主界面点一下就能更新；Linux DEB / RPM 更新需要系统管理员授权。"
+          装好以后软件会自动检查更新，有新版本在主界面点一下就能更新；Linux DEB / RPM 更新需要系统管理员授权。Windows 便携版有新版时会提示，到这里下载新的便携版 zip 解压覆盖原来的文件夹，data 文件夹不用动。"
           gh release create "$GITHUB_REF_NAME" \
             dist/* \
             --title "P2PCLI ${ver}" --notes "$body" --latest

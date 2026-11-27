@@ -76,6 +76,10 @@ pub fn install(data_dir: &Path, add_path: bool) -> Result<CliStatus> {
     if !same_install(&path, &src) {
         place(&src, &path)?;
     }
+    // 便携版：拷出去的命令行工具旁边放一个标记，指回程序旁边的数据目录，它才连得上本机的 P2PCLI
+    if crate::portable() {
+        std::fs::write(dir.join(p2pcli_core::control::PORTABLE_MARKER), "..\n").with_context(|| format!("写 {} 失败", dir.display()))?;
+    }
     // Windows 自动加 PATH；Unix 要改用户的 shell 配置，等用户点。
     if (cfg!(windows) || add_path) && !on_path(dir) {
         add_to_path(dir)?;

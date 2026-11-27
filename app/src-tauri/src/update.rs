@@ -19,7 +19,14 @@ pub struct UpdateView {
     version: String,
     current_version: String,
     notes: Option<String>,
+    /// 便携版：不能在软件里装（会装成安装版），打开发布页让用户自己下载新的 zip
+    portable: bool,
+    /// 发布页
+    page: String,
 }
+
+/// 发布页：便携版有新版时打开这里下载
+const RELEASE_PAGE: &str = "https://github.com/ILoveBingLu/P2PCLI/releases/latest";
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -55,6 +62,8 @@ pub async fn check(app: &AppHandle, proxy: Option<String>) -> Result<Option<Upda
         version: u.version.clone(),
         current_version: u.current_version.clone(),
         notes: u.body.clone().filter(|b| !b.trim().is_empty()),
+        portable: crate::portable(),
+        page: RELEASE_PAGE.into(),
     });
     *app.state::<PendingUpdate>().0.lock().unwrap() = update;
     Ok(view)
@@ -64,6 +73,9 @@ pub async fn check(app: &AppHandle, proxy: Option<String>) -> Result<Option<Upda
 pub async fn install(app: &AppHandle, progress: Channel<UpdateProgress>) -> Result<(), String> {
     if cfg!(debug_assertions) {
         return Err("开发版不能在线更新，请用安装包装的正式版".into());
+    }
+    if crate::portable() {
+        return Err("便携版不能在软件里更新：请到发布页下载新的便携版 zip，解压覆盖原来的文件夹".into());
     }
     let mut update = app
         .state::<PendingUpdate>()

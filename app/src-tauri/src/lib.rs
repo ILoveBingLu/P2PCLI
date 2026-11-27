@@ -48,6 +48,19 @@ const NEARBY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_s
 /// installed builds (Contents/MacOS on macOS). It is selected at package time.
 /// 软件版本（tauri.conf.json 里的），启动时记下，连接时告诉对方
 static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// 便携版（程序旁边有 portable 标记文件）的数据目录；不是便携版是空
+static PORTABLE_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// 是不是便携版：数据放在程序旁边，不往系统里写东西（不自动加 PATH、不自动装 AI 使用说明），更新要自己下载新的 zip
+pub(crate) fn portable() -> bool {
+    PORTABLE_DIR.get().is_some_and(Option::is_some)
+}
+
+/// 便携版的网页缓存也放在程序旁边（不然 WebView2 默认写到系统的用户目录）
+#[cfg(target_os = "windows")]
+pub(crate) fn portable_webview_dir() -> Option<PathBuf> {
+    PORTABLE_DIR.get()?.as_ref().map(|d| d.join("webview"))
+}
 
 /// 手机端调到桌面专用功能时的回复
 #[cfg(mobile)]
@@ -1220,6 +1233,11 @@ async fn open_editor_window(app: AppHandle, state: State<'_, AppState>, endpoint
         use tauri_plugin_window_controls::WindowControlsBuilderExt;
         builder.theme(Some(tauri::Theme::Dark)).window_controls_height(44)
     };
+    #[cfg(target_os = "windows")]
+    let builder = match portable_webview_dir() {
+        Some(dir) => builder.data_directory(dir),
+        None => builder,
+    };
     let built = builder.build();
     if let Err(e) = built {
         state.editor_windows.lock().unwrap().remove(&label);
@@ -1683,6 +1701,26 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// 便携版的单实例：锁住数据目录里的 instance.lock，锁到程序退出（文件留着不删，下次照样锁）。
+/// 锁不上说明这个便携文件夹已经有一份在跑
+#[cfg(desktop)]
+fn lock_portable(dir: &Path) -> bool {
+    static LOCK: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
+    if std::fs::create_dir_all(dir).is_err() {
+        return true;
+    }
+    let Ok(file) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("instance.lock")) else { return true };
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = LOCK.set(file);
+            true
+        }
+        Err(std::fs::TryLockError::WouldBlock) => false,
+        // 文件系统不支持锁（比如某些网络盘）：不拦
+        Err(_) => true,
+    }
+}
+
 fn init_logging(dir: &Path) {
     let file = logging::LogWriter::open(dir).ok();
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1706,12 +1744,24 @@ pub fn run() {
 
     // 单实例和自动更新只有桌面端有：手机系统自己保证只开一份，更新走应用商店
     #[cfg(desktop)]
-    let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main(app);
-        }))
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(update::PendingUpdate::default());
+    let builder = {
+        // 便携版不用单实例插件：它按软件标识认，装着安装版、安装版开着时，便携版一启动就被当成第二份退出了。
+        // 便携版改成锁住自己数据目录里的一个文件：同一个便携文件夹开两份时后开的退出，和安装版能同时开
+        let portable = std::env::var_os("P2PCLI_DATA_DIR").is_none().then(p2pcli_core::control::portable_data_dir).flatten();
+        let builder = match portable {
+            Some(dir) => {
+                if !lock_portable(&dir) {
+                    eprintln!("这个便携版已经开着了（{}）", dir.display());
+                    std::process::exit(0);
+                }
+                builder
+            }
+            None => builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                show_main(app);
+            })),
+        };
+        builder.plugin(tauri_plugin_updater::Builder::new().build()).manage(update::PendingUpdate::default())
+    };
 
     // 手机：链接交给系统浏览器打开；扫桌面端显示的二维码连接
     #[cfg(mobile)]
@@ -1724,10 +1774,16 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 数据目录可以用环境变量指定，方便一台机器上开两份做测试
-            let data_dir = match std::env::var_os("P2PCLI_DATA_DIR") {
-                Some(d) => PathBuf::from(d),
-                None => app.path().app_data_dir()?,
+            // 数据目录可以用环境变量指定，方便一台机器上开两份做测试；便携版放在程序旁边
+            #[cfg(desktop)]
+            let portable_dir = if std::env::var_os("P2PCLI_DATA_DIR").is_none() { p2pcli_core::control::portable_data_dir() } else { None };
+            #[cfg(mobile)]
+            let portable_dir: Option<PathBuf> = None;
+            let _ = PORTABLE_DIR.set(portable_dir.clone());
+            let data_dir = match (std::env::var_os("P2PCLI_DATA_DIR"), portable_dir) {
+                (Some(d), _) => PathBuf::from(d),
+                (None, Some(d)) => d,
+                (None, None) => app.path().app_data_dir()?,
             };
             std::fs::create_dir_all(&data_dir)?;
             init_logging(&data_dir);
@@ -1815,12 +1871,19 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 let dir = data_dir.clone();
+                // 便携版不往系统里写东西：命令行工具、AI 使用说明都等用户在设置里自己点
+                let portable = portable();
+                if portable {
+                    info!(dir = %data_dir.display(), "便携版：数据放在程序旁边");
+                }
                 std::thread::spawn(move || {
-                    cli::auto_install(&dir);
+                    if !portable {
+                        cli::auto_install(&dir);
+                    }
                     // 命令行装好以后：已经生成过的 SSH 配置按现在的格式重写一遍
                     ssh::refresh(&dir);
                 });
-                let hint_on = !app.state::<AppState>().settings.lock().unwrap().ai_hint_off;
+                let hint_on = !portable && !app.state::<AppState>().settings.lock().unwrap().ai_hint_off;
                 std::thread::spawn(move || ai_hint::auto_install(hint_on));
             }
 
@@ -1888,10 +1951,13 @@ pub fn run() {
                     .iter()
                     .find(|window| window.label == "main")
                     .ok_or_else(|| anyhow::anyhow!("缺少主窗口配置"))?;
-                tauri::WebviewWindowBuilder::from_config(app, config)?
+                let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?
                     // 与 styles.css 的标题栏高度一致，控件由 Win32 层承载。
-                    .window_controls_height(44)
-                    .build()?;
+                    .window_controls_height(44);
+                if let Some(dir) = portable_webview_dir() {
+                    builder = builder.data_directory(dir);
+                }
+                builder.build()?;
             }
 
             // 托盘图标：只有桌面端有

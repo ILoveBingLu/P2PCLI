@@ -39,6 +39,11 @@ export function useUpdater() {
   }, []);
 
   const install = useCallback(async () => {
+    // 便携版：打开发布页，让用户下载新的 zip 解压覆盖
+    if (update?.portable) {
+      if (update.page) void api.openUrl(update.page).catch(() => {});
+      return;
+    }
     setInstalling(true);
     setError(null);
     setInstallError(null);
@@ -50,7 +55,7 @@ export function useUpdater() {
       setInstallError(String(e));
       setInstalling(false);
     }
-  }, []);
+  }, [update]);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});

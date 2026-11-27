@@ -20,6 +20,11 @@ export function updateArtifacts(version) {
   return entries;
 }
 
+/** Windows 便携版（解压就能用，数据放在程序旁边）：不走在线更新，只进发布页和 SHA256SUMS，缺了不发布 */
+export function portableArtifacts(version) {
+  return ["x64", "arm64", "x86"].map((arch) => `P2PCLI_${version}_${arch}-portable.zip`);
+}
+
 /** 手机安装包：不走在线更新，只进发布页和 SHA256SUMS。和桌面包一样必须都在，缺了不发布 */
 export function mobileArtifacts(version) {
   return [`P2PCLI_${version}_android-arm64.apk`, `P2PCLI_${version}_ios-unsigned.ipa`];
@@ -31,7 +36,7 @@ export async function prepareRelease({ dir, version, tag, repository, notes = ""
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("Invalid GitHub repository");
   const artifacts = updateArtifacts(version);
   const files = [`P2PCLI_${version}_aarch64.dmg`, `P2PCLI_${version}_x64.dmg`,
-    ...Object.values(artifacts).flatMap((file) => [file, `${file}.sig`]), ...mobileArtifacts(version)];
+    ...Object.values(artifacts).flatMap((file) => [file, `${file}.sig`]), ...portableArtifacts(version), ...mobileArtifacts(version)];
   for (const file of files) {
     const info = await stat(path.join(dir, file));
     if (!info.isFile() || !info.size) throw new Error(`Missing or empty release artifact: ${file}`);

@@ -1,4 +1,4 @@
-# 编一个平台的安装包和在线更新包，放到 dist/ 上传，给 app-release.yml 里各平台的任务共用。
+# 编一个平台的安装包和在线更新包（Windows 另有便携版 zip），放到 dist/ 上传，给 app-release.yml 里各平台的任务共用。
 name: 编安装包
 description: 编一个平台的 P2PCLI 安装包和在线更新包
 
@@ -169,6 +169,27 @@ runs:
         else
           cp "$b/nsis/P2PCLI_${ver}_${{ inputs.arch }}-setup.exe" dist/
           cp "$b/nsis/P2PCLI_${ver}_${{ inputs.arch }}-setup.exe.sig" dist/
+          # 便携版（绿色版）：和安装目录里一样的几样东西，加一个 portable 标记，解压就能用。
+          # 有标记时数据放在旁边的 data 文件夹里，不往系统里写东西（见 p2pcli_core::control::PORTABLE_MARKER）
+          p="target/portable/P2PCLI"
+          rm -rf target/portable
+          mkdir -p "$p/session-tools"
+          cp "target/${{ inputs.target }}/release/p2pcli-app.exe" "$p/P2PCLI.exe"
+          cp "app/src-tauri/binaries/p2pcli-${{ inputs.target }}.exe" "$p/p2pcli.exe"
+          cp "app/src-tauri/binaries/psmux-${{ inputs.target }}.exe" "$p/psmux.exe"
+          cp -R app/src-tauri/resources/session-tools/windows/. "$p/session-tools/"
+          : > "$p/portable"
+          printf '%s\r\n' \
+            "P2PCLI ${ver} 便携版" \
+            "" \
+            "解压后双击 P2PCLI.exe 就能用，不用安装。" \
+            "设备、身份、设置和日志都放在旁边的 data 文件夹里（第一次打开时建）：整个文件夹拷到 U 盘、换台电脑接着用；删掉文件夹就清干净了。" \
+            "不会自动把命令行工具 p2pcli 加进 PATH、不会自动给本机的 AI 装使用说明，要用的话在 设置 里点。" \
+            "有新版时软件会提示，到发布页下载新的便携版 zip，解压覆盖这个文件夹（data 文件夹不用动）。" \
+            "别删 portable 这个文件：没有它就当成安装版，数据改放到系统的用户目录。" \
+            "需要系统自带的 WebView2（Windows 11 和更新过的 Windows 10 都有）。" > "$p/便携版说明.txt"
+          (cd target/portable && 7z a -tzip -mx=9 "../../dist/P2PCLI_${ver}_${{ inputs.arch }}-portable.zip" P2PCLI > /dev/null)
+          7z l "dist/P2PCLI_${ver}_${{ inputs.arch }}-portable.zip"
         fi
         ls -la dist
 

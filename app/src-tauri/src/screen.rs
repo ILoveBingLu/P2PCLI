@@ -269,6 +269,11 @@ pub(crate) async fn open_screen_window(app: AppHandle, state: State<'_, AppState
         use tauri_plugin_window_controls::WindowControlsBuilderExt;
         builder.theme(Some(tauri::Theme::Dark)).window_controls_height(TITLEBAR_HEIGHT)
     };
+    #[cfg(target_os = "windows")]
+    let builder = match crate::portable_webview_dir() {
+        Some(dir) => builder.data_directory(dir),
+        None => builder,
+    };
     let built = builder.build();
     if let Err(e) = built {
         state.screen_windows.lock().unwrap().remove(&label);

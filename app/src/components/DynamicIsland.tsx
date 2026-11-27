@@ -281,7 +281,9 @@ function useUpdateActivity(updater: ReturnType<typeof useUpdater>): Activity | n
         <>
           <Download className="island-icon text-accent" />
           <span title={update.notes ? t("更新内容：\n{{notes}}", { notes: update.notes }) : undefined}>{t("新版本 v")}{update.version}</span>
-          <button type="button" className="island-pill-button" title={t("下载并安装，完成后自动重启")} onClick={updater.install}>{t("更新")}</button>
+          <button type="button" className="island-pill-button"
+            title={update.portable ? t("便携版：打开发布页下载新的便携版 zip，解压覆盖原来的文件夹，data 文件夹里的设备和设置不用动") : t("下载并安装，完成后自动重启")}
+            onClick={updater.install}>{update.portable ? t("去下载") : t("更新")}</button>
           <button type="button" className="island-close" aria-label={t("稍后再说")} title={t("稍后再说")} onClick={updater.dismiss}><X /></button>
         </>
       ),

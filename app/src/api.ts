@@ -567,6 +567,10 @@ export interface UpdateView {
   version: string;
   current_version: string;
   notes: string | null;
+  /** 便携版：不能在软件里装，打开发布页下载新的 zip */
+  portable?: boolean;
+  /** 发布页 */
+  page?: string;
 }
 
 export type UpdateProgress =

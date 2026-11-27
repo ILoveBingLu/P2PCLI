@@ -133,7 +133,7 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
                 {updater.installing
                   ? <LoaderCircle data-icon="inline-start" className="animate-spin" />
                   : <Download data-icon="inline-start" />}
-                {t("更新并重启")}
+                {updater.update.portable ? t("下载新的便携版") : t("更新并重启")}
               </Button>
             ) : null}
             <Button variant="outline" size="sm" onClick={() => void updater.check()} disabled={updater.checking || updater.installing}>

@@ -140,10 +140,42 @@ pub fn decode_output(data: &str) -> Vec<u8> {
     B64.decode(data).unwrap_or_default()
 }
 
-/// 桌面端的数据目录；P2PCLI_DATA_DIR 可以指定别的（一台机器开两份测试时用）
+/// 便携版（绿色版）的标记文件：程序旁边有它，数据就放在程序旁边，不用系统的用户目录。
+/// 文件内容是数据目录（相对标记文件所在的文件夹），空的就是旁边的 data 文件夹。
+/// 便携版 zip 里自带一个空的；命令行工具拷到 data\bin 里时旁边放一个写着 ".." 的，指回同一个数据目录
+pub const PORTABLE_MARKER: &str = "portable";
+
+/// 当前程序是便携版时的数据目录
+pub fn portable_data_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    portable_data_dir_at(exe.parent()?)
+}
+
+/// dir 里有便携版标记时，它指的数据目录
+pub fn portable_data_dir_at(dir: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(dir.join(PORTABLE_MARKER)).ok()?;
+    let rel = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("data");
+    let path = dir.join(rel);
+    // 去掉 ".."，日志、提示里好看；文件夹还没建时就用原样拼的
+    Some(std::fs::canonicalize(&path).map(strip_verbatim).unwrap_or(path))
+}
+
+/// Windows 上 canonicalize 会加 \\?\ 前缀，有的程序不认
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+/// 桌面端的数据目录：P2PCLI_DATA_DIR 指定的（一台机器开两份测试时用）> 便携版旁边的 > 系统的用户目录
 pub fn data_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("P2PCLI_DATA_DIR") {
         return Some(PathBuf::from(dir));
+    }
+    if let Some(dir) = portable_data_dir() {
+        return Some(dir);
     }
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     let base = if cfg!(target_os = "macos") {
@@ -599,5 +631,25 @@ mod edit_tests {
         // LF 文件、单行原文都原样
         assert_eq!(match_line_endings("a\nb\n", "a\nb".into(), "x".into()), ("a\nb".into(), "x".into()));
         assert_eq!(match_line_endings("a\r\nb", "a".into(), "x\ny".into()), ("a".into(), "x\ny".into()));
+    }
+}
+
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+
+    /// 标记文件空的：数据在旁边的 data；写着 ".."：数据在上一层（命令行工具拷进 data\bin 时）；没有标记：不是便携版
+    #[test]
+    fn portable_marker_points_to_data_dir() {
+        let root = std::env::temp_dir().join(format!("p2pcli-portable-{}", std::process::id()));
+        let bin = root.join("data").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        assert_eq!(portable_data_dir_at(&root), None);
+        std::fs::write(root.join(PORTABLE_MARKER), "").unwrap();
+        let data = portable_data_dir_at(&root).unwrap();
+        assert!(data.ends_with("data"), "{}", data.display());
+        std::fs::write(bin.join(PORTABLE_MARKER), "..\n").unwrap();
+        assert_eq!(portable_data_dir_at(&bin).unwrap(), data);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
