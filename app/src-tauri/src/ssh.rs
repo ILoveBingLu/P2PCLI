@@ -3,8 +3,11 @@
 //! 由对方的 P2PCLI 起一个只给这条通道用的 sshd，用 P2PCLI 替本机管的密钥登录，不用开远程登录、不用密码。
 //!
 //! 只维护 `~/.ssh/p2pcli_hosts` 这一个文件（整个重写）；`~/.ssh/config` 只在用户同意后在最前面加一行
-//! `Include ~/.ssh/p2pcli_hosts`，不动原有的内容。每台设备一个别名（p2p-设备名），
-//! HostKeyAlias 按设备公钥区分，换了设备名、IP 也不会认错主机密钥。
+//! `Include ~/.ssh/p2pcli_hosts`，不动原有的内容。每台设备一个别名（p2p-设备名）。
+//!
+//! 不让 ssh 记对方的主机密钥（UserKnownHostsFile /dev/null）：认对方是谁由 P2PCLI 的通道负责
+//! （连的是那台设备的公钥，SSH 服务只听它自己的本机回环）。不然对方从系统的 SSH 服务换成 P2PCLI
+//! 起的那个（或反过来）时主机密钥变了，ssh 会直接拒绝连接；第一次连也不用再确认指纹。
 
 use std::path::{Path, PathBuf};
 
@@ -129,14 +132,13 @@ fn render(hosts: &[SshHost], cli: &str, key: Option<&Path>) -> String {
     );
     for h in hosts {
         out.push_str(&format!(
-            "# {}\nHost {}\n  HostName {}\n  User {}\n  ProxyCommand {} pipe {} ssh\n  HostKeyAlias p2pcli-{}\n  ServerAliveInterval 30\n{}\n",
+            "# {}\nHost {}\n  HostName {}\n  User {}\n  ProxyCommand {} pipe {} ssh\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n  ServerAliveInterval 30\n{}\n",
             h.name.replace('\n', " "),
             h.alias,
             h.alias,
             h.user,
             quote(cli),
             h.endpoint_id,
-            &h.endpoint_id[..16.min(h.endpoint_id.len())],
             key.map(|k| format!("  IdentityFile {}\n", quote(&k.display().to_string()))).unwrap_or_default(),
         ));
     }
@@ -193,6 +195,27 @@ fn upsert(data_dir: &Path, ssh_dir: &Path, name: &str, endpoint_id: &str, user: 
     write_private(&data_dir.join(STORE_FILE), &serde_json::to_vec_pretty(&hosts).map_err(|e| e.to_string())?)?;
     write_private(&ssh_dir.join(HOSTS_FILE), render(&hosts, cli, key).as_bytes())?;
     Ok(alias)
+}
+
+/// 打开软件时按现在的格式重写一遍 p2pcli_hosts（已经有这个文件时才写）：升级以后，直接从编辑器的
+/// 最近列表打开的连接也用上新配置，不用先在 P2PCLI 里再点一次「用本机 VS Code 打开」
+pub(crate) fn refresh(data_dir: &Path) {
+    let hosts = load(data_dir);
+    let Ok(dir) = ssh_dir() else { return };
+    let path = dir.join(HOSTS_FILE);
+    let Some(cli) = crate::cli::status(data_dir).path else { return };
+    if hosts.is_empty() || !path.exists() {
+        return;
+    }
+    let key = data_dir.join("ssh").join("id_ed25519");
+    let text = render(&hosts, &cli, key.exists().then_some(key.as_path()));
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
+        return;
+    }
+    match write_private(&path, text.as_bytes()) {
+        Ok(()) => tracing::info!("按新格式重写了 {}", path.display()),
+        Err(e) => tracing::warn!("重写 SSH 配置失败：{e}"),
+    }
 }
 
 /// 编辑器的远程链接：vscode://vscode-remote/ssh-remote+别名/路径。Windows 的路径写成 /C:/Users/...
@@ -334,7 +357,8 @@ mod tests {
         assert!(text.contains(&format!("proxycommand \"/opt/p2p cli/p2pcli\" pipe {id} ssh")), "{text}");
         assert!(text.contains("identityfile") && text.contains("my key"), "{text}");
         assert!(text.contains("port 22"), "{text}");
-        assert!(text.contains(&format!("hostkeyalias p2pcli-{}", &id[..16])), "{text}");
+        assert!(text.contains("stricthostkeychecking false") || text.contains("stricthostkeychecking no"), "{text}");
+        assert!(text.contains("userknownhostsfile /dev/null"), "{text}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -345,7 +369,8 @@ mod tests {
         assert!(text.contains("Host p2p-a\n"));
         assert!(text.contains("ProxyCommand \"/Applications/My App/p2pcli\" pipe 0123456789abcdef0123 ssh"));
         assert!(!text.contains("IdentityFile"));
-        assert!(text.contains("HostKeyAlias p2pcli-0123456789abcdef"));
+        assert!(text.contains("UserKnownHostsFile /dev/null\n"));
+        assert!(!text.contains("HostKeyAlias"));
         assert!(text.contains("User sam"));
     }
 }

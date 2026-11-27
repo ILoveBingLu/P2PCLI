@@ -95,7 +95,7 @@ impl UserSshd {
         // 先占一个空闲端口再放掉，交给 sshd
         let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let config = self.dir.join("sshd_config");
-        crate::store::write_private(&config, sshd_config(port, &host_key, &keys).as_bytes())?;
+        crate::store::write_private(&config, sshd_config(port, &host_key, &keys)?.as_bytes())?;
         let mut child = Command::new(&sshd)
             // -D 不进后台，-e 日志写标准错误；sshd 要用绝对路径起（它会重新执行自己）
             .args(["-D", "-e", "-f"])
@@ -149,6 +149,8 @@ impl UserSshd {
 
 /// 只认一行 OpenSSH 格式的公钥：类型 + base64，备注去掉（由这里加）
 fn valid_key(text: &str) -> Result<String> {
+    // .pub 文件末尾本来就有换行：首尾的空白去掉，中间夹着换行（多行）才不认
+    let text = text.trim();
     let mut parts = text.split_whitespace();
     let (Some(kind), Some(body)) = (parts.next(), parts.next()) else { bail!("公钥格式不对") };
     let kind_ok = matches!(kind, "ssh-ed25519" | "ssh-rsa") || kind.starts_with("ecdsa-sha2-") || kind.starts_with("sk-");
@@ -159,14 +161,29 @@ fn valid_key(text: &str) -> Result<String> {
     Ok(format!("{kind} {body}"))
 }
 
-fn sshd_config(port: u16, host_key: &Path, keys: &Path) -> String {
-    format!(
+/// sshd_config 里的路径：加双引号（Mac 的数据目录在 `Application Support` 下，带空格，
+/// 不加引号 sshd 会把空格后面当成多余的参数，直接起不来）。路径里有引号、换行的不支持
+fn quoted(path: &Path) -> Result<String> {
+    let text = path.display().to_string();
+    if text.contains(['"', '\n', '\r']) {
+        bail!("P2PCLI 的数据目录路径里有引号或换行，起不了用户态 sshd：{text}");
+    }
+    Ok(format!("\"{text}\""))
+}
+
+fn sshd_config(port: u16, host_key: &Path, keys: &Path) -> Result<String> {
+    // MaxAuthTries 调高：连接方的 ssh 会先把 ssh-agent 里的密钥一把把试，每试一把算一次，
+    // 默认 6 次试满就断，轮不到 P2PCLI 管的那把。这里只认 P2PCLI 记下的公钥，多试几次没有风险
+    // AuthorizedKeysFile 里的 % 是占位符（%h、%u），路径本身的 % 要写成 %%
+    let keys = quoted(keys)?.replace('%', "%%");
+    Ok(format!(
         "# 由 P2PCLI 生成：当前用户的 sshd，只听本机回环，只认 P2PCLI 记下的公钥\n\
          Port {port}\n\
          ListenAddress 127.0.0.1\n\
          HostKey {}\n\
          AuthorizedKeysFile {}\n\
          PubkeyAuthentication yes\n\
+         MaxAuthTries 30\n\
          PasswordAuthentication no\n\
          KbdInteractiveAuthentication no\n\
          UsePAM no\n\
@@ -178,9 +195,9 @@ fn sshd_config(port: u16, host_key: &Path, keys: &Path) -> String {
          PrintMotd no\n\
          LogLevel ERROR\n\
          Subsystem sftp internal-sftp\n",
-        host_key.display(),
-        keys.display(),
-    )
+        quoted(host_key)?,
+        keys,
+    ))
 }
 
 #[cfg(test)]
@@ -191,10 +208,34 @@ mod tests {
     fn keys() {
         let k = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk2b3Vt5n0Zl1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6 me@host";
         assert_eq!(valid_key(k).unwrap(), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk2b3Vt5n0Zl1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6");
+        assert_eq!(valid_key(&format!("{k}\n")).unwrap(), valid_key(k).unwrap(), "直接读 .pub 文件带着换行也认");
         assert!(valid_key("ssh-ed25519").is_err());
         assert!(valid_key("evil AAAAC3NzaC1lZDI1NTE5AAAAIHk2b3Vt5n0Zl1a2b3c4d5e6f7g8h9i0j1k2").is_err());
         assert!(valid_key("ssh-ed25519 AAAA;rm -rf / AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").is_err());
         assert!(valid_key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk2b3Vt5n0Zl1a2b3c4d5e6f7g8h9i0j1k2\nssh-rsa AAAA").is_err());
+    }
+
+    /// Mac 的数据目录带空格：路径要加引号，% 要转义；真有 sshd 时让它检查一遍配置
+    #[test]
+    fn config_quotes_paths() {
+        let dir = std::env::temp_dir().join(format!("p2pcli sshd 50% test-{}", std::process::id()));
+        let text = sshd_config(2222, &dir.join("host_ed25519"), &dir.join("authorized_keys")).unwrap();
+        assert!(text.contains(&format!("HostKey \"{}\"\n", dir.join("host_ed25519").display())), "{text}");
+        assert!(text.contains(&format!("AuthorizedKeysFile \"{}\"\n", dir.join("authorized_keys").display().to_string().replace('%', "%%"))), "{text}");
+        assert!(sshd_config(2222, Path::new("/a\"b/k"), Path::new("/k")).is_err());
+        let Some(sshd) = UserSshd::binary() else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("host_ed25519");
+        let made = std::process::Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-f"]).arg(&key).status();
+        if !made.is_ok_and(|s| s.success()) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let config = dir.join("sshd_config");
+        std::fs::write(&config, &text).unwrap();
+        let out = std::process::Command::new(&sshd).arg("-t").arg("-f").arg(&config).output().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(out.status.success(), "sshd 不认这份配置：{}", String::from_utf8_lossy(&out.stderr));
     }
 
     #[tokio::test]

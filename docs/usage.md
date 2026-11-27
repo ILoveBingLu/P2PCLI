@@ -56,7 +56,7 @@ Git 面板：编辑器左边的“Git”（⌘/Ctrl+Shift+G）列出暂存的和
 
 - 对方是 Mac、Linux：不用开系统的“远程登录”，也不用密码。对方的 P2PCLI 以当前用户的身份另起一个只听本机回环的 sshd，配置、主机密钥和授权的公钥都放在它自己的数据目录里，不碰 `/etc/ssh`；本机的 P2PCLI 替你管一把密钥（数据目录下的 `ssh/id_ed25519`），连的时候把公钥交给对方记下。两边都要是新版本。
 - 对方是 Windows：要先装好“OpenSSH 服务器”（设置 → 系统 → 可选功能）并启动 sshd 服务，登录按 Windows 的方式（密码或你自己配的密钥）。
-- 第一次用时会问你能不能在 `~/.ssh/config` 最前面加一行 `Include ~/.ssh/p2pcli_hosts`，原有内容不动。P2PCLI 只维护 `~/.ssh/p2pcli_hosts` 这一个文件，每台设备一个别名（`p2p-设备名`），终端里也能直接 `ssh p2p-设备名`。主机密钥按设备公钥区分，设备改名也不会认错。
+- 第一次用时会问你能不能在 `~/.ssh/config` 最前面加一行 `Include ~/.ssh/p2pcli_hosts`，原有内容不动。P2PCLI 只维护 `~/.ssh/p2pcli_hosts` 这一个文件，每台设备一个别名（`p2p-设备名`），终端里也能直接 `ssh p2p-设备名`。ssh 不记这些别名的主机密钥（第一次连不用确认指纹，对方从系统的 SSH 服务换成 P2PCLI 起的那个也不会报主机密钥变了）：对方是谁由 P2PCLI 的连接认定，SSH 服务只听对方电脑自己的本机回环。
 - Windows 上 P2PCLI 写的这两个 SSH 配置文件只留本人、SYSTEM、Administrators 的权限：Windows 版 OpenSSH 见到别的用户或组的权限会拒绝读配置。
 
 ## 远程控制

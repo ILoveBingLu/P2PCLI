@@ -1803,7 +1803,11 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 let dir = data_dir.clone();
-                std::thread::spawn(move || cli::auto_install(&dir));
+                std::thread::spawn(move || {
+                    cli::auto_install(&dir);
+                    // 命令行装好以后：已经生成过的 SSH 配置按现在的格式重写一遍
+                    ssh::refresh(&dir);
+                });
                 let hint_on = !app.state::<AppState>().settings.lock().unwrap().ai_hint_off;
                 std::thread::spawn(move || ai_hint::auto_install(hint_on));
             }

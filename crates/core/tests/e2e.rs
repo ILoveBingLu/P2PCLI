@@ -2238,7 +2238,8 @@ async fn persistent_session_gets_borrowed_proxy() {
 async fn ssh_over_p2p_without_remote_login() {
     use tokio::net::TcpListener;
     if !p2pcli_core::ssh_host::UserSshd::available() { return; }
-    let (_host, _delegate, guest, remote) = paired_pair("ssh").await;
+    // 被连方的数据目录带空格（像 Mac 的 Application Support）：sshd 配置里的路径要加引号
+    let (_host, _delegate, guest, remote) = paired_pair("ssh with space").await;
     let _ = guest;
     let dir = temp_dir("ssh-client");
     std::fs::create_dir_all(&dir).unwrap();
