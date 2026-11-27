@@ -34,6 +34,7 @@ at startup the app drops a usage note (`SKILL.md` in the Agent Skills format) in
 
 - Claude Code: `~/.claude/skills/p2pcli/` (follows `CLAUDE_CONFIG_DIR` if that is set)
 - Codex, Gemini CLI, Cursor, OpenCode, Copilot CLI, and Kimi CLI: the shared `~/.agents/skills/p2pcli/`
+- Antigravity CLI (`agy`): `~/.gemini/antigravity-cli/skills/p2pcli/`
 - Qwen Code: `~/.qwen/skills/p2pcli/`. CodeBuddy: `~/.codebuddy/skills/p2pcli/`
 
 It only writes into AI config directories that already exist. It does not create a directory for an AI that is not installed. It only writes a folder named `p2pcli`, and it does not edit `CLAUDE.md` or `AGENTS.md`. The file is marked `managed-by: p2pcli`. Upgrades overwrite only files with that mark, and leave a same-named skill that someone else installed alone. Settings → Multi-device AI shows which AIs were detected and whether the skill is installed. You can install, update, or remove one or all of them, and turn off Install and update automatically at startup (turning it off only stops the automatic work; installed skills are not deleted; a development build can still install manually, it just does not install automatically). AI windows that are already open need to be reopened before they see it. The source of the note is `app/src-tauri/src/p2pcli-skill.md`. Update it when commands or usage change.

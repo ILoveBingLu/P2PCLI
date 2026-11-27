@@ -59,7 +59,8 @@ pub struct Row {
 
 /// 本机有哪些 AI，各自该往哪个目录放。按官方文档里的用户级技能目录：
 /// Claude Code 读 ~/.claude/skills（CLAUDE_CONFIG_DIR 可以换）；Codex、Gemini CLI、Cursor、OpenCode、
-/// Copilot CLI、Kimi CLI 都读通用的 ~/.agents/skills；Qwen Code 读 ~/.qwen/skills；CodeBuddy 读 ~/.codebuddy/skills。
+/// Copilot CLI、Kimi CLI 都读通用的 ~/.agents/skills；Antigravity CLI 读 ~/.gemini/antigravity-cli/skills；
+/// Qwen Code 读 ~/.qwen/skills；CodeBuddy 读 ~/.codebuddy/skills。
 /// 以 AI 自己的配置目录在不在来判断装没装它。
 pub fn targets(home: &Path, claude_dir: Option<&Path>) -> Vec<Target> {
     let mut out = Vec::new();
@@ -78,6 +79,11 @@ pub fn targets(home: &Path, claude_dir: Option<&Path>) -> Vec<Target> {
     let ais: Vec<&'static str> = GENERIC.iter().filter(|(_, dir)| home.join(dir).is_dir()).map(|(ai, _)| *ai).collect();
     if !ais.is_empty() {
         out.push(Target { ais, skills_dir: home.join(".agents").join("skills") });
+    }
+    // Antigravity CLI 的配置在 ~/.gemini/antigravity-cli，用户级技能读它下面的 skills
+    let antigravity = home.join(".gemini").join("antigravity-cli");
+    if antigravity.is_dir() {
+        out.push(Target { ais: vec!["Antigravity CLI"], skills_dir: antigravity.join("skills") });
     }
     for (ai, dir) in [("Qwen Code", ".qwen"), ("CodeBuddy", ".codebuddy")] {
         if home.join(dir).is_dir() {
@@ -236,6 +242,12 @@ mod tests {
         assert_eq!(t[2], Target { ais: vec!["Qwen Code"], skills_dir: home.join(".qwen/skills") });
         // 没装的 AI 的目录不会被建出来
         assert!(install(&t).is_empty());
+        // 装了 Antigravity CLI：另外放进它自己的技能目录
+        std::fs::create_dir_all(home.join(".gemini/antigravity-cli")).unwrap();
+        let t2 = targets(&home, None);
+        assert_eq!(t2.len(), 4);
+        assert_eq!(t2[2], Target { ais: vec!["Antigravity CLI"], skills_dir: home.join(".gemini/antigravity-cli/skills") });
+        std::fs::remove_dir_all(home.join(".gemini/antigravity-cli")).unwrap();
         assert!(!home.join(".cursor").exists() && !home.join(".codebuddy").exists() && !home.join(".config").exists());
         // CLAUDE_CONFIG_DIR 换了位置就跟着换
         let other = home.join("my-claude");

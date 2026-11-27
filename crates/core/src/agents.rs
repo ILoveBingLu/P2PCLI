@@ -145,6 +145,8 @@ struct Known {
 const KNOWN: &[Known] = &[
     Known { kind: "claude", name: "Claude Code", names: &["claude"], markers: &["@anthropic-ai/claude-code", "/claude/versions/"] },
     Known { kind: "codex", name: "Codex", names: &["codex"], markers: &["@openai/codex"] },
+    // Antigravity CLI 是谷歌接替 Gemini CLI 的新命令行，命令叫 agy；老的 Gemini CLI 还有人在用，照样认
+    Known { kind: "antigravity", name: "Antigravity CLI", names: &["agy"], markers: &[] },
     Known { kind: "gemini", name: "Gemini CLI", names: &["gemini"], markers: &["@google/gemini-cli"] },
     Known { kind: "opencode", name: "OpenCode", names: &["opencode"], markers: &["opencode-ai"] },
     Known { kind: "cursor", name: "Cursor Agent", names: &["cursor-agent"], markers: &["cursor-agent"] },
@@ -856,6 +858,8 @@ mod tests {
         assert_eq!(kind("node.exe", &[r"C:\Program Files\nodejs\node.exe", r"C:\Users\a\AppData\Roaming\npm\node_modules\@google\gemini-cli\dist\index.js"]), Some("gemini"));
         // 改过进程标题的 Node 程序，命令行第一个参数就是名字
         assert_eq!(kind("node", &["gemini"]), Some("gemini"));
+        assert_eq!(kind("agy", &["/Users/a/.local/bin/agy"]), Some("antigravity"));
+        assert_eq!(kind("agy.exe", &[r"C:\Users\a\AppData\Local\agy\bin\agy.exe", "-c"]), Some("antigravity"));
         // Python 写的
         assert_eq!(kind("python3.12", &["/usr/bin/python3.12", "/Users/a/.local/bin/aider", "--model", "x"]), Some("aider"));
         // Windows 的 exe

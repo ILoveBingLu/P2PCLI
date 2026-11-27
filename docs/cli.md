@@ -34,6 +34,7 @@ p2pcli send 设备名 a.txt --json       # 输出 JSON 给程序和 AI 读；失
 
 - Claude Code：`~/.claude/skills/p2pcli/`（`CLAUDE_CONFIG_DIR` 换了位置就跟着换）
 - Codex、Gemini CLI、Cursor、OpenCode、Copilot CLI、Kimi CLI：通用的 `~/.agents/skills/p2pcli/`
+- Antigravity CLI（`agy`）：`~/.gemini/antigravity-cli/skills/p2pcli/`
 - Qwen Code：`~/.qwen/skills/p2pcli/`；CodeBuddy：`~/.codebuddy/skills/p2pcli/`
 
 只往已经存在的 AI 配置目录里写，不替没装的 AI 建目录；只写一个叫 `p2pcli` 的文件夹，不改 `CLAUDE.md`、`AGENTS.md`。文件里带 `managed-by: p2pcli` 标记，软件升级时只覆盖带标记的，别人放的同名技能不动。设置 → 多机互动 里能看到检测到哪些 AI、各自装没装，可以单个或全部安装、更新、删除，也能关掉“启动时自动安装和更新”（关掉只是不再自动动，已装的不会被删；开发版也能手动装，只是不自动装）。已经开着的 AI 窗口要重开才会读到。说明的原文在 `app/src-tauri/src/p2pcli-skill.md`，加了命令或改了用法要同步改它。
