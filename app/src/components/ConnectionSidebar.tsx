@@ -164,7 +164,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   type DeviceAction = "lend" | "ports" | "editor";
   const pendingAction = useRef<{ endpointId: string; name: string; kind: DeviceAction; at: number } | null>(null);
   const [portsTarget, setPortsTarget] = useState<{ connId: number; endpointId: string; name: string } | null>(null);
-  const [editorTarget, setEditorTarget] = useState<{ connId: number; name: string } | null>(null);
+  const [editorTarget, setEditorTarget] = useState<{ connId: number; endpointId: string; name: string } | null>(null);
   /** 这台设备已经连上的连接（正在看它的会话页，或者开着的终端标签） */
   const openTarget = (endpointId: string): SessionTarget | undefined =>
     sessionTarget?.info.endpoint_id === endpointId ? sessionTarget : tabs.find((tab) => tab.info.endpoint_id === endpointId && tab.state === "open");
@@ -174,7 +174,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
   const forwardsFor = (endpointId: string) => forwards.filter((f) => f.endpoint_id === endpointId);
   const runAction = (kind: DeviceAction, target: SessionTarget, name: string) => {
     if (kind === "ports") return setPortsTarget({ connId: target.connId, endpointId: target.info.endpoint_id, name });
-    if (kind === "editor") return setEditorTarget({ connId: target.connId, name });
+    if (kind === "editor") return setEditorTarget({ connId: target.connId, endpointId: target.info.endpoint_id, name });
     void lendProxy(target.connId, name).then(onForwardsChanged);
   };
   useEffect(() => {
@@ -296,7 +296,7 @@ export function ConnectionSidebar({ ov, liveSessions, busy, open, scanning, near
       )}
       {editorTarget && (
         <OpenInEditorDialog open onOpenChange={(next) => !next && setEditorTarget(null)}
-          connId={editorTarget.connId} deviceName={editorTarget.name} />
+          connId={editorTarget.connId} endpointId={editorTarget.endpointId} deviceName={editorTarget.name} />
       )}
       <div className="connection-sidebar-inner">
         <CollaborationSidebarStatus />

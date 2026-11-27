@@ -2236,6 +2236,18 @@ img.agent-icon {
   width: 13px;
   height: 13px;
 }
+/* 「用本机 VS Code 打开」里嵌着的文件夹浏览：带边框的一块，列表定高 */
+.editor-folder {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.editor-folder .dir-picker-head { align-items: center; }
+.editor-folder-path { flex: 1; min-width: 0; height: 28px; font-family: var(--font-mono); font-size: 12px; }
+.editor-folder-list { flex: 0 0 auto; height: min(260px, 40vh); }
 .dir-picker-spin {
   width: 13px;
   height: 13px;
