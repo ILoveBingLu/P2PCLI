@@ -1328,5 +1328,9 @@
   "用 {{editor}} 打开": "用 {{editor}} 打开",
   "先在「设置 → 文件传输」里安装命令行工具 p2pcli：SSH 要用它接通对方": "先在「设置 → 文件传输」里安装命令行工具 p2pcli：SSH 要用它接通对方",
   "这是本机，直接用编辑器打开就行": "这是本机，直接用编辑器打开就行",
-  "打不开编辑器：确认本机装了 VS Code（或 Cursor）": "打不开编辑器：确认本机装了 VS Code（或 Cursor）"
+  "打不开编辑器：确认本机装了 VS Code（或 Cursor）": "打不开编辑器：确认本机装了 VS Code（或 Cursor）",
+  "已在 {{editor}} 里打开 {{alias}}:{{path}}。第一次连会让你确认对方的主机密钥": "已在 {{editor}} 里打开 {{alias}}:{{path}}。第一次连会让你确认对方的主机密钥",
+  "用 VS Code 或 Cursor 的 Remote-SSH 连过去，SSH 走 P2PCLI 的加密通道，不用对方开公网端口。对方是 Mac、Linux 时不用开远程登录、不用密码（两边都要是新版 P2PCLI）；对方是 Windows 时要装好 OpenSSH 服务器。本机编辑器要装 Remote-SSH 扩展。": "用 VS Code 或 Cursor 的 Remote-SSH 连过去，SSH 走 P2PCLI 的加密通道，不用对方开公网端口。对方是 Mac、Linux 时不用开远程登录、不用密码（两边都要是新版 P2PCLI）；对方是 Windows 时要装好 OpenSSH 服务器。本机编辑器要装 Remote-SSH 扩展。",
+  "对方电脑没有开 SSH 服务：在对方电脑上装好「OpenSSH 服务器」（设置 → 系统 → 可选功能），并启动 sshd 服务": "对方电脑没有开 SSH 服务：在对方电脑上装好「OpenSSH 服务器」（设置 → 系统 → 可选功能），并启动 sshd 服务",
+  "对方电脑上的 SSH 服务起不来，也没有开系统的远程登录": "对方电脑上的 SSH 服务起不来，也没有开系统的远程登录"
 }

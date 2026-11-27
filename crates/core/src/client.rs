@@ -18,7 +18,7 @@ use crate::collaboration::model::{Reply, Request};
 use crate::host::{APPROVE_TIMEOUT, Host};
 use crate::identity::DeviceInfo;
 use crate::path::{self, PathInfo};
-use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, REVERSE_FORWARD_V1, Frame, Msg, RejectCode, SessionOwner, TerminalSession, read_frame, read_msg, write_data, write_msg};
+use crate::proto::{AGENT_MESSAGE_V1, COLLABORATION_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, REVERSE_FORWARD_V1, SSH_V1, Frame, Msg, RejectCode, SessionOwner, TerminalSession, read_frame, read_msg, write_data, write_msg};
 #[cfg(feature = "host")]
 use crate::pty::{serve_session, serve_terminal};
 use crate::{ALPN_TERM, PROTO_VERSION};
@@ -117,7 +117,7 @@ pub async fn handshake(
             password,
             version: me.version.clone(),
             os: me.os.clone(),
-            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into(), REVERSE_FORWARD_V1.into(), crate::screen::SCREEN_V1.into()],
+            capabilities: vec![COLLABORATION_V1.into(), AGENT_MESSAGE_V1.into(), DIR_PICKER_V1.into(), REMOTE_EDIT_V1.into(), REMOTE_EDIT_V2.into(), REMOTE_LSP_V1.into(), PORT_FORWARD_V1.into(), GIT_V1.into(), REVERSE_FORWARD_V1.into(), SSH_V1.into(), crate::screen::SCREEN_V1.into()],
         },
     )
     .await?;
@@ -488,6 +488,22 @@ impl RemoteHost {
         self.require_port_forward()?;
         match self.session_request(Msg::ListPorts).await? {
             Msg::Ports { ports } => Ok(ports),
+            other => bail!("意外的回复：{other:?}"),
+        }
+    }
+
+    /// 接对方的 SSH 服务：新版本由对方挑（Mac、Linux 上是免密码的用户态 sshd），pubkey 交给对方记下；
+    /// 老版本直接接它的 22 端口
+    pub async fn open_ssh(&self, pubkey: Option<String>) -> Result<Tunnel> {
+        let supported = matches!(&self.link, Link::Net { capabilities, .. } if capabilities.iter().any(|c| c == SSH_V1));
+        if !supported {
+            return self.open_port(22).await.map_err(|_| anyhow!("对方电脑没有开 SSH 服务，或者它的 P2PCLI 版本较旧（更新以后 Mac、Linux 上不用开远程登录也能连）"));
+        }
+        let (send, mut recv) = self.open_stream(&Msg::OpenSsh { pubkey }).await?;
+        // 对方第一次要起 sshd、生成主机密钥，多等一会儿
+        match timeout(Duration::from_secs(30), read_msg(&mut recv)).await.map_err(|_| anyhow!("对方没有响应"))?? {
+            Msg::PortOpened => Ok(Tunnel::Quic(send, recv)),
+            Msg::Error { message } => bail!("{message}"),
             other => bail!("意外的回复：{other:?}"),
         }
     }

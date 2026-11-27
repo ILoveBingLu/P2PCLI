@@ -25,6 +25,8 @@ pub const PORT_FORWARD_V1: &str = "port_forward_v1";
 pub const GIT_V1: &str = "git_v1";
 /// 反向端口转发：把本机的端口接到对方电脑的 127.0.0.1 上，借网给对方
 pub const REVERSE_FORWARD_V1: &str = "reverse_forward_v1";
+/// SSH：对方给一个能用的 SSH 服务（Mac、Linux 上是 P2PCLI 起的用户态 sshd，免密码；不然是系统的 22 端口）
+pub const SSH_V1: &str = "ssh_v1";
 const KIND_DATA: u8 = 2;
 /// 单帧上限，防对面发超大长度把内存吃光
 pub const MAX_FRAME: usize = 1 << 20;
@@ -186,6 +188,11 @@ pub enum Msg {
     ReverseIncoming { id: u64 },
     /// 接上反向转发等着的某个连接：对方回 PortOpened 以后这条流上就是原样的 TCP 字节
     ReverseConnect { token: u64, id: u64 },
+    /// 接对方的 SSH 服务：pubkey 是连接方的公钥，对方记下以后免密码登录。回 PortOpened 以后是原样的字节
+    OpenSsh {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pubkey: Option<String>,
+    },
     /// 远程画面：看对方的屏幕（可以操作）。对方同意后回 ScreenStarted，之后这条流按 screen 模块的格式走。需要 screen_v1
     ScreenOpen { open: crate::screen::ScreenOpen },
     ScreenStarted { started: crate::screen::ScreenStarted },

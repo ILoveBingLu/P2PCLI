@@ -38,7 +38,7 @@ export function OpenInEditorDialog({ open, onOpenChange, connId, deviceName }: {
       try { localStorage.setItem(EDITOR_KEY, editor); } catch { /* 记不住就算了 */ }
       const opened = await api.openInEditor(connId, path.trim() || "~", editor);
       onOpenChange(false);
-      toast.success(t("已在 {{editor}} 里打开 {{alias}}:{{path}}。第一次连会让你确认对方的主机密钥、输入对方电脑的登录密码", { editor: editorName, alias: opened.alias, path: opened.path }));
+      toast.success(t("已在 {{editor}} 里打开 {{alias}}:{{path}}。第一次连会让你确认对方的主机密钥", { editor: editorName, alias: opened.alias, path: opened.path }));
     } catch (e) {
       const message = String(e);
       if (message.includes("ssh_include_missing")) {
@@ -58,7 +58,7 @@ export function OpenInEditorDialog({ open, onOpenChange, connId, deviceName }: {
         <DialogHeader>
           <DialogTitle>{t("用本机编辑器打开 {{name}} 上的文件夹", { name: deviceName })}</DialogTitle>
           <DialogDescription>
-            {t("用 VS Code 或 Cursor 的 Remote-SSH 连过去，SSH 走 P2PCLI 的加密通道，不用对方开公网端口。对方电脑要开着 SSH 服务（Mac：远程登录；Windows：OpenSSH 服务器），本机编辑器要装 Remote-SSH 扩展。")}
+            {t("用 VS Code 或 Cursor 的 Remote-SSH 连过去，SSH 走 P2PCLI 的加密通道，不用对方开公网端口。对方是 Mac、Linux 时不用开远程登录、不用密码（两边都要是新版 P2PCLI）；对方是 Windows 时要装好 OpenSSH 服务器。本机编辑器要装 Remote-SSH 扩展。")}
           </DialogDescription>
         </DialogHeader>
         {needInclude ? (

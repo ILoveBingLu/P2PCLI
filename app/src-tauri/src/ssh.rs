@@ -1,5 +1,6 @@
 //! 用本机 VS Code（或 Cursor）的 Remote-SSH 打开别的设备上的文件夹。SSH 走 P2PCLI 的管道：
-//! `p2pcli pipe <设备> <端口>` 当 ProxyCommand，不用对方开公网端口、不用跳板机。
+//! `p2pcli pipe <设备> ssh` 当 ProxyCommand，不用对方开公网端口、不用跳板机。对方是 Mac、Linux 时
+//! 由对方的 P2PCLI 起一个只给这条通道用的 sshd，用 P2PCLI 替本机管的密钥登录，不用开远程登录、不用密码。
 //!
 //! 只维护 `~/.ssh/p2pcli_hosts` 这一个文件（整个重写）；`~/.ssh/config` 只在用户同意后在最前面加一行
 //! `Include ~/.ssh/p2pcli_hosts`，不动原有的内容。每台设备一个别名（p2p-设备名），
@@ -86,13 +87,49 @@ fn quote(path: &str) -> String {
     if path.contains(' ') { format!("\"{path}\"") } else { path.to_string() }
 }
 
-fn render(hosts: &[SshHost], cli: &str) -> String {
+/// P2PCLI 替本机管的 SSH 密钥（私钥路径、公钥）：没有就用 ssh-keygen 生成一把。生成不了（没装 ssh-keygen）返回空，
+/// 那时只能用对方系统的 SSH 服务、按它的方式登录
+fn client_key(data_dir: &Path) -> Option<(PathBuf, String)> {
+    let key = data_dir.join("ssh").join("id_ed25519");
+    let public = key.with_extension("pub");
+    if !key.exists() || !public.exists() {
+        std::fs::create_dir_all(key.parent()?).ok()?;
+        let _ = std::fs::remove_file(&key);
+        let _ = std::fs::remove_file(&public);
+        let mut cmd = std::process::Command::new("ssh-keygen");
+        cmd.args(["-q", "-t", "ed25519", "-N", "", "-C", "p2pcli", "-f"]).arg(&key);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        match cmd.output() {
+            Ok(out) if out.status.success() => tracing::info!("生成了 P2PCLI 用的 SSH 密钥"),
+            Ok(out) => {
+                tracing::warn!("生成 SSH 密钥失败：{}", String::from_utf8_lossy(&out.stderr).trim());
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!("生成 SSH 密钥失败（没有 ssh-keygen）：{e}");
+                return None;
+            }
+        }
+    }
+    // 私钥只能本人读，不然 ssh 不用它
+    if lock_down(&key).is_err() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&public).ok()?.trim().to_string();
+    Some((key, text))
+}
+
+fn render(hosts: &[SshHost], cli: &str, key: Option<&Path>) -> String {
     let mut out = String::from(
         "# 由 P2PCLI 维护，会被整个重写，请不要手改。\n# SSH 走 P2PCLI 的加密通道（p2pcli pipe），要 P2PCLI 开着。\n\n",
     );
     for h in hosts {
         out.push_str(&format!(
-            "# {}\nHost {}\n  HostName {}\n  User {}\n  ProxyCommand {} pipe {} %p\n  HostKeyAlias p2pcli-{}\n  ServerAliveInterval 30\n\n",
+            "# {}\nHost {}\n  HostName {}\n  User {}\n  ProxyCommand {} pipe {} ssh\n  HostKeyAlias p2pcli-{}\n  ServerAliveInterval 30\n{}\n",
             h.name.replace('\n', " "),
             h.alias,
             h.alias,
@@ -100,6 +137,7 @@ fn render(hosts: &[SshHost], cli: &str) -> String {
             quote(cli),
             h.endpoint_id,
             &h.endpoint_id[..16.min(h.endpoint_id.len())],
+            key.map(|k| format!("  IdentityFile {}\n", quote(&k.display().to_string()))).unwrap_or_default(),
         ));
     }
     out
@@ -146,14 +184,14 @@ fn lock_down(_path: &Path) -> Result<(), String> {
 }
 
 /// 记下这台设备的别名，重写 ssh_dir 里的 p2pcli_hosts
-fn upsert(data_dir: &Path, ssh_dir: &Path, name: &str, endpoint_id: &str, user: &str, cli: &str) -> Result<String, String> {
+fn upsert(data_dir: &Path, ssh_dir: &Path, name: &str, endpoint_id: &str, user: &str, cli: &str, key: Option<&Path>) -> Result<String, String> {
     let mut hosts = load(data_dir);
     let alias = hosts.iter().find(|h| h.endpoint_id == endpoint_id).map(|h| h.alias.clone()).unwrap_or_else(|| alias_for(name, endpoint_id, &hosts));
     hosts.retain(|h| h.endpoint_id != endpoint_id);
     hosts.push(SshHost { alias: alias.clone(), endpoint_id: endpoint_id.into(), user: user.into(), name: name.into() });
     hosts.sort_by(|a, b| a.alias.cmp(&b.alias));
     write_private(&data_dir.join(STORE_FILE), &serde_json::to_vec_pretty(&hosts).map_err(|e| e.to_string())?)?;
-    write_private(&ssh_dir.join(HOSTS_FILE), render(&hosts, cli).as_bytes())?;
+    write_private(&ssh_dir.join(HOSTS_FILE), render(&hosts, cli, key).as_bytes())?;
     Ok(alias)
 }
 
@@ -215,22 +253,17 @@ pub(crate) async fn open_in_editor(state: State<'_, AppState>, conn_id: u64, pat
         (true, Some(p)) => p,
         _ => return Err("先在「设置 → 文件传输」里安装命令行工具 p2pcli：SSH 要用它接通对方".into()),
     };
+    let data_dir = state.data_dir.clone();
+    let key = tauri::async_runtime::spawn_blocking(move || client_key(&data_dir)).await.map_err(|e| e.to_string())?;
     // 直连优先：SSH、IDE 是持续流量
     remote.wait_direct(p2pcli_core::path::DIRECT_WAIT).await;
-    // 对方得开着 SSH 服务
-    if remote.open_port(22).await.is_err() {
-        let how = match remote.info.platform.as_str() {
-            "macos" => "在对方电脑上打开 系统设置 → 通用 → 共享 → 远程登录",
-            "windows" => "在对方电脑上装好「OpenSSH 服务器」（设置 → 系统 → 可选功能），并启动 sshd 服务",
-            _ => "在对方电脑上装好并启动 sshd",
-        };
-        return Err(format!("对方电脑没有开 SSH 服务（22 端口）。{how}"));
-    }
+    // 先接一次对方的 SSH 服务：确认有能用的，顺便把本机的公钥交给对方记下
+    drop(remote.open_ssh(key.as_ref().map(|(_, public)| public.clone())).await.map_err(|e| format!("{e:#}"))?);
     // 目录：~ 和相对路径都换成对方电脑上的绝对路径，顺便确认它存在
     let listing = remote.list_entries(path).await.map_err(|e| format!("{e:#}"))?;
     let data_dir = state.data_dir.clone();
     let (name, endpoint_id, user) = (remote.info.name.clone(), remote.info.endpoint_id.clone(), remote.info.user.clone());
-    let alias = upsert(&data_dir, &ssh_dir()?, &name, &endpoint_id, &user, &cli)?;
+    let alias = upsert(&data_dir, &ssh_dir()?, &name, &endpoint_id, &user, &cli, key.as_ref().map(|(k, _)| k.as_path()))?;
     if !status()?.include {
         return Err("ssh_include_missing".into());
     }
@@ -277,10 +310,11 @@ mod tests {
         std::fs::create_dir_all(&ssh).unwrap();
         std::fs::write(ssh.join("config"), "Host old\n  User me\n").unwrap();
         let id = "80bc69b4".repeat(8);
-        let alias = upsert(&data, &ssh, "Forrest", &id, "30402", "/opt/p2p cli/p2pcli").unwrap();
+        let key = base.join("my key").join("id_ed25519");
+        let alias = upsert(&data, &ssh, "Forrest", &id, "30402", "/opt/p2p cli/p2pcli", Some(&key)).unwrap();
         assert_eq!(alias, "p2p-forrest");
         // 同一台设备再写一次：别名不变，不重复
-        assert_eq!(upsert(&data, &ssh, "Forrest 改名了", &id, "30402", "/opt/p2p cli/p2pcli").unwrap(), "p2p-forrest");
+        assert_eq!(upsert(&data, &ssh, "Forrest 改名了", &id, "30402", "/opt/p2p cli/p2pcli", Some(&key)).unwrap(), "p2p-forrest");
         assert_eq!(load(&data).len(), 1);
         assert!(!status_in(&ssh).include);
         add_include_in(&ssh).unwrap();
@@ -297,7 +331,8 @@ mod tests {
         let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         assert!(text.contains("user 30402"), "{text}");
-        assert!(text.contains(&format!("proxycommand \"/opt/p2p cli/p2pcli\" pipe {id} %p")), "{text}");
+        assert!(text.contains(&format!("proxycommand \"/opt/p2p cli/p2pcli\" pipe {id} ssh")), "{text}");
+        assert!(text.contains("identityfile") && text.contains("my key"), "{text}");
         assert!(text.contains("port 22"), "{text}");
         assert!(text.contains(&format!("hostkeyalias p2pcli-{}", &id[..16])), "{text}");
         let _ = std::fs::remove_dir_all(&base);
@@ -306,9 +341,10 @@ mod tests {
     #[test]
     fn config_entry() {
         let hosts = [SshHost { alias: "p2p-a".into(), endpoint_id: "0123456789abcdef0123".into(), user: "sam".into(), name: "A".into() }];
-        let text = render(&hosts, "/Applications/My App/p2pcli");
+        let text = render(&hosts, "/Applications/My App/p2pcli", None);
         assert!(text.contains("Host p2p-a\n"));
-        assert!(text.contains("ProxyCommand \"/Applications/My App/p2pcli\" pipe 0123456789abcdef0123 %p"));
+        assert!(text.contains("ProxyCommand \"/Applications/My App/p2pcli\" pipe 0123456789abcdef0123 ssh"));
+        assert!(!text.contains("IdentityFile"));
         assert!(text.contains("HostKeyAlias p2pcli-0123456789abcdef"));
         assert!(text.contains("User sam"));
     }

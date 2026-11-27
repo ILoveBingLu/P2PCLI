@@ -81,12 +81,13 @@ enum Cmd {
     #[command(flatten)]
     Fs(fs::FsCmd),
     /// 把标准输入输出接到另一台设备 localhost 的某个端口上，原样传字节。给 OpenSSH 当 ProxyCommand 用：
-    /// ssh -o ProxyCommand="p2pcli pipe 设备名 22" 用户名@设备名。提示只写标准错误
+    /// ssh -o ProxyCommand="p2pcli pipe 设备名 ssh" 用户名@设备名。提示只写标准错误
     Pipe {
         /// 设备名（可以只写一部分）、9 位设备码或公钥开头几位
         device: String,
-        /// 对方电脑 localhost 上的端口，比如 sshd 的 22
-        port: u16,
+        /// 对方电脑 localhost 上的端口；写 ssh 是接对方的 SSH 服务（Mac、Linux 上不用开远程登录，
+        /// 用 P2PCLI 管的密钥免密码登录）
+        port: String,
     },
     /// 作为 MCP 服务运行（stdio）：让 Cursor、Claude Desktop、Cline 这类 AI 直接操作别的设备。
     /// 在 AI 的 MCP 设置里填命令 p2pcli、参数 mcp
@@ -124,7 +125,16 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Cmd::Collab(options) => return collab::run(options, &dir, cli.json).await,
         Cmd::Fs(cmd) => return fs::run(cmd, &dir, cli.json).await,
         Cmd::Mcp => mcp::run(&dir).await?,
-        Cmd::Pipe { device, port } => pipe(&dir, &device, port).await?,
+        Cmd::Pipe { device, port } => {
+            let to = if port.eq_ignore_ascii_case("ssh") {
+                // 桌面版替本机管的 SSH 公钥：交给对方记下，免密码登录
+                let pubkey = std::fs::read_to_string(dir.join("ssh").join("id_ed25519.pub")).ok().map(|k| k.trim().to_string());
+                control::PipeTo::Ssh { pubkey }
+            } else {
+                control::PipeTo::Port(port.parse().map_err(|_| anyhow!("端口写数字，或者写 ssh"))?)
+            };
+            pipe(&dir, &device, to).await?
+        }
         Cmd::Devices => {
             let devices = ask(&dir, Request::Devices, |r| match r {
                 Reply::Devices { devices } => Some(devices),
@@ -174,9 +184,9 @@ async fn run(cli: Cli) -> Result<ExitCode> {
 }
 
 /// 标准输入输出接到对方电脑的端口上，直到一边关掉。标准输出只放对方端口来的字节
-async fn pipe(dir: &Path, device: &str, port: u16) -> Result<()> {
+async fn pipe(dir: &Path, device: &str, to: control::PipeTo) -> Result<()> {
     let mut hinted = false;
-    let (mut stream, relay) = control::open_pipe(dir, device, port, |message| {
+    let (mut stream, relay) = control::open_pipe(dir, device, to, |message| {
         // 对方可能要点同意：提示一次就好，免得刷屏
         if !hinted {
             eprintln!("p2pcli：{message}…");
@@ -188,7 +198,9 @@ async fn pipe(dir: &Path, device: &str, port: u16) -> Result<()> {
         eprintln!("p2pcli：现在走的是中继，会比较慢；直连接通后会自动切过去");
     }
     let mut stdio = tokio::io::join(tokio::io::stdin(), tokio::io::stdout());
-    // 一边读到头就把另一边关掉；对方断开、本机这头关掉都正常结束
+    // 一边读到头就把另一边关掉；对方断开、本机这头关掉都正常结束。
+    // Windows 上控制口是命名管道，关不了单独一头：标准输入读完以后对方收不到“写完了”，
+    // 要等对方自己关（SSH 不受影响：ssh 结束时直接结束这个进程）
     let _ = tokio::io::copy_bidirectional(&mut stdio, &mut stream).await;
     Ok(())
 }

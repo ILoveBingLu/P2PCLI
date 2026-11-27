@@ -36,6 +36,9 @@ pub mod tmux_control;
 pub mod rdv_ws;
 pub mod rendezvous;
 pub mod reverse;
+/// 被连方给连过来的设备一个 SSH 服务（用户态 sshd）
+#[cfg(feature = "host")]
+pub mod ssh_host;
 pub mod screen;
 pub mod screen_clip;
 pub mod store;

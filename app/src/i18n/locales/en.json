@@ -1333,5 +1333,9 @@
   "用 {{editor}} 打开": "Open in {{editor}}",
   "先在「设置 → 文件传输」里安装命令行工具 p2pcli：SSH 要用它接通对方": "Install the p2pcli command-line tool under Settings → File transfer first; SSH uses it to reach the other computer",
   "这是本机，直接用编辑器打开就行": "This is this computer; just open it in your editor",
-  "打不开编辑器：确认本机装了 VS Code（或 Cursor）": "Couldn't open the editor. Make sure VS Code (or Cursor) is installed"
+  "打不开编辑器：确认本机装了 VS Code（或 Cursor）": "Couldn't open the editor. Make sure VS Code (or Cursor) is installed",
+  "已在 {{editor}} 里打开 {{alias}}:{{path}}。第一次连会让你确认对方的主机密钥": "Opened {{alias}}:{{path}} in {{editor}}. The first connection asks you to confirm the other computer's host key",
+  "用 VS Code 或 Cursor 的 Remote-SSH 连过去，SSH 走 P2PCLI 的加密通道，不用对方开公网端口。对方是 Mac、Linux 时不用开远程登录、不用密码（两边都要是新版 P2PCLI）；对方是 Windows 时要装好 OpenSSH 服务器。本机编辑器要装 Remote-SSH 扩展。": "Connects with VS Code or Cursor Remote-SSH. SSH runs through P2PCLI's encrypted channel, so the other computer doesn't need a public port. A Mac or Linux computer doesn't need Remote Login or a password (both sides need the new P2PCLI); a Windows computer needs OpenSSH Server. The local editor needs the Remote-SSH extension.",
+  "对方电脑没有开 SSH 服务：在对方电脑上装好「OpenSSH 服务器」（设置 → 系统 → 可选功能），并启动 sshd 服务": "The other computer has no SSH service. Install OpenSSH Server there (Settings → System → Optional features) and start the sshd service",
+  "对方电脑上的 SSH 服务起不来，也没有开系统的远程登录": "The SSH service on the other computer couldn't start, and Remote Login isn't on either"
 }

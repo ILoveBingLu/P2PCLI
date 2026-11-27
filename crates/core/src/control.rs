@@ -74,8 +74,16 @@ pub enum Request {
     ListEntries { target: String, path: String },
     /// 编辑器的其他文件操作：找文件、搜内容、新建目录、改名、移到废纸篓
     Edit { target: String, request: crate::remote_ops::EditRequest },
-    /// 接到对方电脑 localhost 的某个端口：回 PipeOpened 以后这条控制连接上就是原样的字节（给 OpenSSH 的 ProxyCommand 用）
-    Pipe { target: String, port: u16 },
+    /// 接到对方电脑 localhost 的某个端口：回 PipeOpened 以后这条控制连接上就是原样的字节（给 OpenSSH 的 ProxyCommand 用）。
+    /// ssh 为真时不看 port，接对方的 SSH 服务（由对方挑），pubkey 交给对方记下、免密码登录
+    Pipe {
+        target: String,
+        port: u16,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        ssh: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pubkey: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,11 +299,12 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, node: NodeSource) 
             let reply = remote.edit(request).await.map(|reply| Reply::EditDone { reply });
             send(&mut w, &reply_or_error(reply)).await?
         }
-        Request::Pipe { target, port } => {
+        Request::Pipe { target, port, ssh, pubkey } => {
             let Some(remote) = connect_remote(&node, &target, &mut w).await? else { return Ok(()) };
             // SSH、IDE 是持续流量：直连优先，还在中继上的话先等一会儿直连
             let path = remote.wait_direct(crate::path::DIRECT_WAIT).await;
-            let tunnel = match remote.open_port(port).await {
+            let opened = if ssh { remote.open_ssh(pubkey).await } else { remote.open_port(port).await };
+            let tunnel = match opened {
                 Ok(t) => t,
                 Err(e) => return send(&mut w, &Reply::Error { message: format!("{e:#}") }).await,
             };
@@ -488,17 +497,27 @@ pub async fn request_while(data_dir: &Path, req: &Request, mut on_reply: impl Fn
     Ok(())
 }
 
+/// 管道接到哪：对方 localhost 的某个端口，或者对方的 SSH 服务
+pub enum PipeTo {
+    Port(u16),
+    Ssh { pubkey: Option<String> },
+}
+
 /// 开一条到对方电脑 localhost:port 的管道（给 `p2pcli pipe` 用）：发请求，等到 PipeOpened，
 /// 之后返回的流上就是原样的字节。on_status 收到“正在连接”之类的提示；relay 告诉调用方现在走的是不是中继
 pub async fn open_pipe(
     data_dir: &Path,
     target: &str,
-    port: u16,
+    to: PipeTo,
     mut on_status: impl FnMut(&str),
 ) -> Result<(impl AsyncRead + AsyncWrite + Unpin, bool)> {
     let stream = connect(data_dir).await?;
     let (r, mut w) = tokio::io::split(stream);
-    let mut line = serde_json::to_vec(&Request::Pipe { target: target.to_string(), port })?;
+    let request = match to {
+        PipeTo::Port(port) => Request::Pipe { target: target.to_string(), port, ssh: false, pubkey: None },
+        PipeTo::Ssh { pubkey } => Request::Pipe { target: target.to_string(), port: 0, ssh: true, pubkey },
+    };
+    let mut line = serde_json::to_vec(&request)?;
     line.push(b'\n');
     w.write_all(&line).await?;
     w.flush().await?;

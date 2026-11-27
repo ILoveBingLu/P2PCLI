@@ -2106,6 +2106,18 @@ async fn reverse_forward_and_proxy() {
 }
 
 /// 借网：之后新建的后台会话（tmux -e、psmux）里也带上代理
+/// SSH：被连方没有 sshd 程序（Windows）、也没开系统的 SSH 服务时，说清楚怎么开
+#[tokio::test]
+async fn ssh_explains_when_no_service() {
+    if p2pcli_core::ssh_host::UserSshd::available() { return; }
+    // 这台电脑自己开着 22 端口的话测不出来
+    if tokio::net::TcpStream::connect(("127.0.0.1", 22)).await.is_ok() { return; }
+    let (_host, _delegate, _guest, remote) = paired_pair("ssh-none").await;
+    let err = remote.open_ssh(None).await.err().expect("没有 SSH 服务应该报错");
+    let text = format!("{err:#}");
+    assert!(text.contains("OpenSSH") || text.contains("远程登录"), "{text}");
+}
+
 #[tokio::test]
 #[ignore = "requires tmux on macOS/Linux or psmux on Windows"]
 async fn persistent_session_gets_borrowed_proxy() {
@@ -2140,6 +2152,49 @@ async fn persistent_session_gets_borrowed_proxy() {
 }
 
 /// Git 面板：经连接暂存、提交、看提交记录和领先数
+/// SSH：被连方起用户态 sshd（不用开远程登录），连接方交公钥、经 P2P 通道用系统的 ssh 免密码登录，跑一条命令
+#[tokio::test]
+#[ignore = "requires OpenSSH (sshd, ssh, ssh-keygen) on macOS/Linux"]
+async fn ssh_over_p2p_without_remote_login() {
+    use tokio::net::TcpListener;
+    if !p2pcli_core::ssh_host::UserSshd::available() { return; }
+    let (_host, _delegate, guest, remote) = paired_pair("ssh").await;
+    let _ = guest;
+    let dir = temp_dir("ssh-client");
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = dir.join("id_ed25519");
+    let ok = std::process::Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-f"]).arg(&key).status().unwrap();
+    assert!(ok.success());
+    let public = std::fs::read_to_string(key.with_extension("pub")).unwrap();
+
+    // 本机开个端口，进来的连接接到对方的 SSH 服务（相当于 ProxyCommand 那一段）
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let remote2 = remote.clone();
+    let public2 = public.clone();
+    tokio::spawn(async move {
+        while let Ok((tcp, _)) = listener.accept().await {
+            let tunnel = remote2.open_ssh(Some(public2.clone())).await.unwrap();
+            tokio::spawn(async move { let _ = tunnel.pipe(tcp).await; });
+        }
+    });
+    let user = std::env::var("USER").unwrap();
+    let out = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("ssh")
+            .args(["-p", &port.to_string(), "-i"]).arg(&key)
+            .args(["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "LogLevel=ERROR"])
+            .arg(format!("{user}@127.0.0.1"))
+            .arg("echo p2p-ssh-$((40+2))")
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("p2p-ssh-42"), "stdout: {stdout}\nstderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[tokio::test]
 async fn git_panel_ops_over_connection() {
     use p2pcli_core::remote_ops::{EditReply, EditRequest};
@@ -2212,20 +2267,21 @@ async fn control_socket_pipes_to_remote_port() {
         }
     });
 
-    let (mut pipe, relay) = control::open_pipe(&data_dir, "管道机", port, |_| {}).await.unwrap();
+    let (mut pipe, relay) = control::open_pipe(&data_dir, "管道机", control::PipeTo::Port(port), |_| {}).await.unwrap();
     assert!(!relay, "本机回环是直连");
     let payload: Vec<u8> = (0..1_500_000u32).map(|i| (i % 251) as u8).collect();
     let (mut r, mut w) = tokio::io::split(&mut pipe);
-    let send = async { w.write_all(&payload).await.unwrap(); w.shutdown().await.unwrap(); };
-    let mut back = Vec::new();
-    let recv = async { r.read_to_end(&mut back).await.unwrap(); };
+    // 按长度收齐，不靠半关：Windows 的命名管道（控制口）没法只关写的一头
+    let send = async { w.write_all(&payload).await.unwrap(); w.flush().await.unwrap(); };
+    let mut back = vec![0u8; 14 + payload.len()];
+    let recv = async { r.read_exact(&mut back).await.unwrap(); };
     tokio::time::timeout(Duration::from_secs(30), async { tokio::join!(send, recv) }).await.unwrap();
     assert!(back.starts_with(b"SSH-2.0-test\r\n"), "握手信息丢了");
     assert_eq!(&back[14..], &payload[..]);
 
     // 没有服务的端口：说清楚
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let err = control::open_pipe(&data_dir, "管道机", closed, |_| {}).await.err().expect("没有服务的端口应该报错");
+    let err = control::open_pipe(&data_dir, "管道机", control::PipeTo::Port(closed), |_| {}).await.err().expect("没有服务的端口应该报错");
     assert!(format!("{err:#}").contains("没有服务"), "{err:#}");
     std::fs::remove_dir_all(&data_dir).ok();
 }

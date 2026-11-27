@@ -21,7 +21,7 @@ use crate::files::Files;
 use crate::identity::DeviceInfo;
 use crate::proto::{COLLABORATION_V1, Msg, RejectCode, TerminalSession, read_frame, read_json, read_msg, write_json, write_msg};
 #[cfg(feature = "host")]
-use crate::proto::{AGENT_MESSAGE_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, REVERSE_FORWARD_V1, Frame, write_data};
+use crate::proto::{AGENT_MESSAGE_V1, DIR_PICKER_V1, REMOTE_EDIT_V1, REMOTE_EDIT_V2, REMOTE_LSP_V1, PORT_FORWARD_V1, GIT_V1, REVERSE_FORWARD_V1, SSH_V1, Frame, write_data};
 #[cfg(feature = "host")]
 use crate::pty::{serve_session, serve_terminal};
 use crate::sessions::SessionManager;
@@ -32,7 +32,7 @@ use crate::store::{TrustStore, write_private};
 /// 本机能回应对面的哪些能力。手机端（关掉 host）不开终端、不让对面碰本机的文件和程序，只剩 AI 协作消息
 fn serves(capability: &str) -> bool {
     #[cfg(feature = "host")]
-    return matches!(capability, COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2 | REMOTE_LSP_V1 | PORT_FORWARD_V1 | GIT_V1 | REVERSE_FORWARD_V1);
+    return matches!(capability, COLLABORATION_V1 | AGENT_MESSAGE_V1 | DIR_PICKER_V1 | REMOTE_EDIT_V1 | REMOTE_EDIT_V2 | REMOTE_LSP_V1 | PORT_FORWARD_V1 | GIT_V1 | REVERSE_FORWARD_V1 | SSH_V1);
     #[cfg(not(feature = "host"))]
     return capability == COLLABORATION_V1;
 }
@@ -262,6 +262,9 @@ pub struct Host {
     screen_backend: RwLock<Option<Arc<dyn ScreenBackend>>>,
     /// 正在看本机画面的：编号 → (摘要, 叫它停下)
     screens: Mutex<HashMap<u64, (ScreenViewerSummary, Arc<tokio::sync::Notify>)>>,
+    /// 给连过来的设备的 SSH 服务（用户态 sshd）
+    #[cfg(feature = "host")]
+    sshd: crate::ssh_host::UserSshd,
 }
 
 impl Host {
@@ -294,6 +297,8 @@ impl Host {
             files: OnceLock::new(),
             screen_backend: RwLock::new(None),
             screens: Mutex::new(HashMap::new()),
+            #[cfg(feature = "host")]
+            sshd: crate::ssh_host::UserSshd::new(data_dir),
         }
     }
 
@@ -828,6 +833,16 @@ impl Host {
                         self.clear_proxy(session, port);
                     }
                     result?;
+                }
+                #[cfg(feature = "host")]
+                Msg::OpenSsh { pubkey } => {
+                    if let Some(key) = pubkey {
+                        self.sshd.authorize(&owner, &key).await?;
+                    }
+                    let tcp = self.sshd.connect().await?;
+                    info!(session, "对面接本机的 SSH 服务");
+                    write_msg(&mut send, &Msg::PortOpened).await?;
+                    crate::ports::pipe(tcp, tokio::io::join(&mut recv, &mut send)).await?;
                 }
                 #[cfg(feature = "host")]
                 Msg::ReverseConnect { token, id } => {
