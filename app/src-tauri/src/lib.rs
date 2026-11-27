@@ -1204,11 +1204,23 @@ async fn open_editor_window(app: AppHandle, state: State<'_, AppState>, endpoint
     pending.extend(request);
     state.editor_windows.lock().unwrap().insert(label.clone(), EditorWindow { endpoint_id, device_name: device_name.clone(), pending });
     let title = format!("{device_name} — 代码编辑器");
-    let built = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html?window=editor".into()))
+    let builder = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html?window=editor".into()))
         .title(title)
         .inner_size(1200.0, 820.0)
-        .min_inner_size(640.0, 420.0)
-        .build();
+        .min_inner_size(640.0, 420.0);
+    // 标题栏和主窗口、远程画面窗口一样自己画（编辑器顶上那一栏就是标题栏），窗口按钮用系统原生的：
+    // macOS 留着红绿灯，Windows 由 window-controls 插件画原生的最小化、最大化、关闭。高度和 styles.css 里一致
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(14.0, 24.0));
+    #[cfg(target_os = "windows")]
+    let builder = {
+        use tauri_plugin_window_controls::WindowControlsBuilderExt;
+        builder.theme(Some(tauri::Theme::Dark)).window_controls_height(44)
+    };
+    let built = builder.build();
     if let Err(e) = built {
         state.editor_windows.lock().unwrap().remove(&label);
         return Err(format!("打不开编辑器窗口：{e}"));

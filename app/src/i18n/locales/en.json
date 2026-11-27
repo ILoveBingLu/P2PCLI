@@ -1351,5 +1351,6 @@
   "停止转发（也不再记住）": "Stop forwarding (and forget it)",
   "已在 {{editor}} 里打开 {{alias}}:{{path}}": "Opened {{alias}}:{{path}} in {{editor}}",
   "可以直接改路径，回车跳过去": "Edit the path and press Enter to go there",
-  "单击进入子文件夹，打开的是上面这个文件夹；⌘/Ctrl + 回车 也可以打开": "Click a subfolder to go into it. The folder shown above is the one that opens; ⌘/Ctrl + Enter also opens it"
+  "单击进入子文件夹，打开的是上面这个文件夹；⌘/Ctrl + 回车 也可以打开": "Click a subfolder to go into it. The folder shown above is the one that opens; ⌘/Ctrl + Enter also opens it",
+  "有未保存的修改": "Unsaved changes"
 }

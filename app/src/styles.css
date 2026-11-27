@@ -2294,16 +2294,39 @@ img.agent-icon {
   min-height: 0;
   font-size: 12px;
 }
+/* 编辑器窗口的标题栏：和主窗口、远程画面窗口一样高 44px，窗口按钮用系统原生的 */
 .remote-editor-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
-  height: 32px;
+  height: 44px;
   flex: none;
-  padding: 0 6px;
+  padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--sidebar);
+  user-select: none;
+  -webkit-user-select: none;
 }
+.remote-editor-head.titlebar-macos { padding-left: 90px; }
+.remote-editor-head.titlebar-windows { padding-right: 148px; }
+.remote-editor-head.titlebar-windows::after,
+.remote-editor-head.titlebar-macos::after { content: none; }
+/* Tauri 按事件目标判断拖动：标题、路径里的字要让给拖动区 */
+.remote-editor-title *,
+.remote-editor-root * { pointer-events: none; }
+.remote-editor-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  margin-right: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.remote-editor-title-dot { color: var(--accent); font-size: 10px; }
 .remote-editor-head svg {
   width: 14px;
   height: 14px;

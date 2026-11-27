@@ -3,6 +3,7 @@ import {
   ArrowUp, ChevronDown, ChevronRight, CircleAlert, Copy, File, FilePlus, Files, Folder, FolderOpen, FolderPlus, GitBranch, GitCompare,
   CircleX, House, LoaderCircle, Pencil, RefreshCw, Save, SaveAll, Search, TextSearch, Trash2, TriangleAlert, X, Zap, ZapOff,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
 import { api, CONFLICT_PREFIX, type EntryListing, type FileList, type FileMeta, type GitStatus } from "../../api";
 import { Button } from "@/components/ui/button";
 import {
@@ -98,7 +99,10 @@ const editorOptions = (): monaco.editor.IEditorOptions & monaco.editor.IGlobalEd
  * 网络再慢也不影响打字。保存时核对打开时的哈希，文件被终端里的 AI 等改过就提示冲突，不悄悄盖掉；
  * 开着时每隔几秒看一眼对方电脑上的文件、目录和 Git 状态，没改过的文件自动换成最新内容。
  */
-export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, openRequest, active, onDirty, onClose }: {
+/** 自己画标题栏时给系统窗口按钮留位置：macOS 的红绿灯在左边，Windows 的最小化、最大化、关闭在右边 */
+const titlebarClass = !isTauri() ? "" : /Macintosh/.test(navigator.userAgent) ? "titlebar-macos" : /Windows/.test(navigator.userAgent) ? "titlebar-windows" : "";
+
+export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, openRequest, active, title, onDirty }: {
   /** 断开时为空：保留打开的文件和未保存的修改，重新连上后接着用 */
   connId: number | null;
   root: string;
@@ -107,8 +111,9 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
   /** 外面（终端里点了文件路径）要求打开某个文件并跳到某行；seq 变了才算新的要求 */
   openRequest?: { path: string; line: number; col: number; seq: number };
   active: boolean;
+  /** 窗口标题（设备名）：顶栏就是标题栏，标题显示在这里 */
+  title: string;
   onDirty: (count: number) => void;
-  onClose: () => void;
 }) {
   const online = connId != null;
   const [root, setRoot] = useState<string | null>(null);
@@ -827,28 +832,23 @@ export default function RemoteEditor({ connId, root: requestedRoot, rootSeq, ope
 
   return (
     <section className="remote-editor" aria-label={t("代码编辑器")} onKeyDown={onKeyDown}>
-      <header className="remote-editor-head">
+      {/* 顶栏就是窗口的标题栏：空白处、标题、路径都能拖动窗口，双击最大化 */}
+      <header className={cn("remote-editor-head", titlebarClass)} data-tauri-drag-region>
+        <span className="remote-editor-title" data-tauri-drag-region title={title}>
+          {dirtyCount > 0 && <span className="remote-editor-title-dot" aria-label={t("有未保存的修改")}>●</span>}
+          <span className="truncate">{title}</span>
+        </span>
         <Button variant="ghost" size="icon-xs" aria-label={t("上一级")} title={t("上一级")} isDisabled={!online || !parent}
           onPress={() => parent && void openRoot(parent)}><ArrowUp /></Button>
         <Button variant="ghost" size="icon-xs" aria-label={t("用户目录")} title={t("用户目录")} isDisabled={!online}
           onPress={() => void openRoot("")}><House /></Button>
-        <span className="remote-editor-root" title={root ?? ""}><bdi>{root ?? requestedRoot}</bdi></span>
+        <span className="remote-editor-root" data-tauri-drag-region title={root ?? ""}><bdi>{root ?? requestedRoot}</bdi></span>
         <Button variant="ghost" size="icon-xs" aria-label={t("按名字打开文件")} title={t("按名字打开文件（⌘/Ctrl+P）")} isDisabled={!online || root == null}
           onPress={() => setQuickOpen(true)}><Search /></Button>
         <Button variant="ghost" size="icon-xs" aria-label={t("刷新文件列表")} title={t("刷新文件列表")} isDisabled={!online || root == null}
           onPress={refreshTree}><RefreshCw /></Button>
         {dirtyCount > 1 && <Button variant="ghost" size="icon-xs" aria-label={t("全部保存")} title={t("全部保存 {{count}} 个文件（⌘/Ctrl+Alt+S）", { count: dirtyCount })}
           isDisabled={!online} onPress={() => void saveAll()}><SaveAll /></Button>}
-        <Button variant="ghost" size="icon-xs" aria-label={t("关闭编辑器")} title={t("关闭编辑器")} onPress={() => {
-          if (dirtyCount) {
-            setConfirm({
-              title: t("有 {{count}} 个文件未保存", { count: dirtyCount }),
-              body: t("关闭编辑器会丢失这些修改。"),
-              confirm: t("不保存，关闭编辑器"),
-              onConfirm: onClose,
-            });
-          } else onClose();
-        }}><X /></Button>
       </header>
       {!online && <div className="remote-editor-banner" role="status">
         <CircleAlert />{t("连接已断开。重新连接这台设备后才能读取和保存，未保存的修改会一直保留。")}

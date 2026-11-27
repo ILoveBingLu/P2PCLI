@@ -83,7 +83,7 @@ export default function EditorWindow() {
     <div className="editor-window">
       <Suspense fallback={<div className="remote-editor-placeholder"><LoaderCircle className="animate-spin" />{t("正在加载编辑器…")}</div>}>
         <RemoteEditor connId={connId} root={root.path} rootSeq={root.seq} openRequest={open} active
-          onDirty={setDirty} onClose={close} />
+          title={t("{{device}} — 代码编辑器", { device: device.name })} onDirty={setDirty} />
       </Suspense>
       {askClose && <AlertDialog open>
         <AlertDialogContent>
