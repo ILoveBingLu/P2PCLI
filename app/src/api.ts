@@ -588,6 +588,10 @@ export interface Diagnosis {
   rating: "好" | "一般" | "差" | "未知";
   summary: string;
   ipv6_addrs: string[];
+  /** 网卡上只有内网 IPv6、路由器转换成公网出去时的出口地址 */
+  ipv6_outbound?: string | null;
+  /** 网卡上的内网 IPv6（fd 开头，后面括号里是网卡名） */
+  ipv6_lan?: string[];
   ipv4_public: string | null;
   nat: NatKind;
   nat_source: "stun" | "relay" | "none";

@@ -1398,5 +1398,8 @@
   "对方电脑正在放的声音。静音时对方不录，不占带宽；对方是老版本或者系统不支持时没有声音": "Sound playing on the other computer. While muted it isn't captured, so it uses no bandwidth. There's no sound when the other computer runs an older version or its system doesn't support it",
   "便携版：打开发布页下载新的便携版 zip，解压覆盖原来的文件夹，data 文件夹里的设备和设置不用动": "Portable version: opens the release page to download the new portable zip. Extract it over the old folder; the devices and settings in the data folder stay as they are",
   "去下载": "Download",
-  "下载新的便携版": "Download the new portable version"
+  "下载新的便携版": "Download the new portable version",
+  "{{addr}}（路由器转换后的出口）": "{{addr}} (router-translated outbound address)",
+  "内网 IPv6": "Private IPv6",
+  "路由器发的内网地址（fd 开头），只在同一个局域网里有用，外网连不进来": "Private addresses from the router (starting with fd). They only work inside the same local network; nothing outside can reach them"
 }

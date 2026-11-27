@@ -52,7 +52,12 @@ pub struct Diagnosis {
     /// 好 / 一般 / 差 / 未知
     pub rating: &'static str,
     pub summary: String,
+    /// 网卡上的公网 IPv6
     pub ipv6_addrs: Vec<String>,
+    /// 网卡上只有内网 IPv6，但路由器转换成公网出去（NAT66）时，从外面看到的出口地址
+    pub ipv6_outbound: Option<String>,
+    /// 网卡上的内网 IPv6（fd 开头）：只在同一个局域网里有用
+    pub ipv6_lan: Vec<String>,
     pub ipv4_public: Option<String>,
     pub nat: NatKind,
     /// NAT 类型的来源：stun（小米）/ relay（iroh 经中继测）/ none
@@ -207,10 +212,15 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
         Err(_) => Err("小米 STUN 服务器 8 秒没回应".to_string()),
     };
     let report = node.endpoint.net_report().get();
-    let ipv6_addrs: Vec<String> = v6::local_candidates(&node.endpoint)
-        .iter()
-        .map(|a| a.ip().to_string())
-        .collect();
+    let interfaces = v6::interface_addrs();
+    let ipv6_addrs: Vec<String> = interfaces.iter().filter(|(_, ip)| v6::is_global(ip)).map(|(_, ip)| ip.to_string()).collect();
+    let ipv6_lan: Vec<String> = interfaces.iter().filter(|(_, ip)| v6::is_ula(ip)).map(|(name, ip)| format!("{ip}（{name}）")).collect();
+    // 网卡上没有公网 IPv6 时才看出口：有公网地址时中继看到的就是它
+    let ipv6_outbound = if ipv6_addrs.is_empty() { v6::nat66_outbound(&node.endpoint).map(|a| a.ip().to_string()) } else { None };
+    // 有出口但映射随目标变（对称）：也告诉用户，只是打不通
+    let ipv6_symmetric = ipv6_addrs.is_empty()
+        && ipv6_outbound.is_none()
+        && report.as_ref().is_some_and(|r| r.global_v6.is_some() && r.mapping_varies_by_dest_ipv6 == Some(true));
 
     let (nat, nat_source, ipv4_public) = match &stun {
         Ok(s) => (s.nat, "stun", Some(s.mapped.ip().to_string())),
@@ -240,13 +250,24 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
     });
 
     let mut notes = Vec::new();
-    if ipv6_addrs.is_empty() {
-        notes.push("没有公网 IPv6，只能走 IPv4 打洞或中继".to_string());
-    } else {
+    if !ipv6_addrs.is_empty() {
         notes.push(format!(
             "有公网 IPv6（{} 个地址），和同样有 IPv6 的设备可以直接连，不用打洞",
             ipv6_addrs.len()
         ));
+    } else if let Some(out) = &ipv6_outbound {
+        notes.push(format!(
+            "电脑上是路由器发的内网 IPv6（fd 开头），路由器把它转换成公网 IPv6 出去（出口 {out}）：和有 IPv6 的设备一般能打洞直连"
+        ));
+    } else if ipv6_symmetric {
+        notes.push("路由器把内网 IPv6 转换成公网出去，但每个目标的出口端口都不一样（对称转换），IPv6 打洞多半不通，只能看 IPv4".to_string());
+    } else if !ipv6_lan.is_empty() {
+        notes.push(
+            "只有路由器发的内网 IPv6（fd 开头），出不了外网：同一个局域网里的设备照样直连，跨网络要靠 IPv4 打洞或中继。想要公网 IPv6，在路由器里打开 IPv6（选桥接或中继模式），或者插到直接连光猫的网口"
+                .to_string(),
+        );
+    } else {
+        notes.push("没有 IPv6，只能走 IPv4 打洞或中继".to_string());
     }
     let via = if nat_source == "relay" { "（经中继测得）" } else { "" };
     notes.push(match nat {
@@ -279,6 +300,8 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
 
     let (rating, summary) = if !ipv6_addrs.is_empty() {
         ("好", "有公网 IPv6，对方也有 IPv6 时直接连；没有时看 IPv4".to_string())
+    } else if ipv6_outbound.is_some() {
+        ("好", "有 IPv6 出口（路由器做了地址转换），对方也有 IPv6 时一般能打洞直连；没有时看 IPv4".to_string())
     } else {
         match nat {
             NatKind::None | NatKind::Cone => ("一般", "没有 IPv6，但 IPv4 打洞一般能成功".to_string()),
@@ -293,6 +316,8 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
         rating,
         summary,
         ipv6_addrs,
+        ipv6_outbound,
+        ipv6_lan,
         ipv4_public,
         nat,
         nat_source,

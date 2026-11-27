@@ -467,8 +467,14 @@ export function DiagDialog({ onClose, publicKey }: { onClose: () => void; public
                 </div>
                 <div>
                   <dt>{t("公网 IPv6")}</dt>
-                  <dd>{d.ipv6_addrs.join("、") || t("未检测到")}</dd>
+                  <dd>{d.ipv6_addrs.join("、") || (d.ipv6_outbound ? t("{{addr}}（路由器转换后的出口）", { addr: d.ipv6_outbound }) : t("未检测到"))}</dd>
                 </div>
+                {!!d.ipv6_lan?.length && (
+                  <div>
+                    <dt>{t("内网 IPv6")}</dt>
+                    <dd title={t("路由器发的内网地址（fd 开头），只在同一个局域网里有用，外网连不进来")}>{d.ipv6_lan.join("、")}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>{t("NAT 类型")}</dt>
                   <dd>
