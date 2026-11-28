@@ -1,8 +1,9 @@
 //! 排查虚拟屏：建一块，每半秒记一次主屏是谁、它在哪、读不读得到分辨率；换成 HiDPI；删掉以后多久从列表里消失。
-//! 加 runloop 时主线程跑事件循环（和 P2PCLI 应用一样），活在别的线程上做。
-//! cargo run -p p2pcli-screen --example vd_probe -- [runloop]
+//! runloop：主线程跑事件循环，活在别的线程上做；nsapp：再先注册成应用（和 P2PCLI 应用一样）；
+//! fresh：建之前不查屏幕列表。
+//! cargo run -p p2pcli-screen --example vd_probe -- [runloop|nsapp|fresh]
 #[cfg(target_os = "macos")]
-fn probe() {
+fn probe(fresh: bool) {
     use std::time::{Duration, Instant};
 
     use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayVendorNumber, CGMainDisplayID};
@@ -10,10 +11,8 @@ fn probe() {
 
     let backend = p2pcli_screen::backend().unwrap();
     let ids = || backend.displays().unwrap().iter().map(|d| format!("{}{}", d.id, if d.primary { "*" } else { "" })).collect::<Vec<_>>().join(",");
-    println!("开始：主屏 {}，屏幕 {}", CGMainDisplayID(), ids());
-    for d in backend.displays().unwrap() {
-        let id: u32 = d.id.parse().unwrap();
-        println!("  {} 厂商 {:#x} 范围 {:?}", id, CGDisplayVendorNumber(id), CGDisplayBounds(id));
+    if !fresh {
+        println!("开始：主屏 {}，屏幕 {}", CGMainDisplayID(), ids());
     }
     let t = Instant::now();
     let id = backend.add_virtual_display(&DisplayMode { width: 1920, height: 1080, hidpi: false }).unwrap();
@@ -25,7 +24,7 @@ fn probe() {
         unsafe { objc2_core_graphics::CGGetOnlineDisplayList(16, ids.as_mut_ptr(), &mut count) };
         ids[..count as usize].iter().map(|id| format!("{id}({:#x})", CGDisplayVendorNumber(*id))).collect::<Vec<_>>().join(",")
     };
-    for i in 0..20 {
+    for i in 0..6 {
         let b = CGDisplayBounds(n);
         println!(
             "  {:>5} 毫秒：在线 {}，主屏 {}，它在 ({}, {}) {}×{}，系统读得到模式 {}，能选 {} 种",
@@ -62,13 +61,19 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         tracing_subscriber::fmt().with_env_filter("info").init();
-        if std::env::args().nth(1).as_deref() == Some("runloop") {
-            let worker = std::thread::spawn(probe);
+        let arg = std::env::args().nth(1).unwrap_or_default();
+        if arg == "nsapp" {
+            use objc2::runtime::{AnyClass, AnyObject};
+            let class = AnyClass::get(c"NSApplication").unwrap();
+            let _app: *mut AnyObject = unsafe { objc2::msg_send![class, sharedApplication] };
+        }
+        if arg == "runloop" || arg == "nsapp" {
+            let worker = std::thread::spawn(|| probe(false));
             while !worker.is_finished() {
                 objc2_core_foundation::CFRunLoop::run_in_mode(unsafe { objc2_core_foundation::kCFRunLoopDefaultMode }, 0.1, false);
             }
         } else {
-            probe();
+            probe(arg == "fresh");
         }
     }
 }
