@@ -24,6 +24,12 @@ mod mac;
 pub use mac::encode as mac_encode;
 #[cfg(windows)]
 mod win;
+/// 验证用：本机的真显示器是不是都被增强隐私屏弄黑了
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub fn mac_screens_black() -> bool {
+    mac::blackout::all_black()
+}
 
 /// 隐私屏背景的小样（PNG 的 data URL），设置页里给人挑
 #[cfg(any(target_os = "macos", windows))]

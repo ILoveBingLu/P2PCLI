@@ -8,6 +8,7 @@ use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCapture
 use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend, ScreenCapture};
 
 mod audio;
+pub(crate) mod blackout;
 mod capture;
 pub(crate) mod clip;
 mod privacy;
@@ -173,6 +174,10 @@ impl ScreenBackend for MacBackend {
     }
 
     fn privacy_supported(&self) -> bool {
+        true
+    }
+
+    fn privacy_blackout_supported(&self) -> bool {
         true
     }
 

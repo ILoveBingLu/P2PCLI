@@ -1,6 +1,7 @@
 //! 隐私屏实测：盖上以后远程截图里看不到它（看到的是底下的桌面）、本机的键鼠被拦住、远程注入的照常能用，
 //! 撤掉以后本机键鼠恢复。截图存到给的目录里，眼看一下：
-//! cargo run -p p2pcli-screen --example privacy_check -- 输出目录 [背景:black|0|1|2|图片路径] [秒数]
+//! cargo run -p p2pcli-screen --example privacy_check -- 输出目录 [背景:black|0~9|图片路径] [秒数]
+//! 加环境变量 P2PCLI_PRIVACY_BLACKOUT=1 试增强模式（macOS：本机屏幕整个变黑，远程照样看得到）
 //!
 //! macOS 上遮挡窗口要在主线程建，这里主线程跑 run loop，检查放在别的线程里做。
 use std::path::PathBuf;
@@ -22,7 +23,12 @@ fn main() {
     // 和 P2PCLI 一样按物理像素算，截图才是整块屏幕
     #[cfg(windows)]
     let _ = unsafe { windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
-    let style = PrivacyStyle { background, clock: true, message: p2pcli_core::screen::privacy_message("测试用的电脑") };
+    let style = PrivacyStyle {
+        background,
+        clock: true,
+        message: p2pcli_core::screen::privacy_message("测试用的电脑"),
+        blackout: std::env::var_os("P2PCLI_PRIVACY_BLACKOUT").is_some(),
+    };
     let worker = std::thread::spawn(move || {
         let code = match check(&out, &style, hold) {
             Ok(()) => 0,
@@ -70,6 +76,10 @@ fn check(out: &std::path::Path, style: &PrivacyStyle, hold: u64) -> anyhow::Resu
     let guard = backend.start_privacy(style, true)?;
     println!("盖上用了 {} 毫秒", t.elapsed().as_millis());
     std::thread::sleep(Duration::from_millis(800));
+    let black_during = untagged::screens_black();
+    if style.blackout {
+        println!("增强模式：本机屏幕{}", match black_during { Some(true) => "全黑了", Some(false) => "没变黑", None => "这个系统不支持" });
+    }
 
     // 远程看到的：应该和盖上前差不多（底下的桌面）
     let during = backend.screenshot(&main.id, 1280)?;
@@ -126,7 +136,13 @@ fn check(out: &std::path::Path, style: &PrivacyStyle, hold: u64) -> anyhow::Resu
         free
     });
 
-    let ok = d < 20.0 && blocked && moved && free && keys_blocked.unwrap_or(true) && keys_free.unwrap_or(true);
+    let black_after = untagged::screens_black();
+    if style.blackout {
+        println!("撤掉后本机屏幕{}", if black_after == Some(true) { "还是黑的" } else { "亮回来了" });
+    }
+    let black_ok = !style.blackout || (black_during == Some(true) && black_after == Some(false));
+
+    let ok = d < 20.0 && blocked && moved && free && keys_blocked.unwrap_or(true) && keys_free.unwrap_or(true) && black_ok;
     println!("结果：{}", if ok { "全部通过" } else { "有问题" });
     if !ok {
         anyhow::bail!("隐私屏有一项不对");
@@ -201,6 +217,10 @@ mod untagged {
         }
     }
 
+    pub fn screens_black() -> Option<bool> {
+        Some(p2pcli_screen::mac_screens_black())
+    }
+
     /// 本机按一下 F13（没什么程序用它）
     pub fn press_f13() {
         for down in [true, false] {
@@ -265,6 +285,10 @@ mod untagged {
     }
 
     pub fn press_f13() {}
+
+    pub fn screens_black() -> Option<bool> {
+        None
+    }
 
     /// Windows 上系统截屏也会排除隐私屏窗口，看不到本机实际显示的
     pub fn local_screenshot(_path: &std::path::Path) -> Option<String> {

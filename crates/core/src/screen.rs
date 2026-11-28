@@ -318,6 +318,10 @@ pub trait ScreenBackend: Send + Sync + 'static {
     fn privacy_supported(&self) -> bool {
         false
     }
+    /// 隐私屏能开增强模式（本机屏幕整个变黑）
+    fn privacy_blackout_supported(&self) -> bool {
+        false
+    }
     /// 盖上隐私屏：本机每块屏幕盖上 style 的画面，远程画面和截图里没有它（看到的是底下的桌面）；
     /// block_input 时拦住本机的键盘鼠标，只有远程注入的能用。返回的东西丢掉就撤掉，丢的时候不阻塞。
     /// 开的时候会阻塞，别在异步任务里直接调
@@ -337,6 +341,10 @@ pub struct PrivacyStyle {
     /// 屏幕中间的一行字，空就不写
     #[serde(default)]
     pub message: String,
+    /// 增强：本机屏幕整个变黑（指针、通知、锁屏都看不见），上面的画面也不显示。
+    /// 只在 [`ScreenBackend::privacy_blackout_supported`] 的系统上管用，别的系统照普通的盖
+    #[serde(default)]
+    pub blackout: bool,
 }
 
 impl PrivacyStyle {

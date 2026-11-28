@@ -1432,5 +1432,7 @@
   "晨雾": "Morning mist",
   "石墨": "Graphite",
   "樱花": "Sakura",
-  "海湾": "Bay"
+  "海湾": "Bay",
+  "增强模式：本机屏幕整个变黑": "Enhanced mode: turn this computer's screen fully black",
+  "连指针、通知、锁屏都看不见，看起来像关了屏幕，下面选的画面也不显示。对方那边照常看到桌面。": "Even the pointer, notifications and the lock screen are hidden, as if the display were off, and the picture below isn't shown. The other device still sees the desktop as usual."
 }

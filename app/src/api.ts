@@ -326,6 +326,8 @@ export interface PrivacySettings {
   clock_off: boolean;
   /** 自己写的那行字，空是默认的（写着谁在操作） */
   message: string;
+  /** 增强模式：本机屏幕整个变黑（只有 macOS 支持） */
+  blackout?: boolean;
 }
 
 export interface ScreenSettings {
@@ -334,6 +336,8 @@ export interface ScreenSettings {
   view_only: boolean;
   /** 这台电脑能开隐私屏 */
   privacy_supported: boolean;
+  /** 这台电脑能开增强隐私屏（本机屏幕整个变黑） */
+  privacy_blackout_supported: boolean;
   privacy: PrivacySettings;
   /** 选过自己的背景图片 */
   privacy_has_image: boolean;

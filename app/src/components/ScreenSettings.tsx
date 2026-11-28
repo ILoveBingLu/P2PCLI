@@ -143,6 +143,7 @@ function PrivacySection({ s, onChange }: { s: ScreenSettingsView; onChange: (s: 
     ...(s.privacy_has_image ? [{ id: "image", label: t("我的图片"), image: thumbs?.image ?? undefined }] : []),
   ];
   const current = p.background === "image" && !s.privacy_has_image ? "black" : (p.background || "black");
+  const blackout = s.privacy_blackout_supported && !!p.blackout;
 
   return (
     <div className="flex flex-col gap-3">
@@ -163,7 +164,22 @@ function PrivacySection({ s, onChange }: { s: ScreenSettingsView; onChange: (s: 
         </ListBox></Select.Popover>
       </Select>
 
+      {p.allow !== "off" && s.privacy_blackout_supported && (
+        <Checkbox isSelected={blackout} onChange={(on) => void save({ blackout: on })} isDisabled={busy || disabled}>
+          <Checkbox.Content className="items-start gap-3 text-sm">
+            <Checkbox.Control className="mt-0.5"><Checkbox.Indicator><Check className="size-3" /></Checkbox.Indicator></Checkbox.Control>
+            <span className="flex flex-col gap-0.5">
+              {t("增强模式：本机屏幕整个变黑")}
+              <span className="text-xs text-muted-foreground">
+                {t("连指针、通知、锁屏都看不见，看起来像关了屏幕，下面选的画面也不显示。对方那边照常看到桌面。")}
+              </span>
+            </span>
+          </Checkbox.Content>
+        </Checkbox>
+      )}
+
       {p.allow !== "off" && <>
+        {!blackout && <>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-2" role="radiogroup" aria-label={t("隐私屏背景")}>
           {backgrounds.map((b) => (
             <button key={b.id} type="button" role="radio" aria-checked={current === b.id} disabled={busy || disabled}
@@ -200,6 +216,7 @@ function PrivacySection({ s, onChange }: { s: ScreenSettingsView; onChange: (s: 
             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
           <span className="text-xs text-muted-foreground">{t("屏幕中间的一行字。留空就写着是哪台设备在操作")}</span>
         </div>
+        </>}
 
         <div>
           <Button variant="secondary" size="sm" disabled={busy || disabled} onPress={() => void preview()}>

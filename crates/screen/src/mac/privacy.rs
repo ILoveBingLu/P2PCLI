@@ -49,6 +49,7 @@ pub struct MacPrivacy {
     window_ids: Vec<u32>,
     stop: Arc<AtomicBool>,
     block: Option<InputBlock>,
+    blackout: Option<super::blackout::Blackout>,
 }
 
 /// 在主线程上跑 f，等它跑完拿结果；主线程不在跑时等 [`MAIN_TIMEOUT`] 报错（那时 f 也不会再跑）
@@ -208,6 +209,7 @@ impl MacPrivacy {
     pub fn start(style: &PrivacyStyle, block_input: bool) -> Result<Self> {
         // 先拦键鼠：拦不住（没给辅助功能权限）就不盖，免得本机的人以为被锁住了
         let block = if block_input { Some(InputBlock::start()?) } else { None };
+        let blackout = style.blackout;
         let style = style.clone();
         let covers = on_main(move |mtm| {
             let screens = NSScreen::screens(mtm);
@@ -230,8 +232,19 @@ impl MacPrivacy {
         })?;
         let stop = Arc::new(AtomicBool::new(false));
         spawn_clock(covers.clone(), stop.clone());
-        info!(screens = window_ids.len(), block_input, "隐私屏盖上了");
-        Ok(MacPrivacy { covers, window_ids, stop, block })
+        // 增强：窗口盖好以后屏幕再整个变黑（伽马表被系统改回去的一瞬间，看到的还是隐私屏）
+        let blackout = match blackout {
+            true => match super::blackout::Blackout::start() {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    warn!("增强隐私屏开不了，只盖窗口：{e:#}");
+                    None
+                }
+            },
+            false => None,
+        };
+        info!(screens = window_ids.len(), block_input, blackout = blackout.is_some(), "隐私屏盖上了");
+        Ok(MacPrivacy { covers, window_ids, stop, block, blackout })
     }
 }
 
@@ -259,8 +272,9 @@ fn spawn_clock(covers: Arc<Mutex<Option<MainOnly<Vec<Cover>>>>>, stop: Arc<Atomi
 impl Drop for MacPrivacy {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // 先放开键鼠，再撤窗口
+        // 先放开键鼠、屏幕亮回来，再撤窗口
         self.block.take();
+        self.blackout.take();
         let covers = self.covers.clone();
         DispatchQueue::main().exec_async(move || {
             if let Some(c) = covers.lock().unwrap().take() {

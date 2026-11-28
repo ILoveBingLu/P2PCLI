@@ -55,6 +55,9 @@ pub(crate) struct PrivacySettings {
     /// 自己写的那行字；空就用默认的（写着谁在操作）
     #[serde(default)]
     pub message: String,
+    /// 增强模式：本机屏幕整个变黑（只有 macOS 支持）
+    #[serde(default)]
+    pub blackout: bool,
 }
 
 /// 自己选的隐私屏图片拷到这里（格式按内容认，不看扩展名）
@@ -77,7 +80,7 @@ pub(crate) fn privacy_style(state: &AppState, viewer: &str) -> PrivacyStyle {
         "" => p2pcli_core::screen::privacy_message(viewer),
         m => m.to_string(),
     };
-    PrivacyStyle { background, clock: !p.clock_off, message }
+    PrivacyStyle { background, clock: !p.clock_off, message, blackout: p.blackout && privacy_blackout_supported() }
 }
 
 impl UiDelegate {
@@ -149,6 +152,8 @@ pub(crate) struct ScreenSettingsView {
     view_only: bool,
     /// 这个系统能不能开隐私屏
     privacy_supported: bool,
+    /// 这个系统能不能开增强隐私屏（本机屏幕整个变黑）
+    privacy_blackout_supported: bool,
     privacy: PrivacySettings,
     /// 选过自己的图片
     privacy_has_image: bool,
@@ -189,6 +194,7 @@ fn screen_settings_view(state: &AppState) -> ScreenSettingsView {
         enabled: !s.screen_off,
         view_only: s.screen_view_only,
         privacy_supported: privacy_supported(),
+        privacy_blackout_supported: privacy_blackout_supported(),
         privacy: s.screen_privacy.clone(),
         privacy_has_image: privacy_image_path(state).is_file(),
         capture_permission,
@@ -234,6 +240,16 @@ fn privacy_supported() -> bool {
 
 #[cfg(mobile)]
 fn privacy_supported() -> bool {
+    false
+}
+
+#[cfg(desktop)]
+fn privacy_blackout_supported() -> bool {
+    p2pcli_screen::backend().is_some_and(|b| b.privacy_blackout_supported())
+}
+
+#[cfg(mobile)]
+fn privacy_blackout_supported() -> bool {
     false
 }
 

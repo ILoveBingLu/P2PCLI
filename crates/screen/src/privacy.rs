@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn backgrounds() {
-        let style = |background| PrivacyStyle { background, clock: false, message: String::new() };
+        let style = |background| PrivacyStyle { background, clock: false, message: String::new(), blackout: false };
         assert!(background(&style(PrivacyBackground::Black), 1920, 1080).unwrap().is_none());
         // 主题按一半大小画
         let g = background(&style(PrivacyBackground::Preset { index: 1 }), 1920, 1080).unwrap().unwrap();
