@@ -79,53 +79,10 @@
 .collab-sidebar-task[aria-pressed="true"] { background: var(--muted-surface); }
 .collab-link-status { position: absolute; inset: 0 0 auto; height: 36px; display: flex; align-items: center; justify-content: space-between; padding-left: 8px; color: var(--accent); font-size: 11px; }
 .workspace { position: relative; }
-.collab-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  width: min(410px, 100%);
-  min-height: 0;
-  border-left: 1px solid var(--border);
-  background: var(--background);
-  box-shadow: -8px 0 24px rgb(0 0 0 / 7%);
-}
-.collab-drawer-header { display: flex; align-items: center; gap: 6px; min-height: 48px; flex: none; padding: 6px 10px 6px 16px; border-bottom: 1px solid var(--border); }
-.collab-drawer-header > svg { width: 16px; height: 16px; color: var(--accent); }
-.collab-drawer-header h2 { flex: 1; margin: 0; min-width: 0; font-size: 13px; font-weight: 600; }
-.collab-drawer-header [data-slot="button"] { width: 28px; height: 28px; min-width: 28px; }
-.collab-drawer-scroll { min-height: 0; flex: 1; overflow-y: auto; }
-.collab-drawer-filters { display: flex; align-items: center; gap: 4px; padding: 12px 14px; }
-.collab-drawer-filters > span { margin-left: auto; color: var(--muted-foreground); font-size: 11px; }
-.collab-link-task[data-slot="button"] { display: block; height: auto; width: calc(100% - 24px); margin: 0 12px; padding: 12px 4px; border-radius: 0; border-bottom: 1px solid var(--border); white-space: normal; text-align: left; }
-.collab-link-task > div { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-.collab-link-task strong { min-width: 0; font-size: 12px; font-weight: 550; line-height: 1.6; overflow-wrap: anywhere; }
-.collab-link-task p { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 8px 0 0; color: var(--muted-foreground); font-size: 10px; }
-.collab-link-task p svg { width: 12px; height: 12px; }
-.collab-link-task small { display: block; margin-top: 6px; color: var(--muted-foreground); font-size: 11px; font-weight: 400; line-height: 1.6; overflow-wrap: anywhere; }
-.collab-drawer-scope { margin: 20px 16px 12px; font-size: 11px; }
-.collab-drawer-scope > summary { cursor: pointer; padding-block: 8px; color: var(--muted-foreground); }
-.collab-drawer .collab-deliveries { padding-inline: 16px; background: transparent; }
-.collab-drawer .collab-detail { position: static; width: 100%; min-width: 0; flex: 1; border-left: 0; background: transparent; }
-.collab-drawer .collab-detail-heading { min-height: 36px; padding: 4px 16px; }
-.collab-drawer .collab-detail-heading > button { display: none; }
-.collab-drawer .collab-detail-scroll { padding: 16px; }
-.collab-drawer-error { flex: none; max-height: 130px; overflow: auto; margin: 0; padding: 12px 16px; color: var(--danger); background: color-mix(in oklab, var(--danger) 8%, transparent); font-size: 11px; overflow-wrap: anywhere; }
-.collab-management-dialog { display: flex; flex-direction: column; width: calc(100vw - 32px); max-width: 1120px; height: min(820px, calc(100dvh - 40px)); padding: 0; gap: 0; overflow: hidden; border-radius: 8px; }
-.collab-management-dialog > [data-slot="modal-header"] { padding: 12px 48px 12px 20px; border-bottom: 1px solid var(--border); }
-.collab-management-dialog [data-slot="modal-heading"] { font-size: 14px; }
-@media (min-width: 1050px) {
-  .has-collaboration-details > .workspace-content,
-  .has-collaboration-details > .remote-sessions-page { margin-right: 410px; }
-}
 @media (max-width: 700px) {
   .connection-sidebar { position: fixed; top: 44px; bottom: 0; left: 0; z-index: 20; border-right: 1px solid var(--border); }
   .workspace { grid-column: 1 / -1; grid-row: 2; }
   .connection-sidebar:not([data-collapsed]) + .workspace { border-left: 0; border-top-left-radius: 0; }
-  .collab-drawer { position: fixed; top: 44px; width: min(380px, calc(100vw - 36px)); z-index: 35; }
 }
 @media (prefers-reduced-motion: reduce) {
   .collab-wire-path { transition: none; }

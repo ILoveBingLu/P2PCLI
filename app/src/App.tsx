@@ -619,7 +619,7 @@ export default function App() {
    *  拖到 AI 输入框上的填进输入框 */
   const dropTarget = (at?: { x: number; y: number }): { info: RemoteInfo; termId?: number; draftKey?: number } | { blocked: string } => {
     if (showSettings) return { blocked: t("先回到终端，再把文件拖进来") };
-    if (at && document.elementFromPoint(at.x, at.y)?.closest(".collab-drawer, .collab-management-dialog, .collab-link-dialog"))
+    if (at && document.elementFromPoint(at.x, at.y)?.closest(".collab-panel, .collab-link-dialog"))
       return { blocked: t("请把文件拖到目标终端") };
     if (sessionTarget) return { info: sessionTarget.info };
     if (activeTab && (activeTab.state === "open" || activeTab.state === "opening")) {
@@ -848,7 +848,7 @@ export default function App() {
         onConnectLan={(device) => void connection.connectLan(device)}
         onRefresh={refresh}
       />}
-      <main className={cn("workspace", showSettings && "workspace-full-width", showCollaboration && !showSettings && "has-collaboration-details")}>
+      <main className={cn("workspace", showSettings && "workspace-full-width")}>
         {overviewError && (
           <div className="workspace-notice">
             <Alert variant="destructive">

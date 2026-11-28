@@ -304,7 +304,7 @@ function LinkDialog() {
               </Checkbox.Content>
               <Description>{t("读取分配给它的任务并回报结果。")}</Description>
             </Checkbox>}
-            {denied && <Button variant="secondary" size="sm" onPress={() => { collab.setLink(null); collab.setAdvanced(true); }}>{t("查看权限")}</Button>}
+            {denied && <Button variant="secondary" size="sm" onPress={() => { collab.setLink(null); collab.selectTask(null); collab.setView("devices"); collab.setOpen(true); }}>{t("查看权限")}</Button>}
             {prompt && <Accordion>
               <Accordion.Item>
                 <Accordion.Heading><Accordion.Trigger>{t("接入请求")}<Accordion.Indicator /></Accordion.Trigger></Accordion.Heading>

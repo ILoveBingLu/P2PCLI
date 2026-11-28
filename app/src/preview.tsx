@@ -1013,6 +1013,9 @@ mockIPC(
       case "stop_forward":
         previewForwards.splice(previewForwards.findIndex((f) => f.id === args.id), 1);
         return;
+      // 没有反向转发；不处理会落到最后的 null，界面拿它取 length 就崩了
+      case "reverse_forwards":
+        return [];
       case "port_forwards":
         // s=forward-problem：演示本机端口被占时的提示
         return previewForwards.map((f) => ({ ...f, connections: f.remote_port === 5173 ? 3 : 0,

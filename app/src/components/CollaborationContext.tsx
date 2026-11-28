@@ -31,8 +31,9 @@ interface CollaborationContextValue extends Snapshot {
   ensureProject: () => Promise<CollaborationProject>;
   open: boolean;
   setOpen: (open: boolean) => void;
-  advanced: boolean;
-  setAdvanced: (open: boolean) => void;
+  /** 协作面板现在看哪一页 */
+  view: CollaborationView;
+  setView: (view: CollaborationView) => void;
   selected: string | null;
   selectTask: (id: string | null) => void;
   link: CollaborationLink | null;
@@ -47,6 +48,7 @@ interface CollaborationContextValue extends Snapshot {
   now: number;
   forgetRelation: (id: string) => boolean;
 }
+export type CollaborationView = "tasks" | "devices";
 const CollaborationContext = createContext<CollaborationContextValue | null>(null);
 export function useCollaboration() {
   const value = useContext(CollaborationContext);
@@ -72,7 +74,7 @@ export function CollaborationProvider({ overview, terminals, transfers, open, on
   const [selected, selectTask] = useState<string | null>(null);
   const [link, setLink] = useState<CollaborationLink | null>(null);
   const [linking, setLinking] = useState(false);
-  const [advanced, setAdvanced] = useState(false);
+  const [view, setView] = useState<CollaborationView>("tasks");
   const identity = overview?.endpoint_id;
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   const wires = useCollaborationWires(overview, snapshot.project, snapshot.sessions, snapshot.tasks, transfers);
@@ -137,7 +139,7 @@ export function CollaborationProvider({ overview, terminals, transfers, open, on
 
   return <CollaborationContext value={{
     ...snapshot, ...wires, overview, terminals, target, loading, error, busy, run, refresh, ensureProject,
-    open, setOpen: onOpenChange, advanced, setAdvanced, selected, selectTask,
+    open, setOpen: onOpenChange, view, setView, selected, selectTask,
     link, setLink, linking, setLinking, onPrepare, deviceName,
     setTarget: (value) => {
       changeTarget(value); setProjectId(null); setSnapshot(empty); setLoading(true); setError(""); selectTask(null);

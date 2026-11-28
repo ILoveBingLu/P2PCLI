@@ -78,6 +78,23 @@ export function taskStateLabels(): Record<TaskState, string> {
     completed: t("已完成"), failed: t("失败"), cancel_requested: t("等待停止确认"), cancelled: t("已取消"),
   };
 }
+/** 任务状态标签的颜色：要你动手的（待验收、卡住）醒目，结束了的灰掉 */
+export function taskStateColor(state: TaskState): "accent" | "success" | "warning" | "danger" | "default" {
+  return ({
+    queued: "default", running: "accent", blocked: "warning", result_ready: "success",
+    completed: "default", failed: "danger", cancel_requested: "warning", cancelled: "default",
+  } as const)[state];
+}
+/** 已经结束、不用再管的任务 */
+export const taskFinished = (state: TaskState) => state === "completed" || state === "cancelled";
+/** “3 分钟前”这种，超过一天写日期 */
+export function collaborationAgo(seconds: number, now = Date.now() / 1000) {
+  const ago = Math.max(0, now - seconds);
+  if (ago < 60) return t("刚刚");
+  if (ago < 3600) return t("{{n}} 分钟前", { n: Math.floor(ago / 60) });
+  if (ago < 86400) return t("{{n}} 小时前", { n: Math.floor(ago / 3600) });
+  return collaborationTime(seconds);
+}
 export function roleLabels(): Record<CollaborationRole, string> {
   return { admin: t("管理员"), dispatcher: t("调度者"), worker: t("执行者"), viewer: t("观察者") };
 }
