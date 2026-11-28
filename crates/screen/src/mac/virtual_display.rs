@@ -63,17 +63,25 @@ fn pixels(mode: &DisplayMode) -> (u32, u32) {
     (mode.width * k, mode.height * k)
 }
 
-/// 只有这一档的设置
+/// 只有这一档的设置（排查用 VD_FULL=1：所有尺寸的一倍、两倍像素都给，开 HiDPI）
 fn settings_for(mode: &DisplayMode) -> Result<Retained<AnyObject>> {
-    let (pw, ph) = pixels(mode);
+    let full = std::env::var_os("VD_FULL").is_some();
+    let list: Vec<(u32, u32)> = if full {
+        SIZES.iter().flat_map(|&(w, h)| [(w, h), (w * 2, h * 2)]).filter(|&(w, h)| w <= MAX_PIXELS.0 && h <= MAX_PIXELS.1).collect()
+    } else {
+        vec![pixels(mode)]
+    };
     unsafe {
-        let mode_alloc: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
-        let m: Option<Retained<AnyObject>> = msg_send![mode_alloc, initWithWidth: pw, height: ph, refreshRate: REFRESH];
-        let m = m.ok_or_else(|| anyhow!("建不了虚拟屏的分辨率"))?;
+        let mut ms = Vec::new();
+        for (pw, ph) in list {
+            let mode_alloc: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
+            let m: Option<Retained<AnyObject>> = msg_send![mode_alloc, initWithWidth: pw, height: ph, refreshRate: REFRESH];
+            ms.push(m.ok_or_else(|| anyhow!("建不了虚拟屏的分辨率"))?);
+        }
         let settings: Option<Retained<AnyObject>> = msg_send![class(c"CGVirtualDisplaySettings")?, new];
         let settings = settings.ok_or_else(|| anyhow!("建不了虚拟屏的设置"))?;
-        let _: () = msg_send![&settings, setHiDPI: mode.hidpi as u32];
-        let modes = NSArray::from_retained_slice(&[m]);
+        let _: () = msg_send![&settings, setHiDPI: (mode.hidpi || full) as u32];
+        let modes = NSArray::from_retained_slice(&ms);
         let _: () = msg_send![&settings, setModes: &*modes];
         Ok(settings)
     }

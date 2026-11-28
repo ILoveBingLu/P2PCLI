@@ -30,6 +30,10 @@ fn probe(fresh: bool) {
             println!("系统给的：{}", arr.iter().map(|m| show(&m)).collect::<Vec<_>>().join("，"));
         }
         println!("抓屏框架看到的像素：{:?}", p2pcli_screen::mac_screen_pixel_size(n));
+        if hidpi {
+            let r = p2pcli_screen::mac_set_mode_cg(n, &DisplayMode { width: 1920, height: 1080, hidpi: true });
+            println!("用系统接口换 1920×1080 HiDPI：{r:?}，系统选的：{:?}，抓屏框架看到的像素：{:?}", CGDisplayCopyDisplayMode(n).map(|m| show(&m)), p2pcli_screen::mac_screen_pixel_size(n));
+        }
     }
     let n: u32 = id.parse().unwrap();
     println!("建好 {id}，用了 {} 毫秒", t.elapsed().as_millis());
@@ -81,6 +85,19 @@ fn main() {
             use objc2::runtime::{AnyClass, AnyObject};
             let class = AnyClass::get(c"NSApplication").unwrap();
             let _app: *mut AnyObject = unsafe { objc2::msg_send![class, sharedApplication] };
+        }
+        if arg == "apprun" {
+            // 和真应用一样：主线程跑 NSApplication 的事件循环，活在别的线程上做完就退出
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                probe(false);
+                std::process::exit(0);
+            });
+            use objc2::runtime::{AnyClass, AnyObject};
+            let class = AnyClass::get(c"NSApplication").unwrap();
+            let app: *mut AnyObject = unsafe { objc2::msg_send![class, sharedApplication] };
+            let _: () = unsafe { objc2::msg_send![app, setActivationPolicy: 1isize] };
+            let _: () = unsafe { objc2::msg_send![app, run] };
         }
         if arg == "runloop" || arg == "nsapp" {
             let worker = std::thread::spawn(|| probe(false));
