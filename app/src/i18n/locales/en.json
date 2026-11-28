@@ -1452,5 +1452,9 @@
   "来包限制": "Inbound filtering",
   "不限（谁发来的都收）": "None (accepts from anyone)",
   "只收发过包的 IP": "Only from IPs it has sent to",
-  "只收发过包的 IP 和端口": "Only from IPs and ports it has sent to"
+  "只收发过包的 IP 和端口": "Only from IPs and ports it has sent to",
+  "{{what}}：先在终端里完成当前确认": "{{what}}: finish the pending confirmation in the terminal first",
+  "模型：打开 Antigravity 的模型列表": "Model: open Antigravity's model list",
+  "思考强度：选当前模型支持的档位": "Reasoning effort: pick a level the current model supports",
+  "权限：打开 Antigravity 的审批设置；执行模式在终端里按 Shift+Tab 轮换": "Permissions: open Antigravity's approval settings; press Shift+Tab in the terminal to cycle the execution mode"
 }

@@ -85,7 +85,7 @@ function settingNotes(kind: string): Record<AgentSetting, string> | undefined {
   return notes[kind];
 }
 
-/** 输入框旁边的模型、思考强度、权限模式。Claude Code、ZCode 点了直接切；Codex 的选项随账号变，打开它自己的选择框。
+/** 输入框旁边的模型、思考强度、权限模式。Claude Code、ZCode 点了直接切；Codex、OpenCode、Antigravity 的选项随账号变，打开它们自己的选择框。
  *  在等你确认时都不让切：这时按的键会被当成选项；模型和强度要等它这一轮干完 */
 export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalette }: {
   agent: AgentInfo;
@@ -132,6 +132,20 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalet
           tip={waiting ? t("模型和思考强度：先在终端里完成当前确认") : t("模型和思考强度：打开 Codex 的选择菜单")} onPress={() => onPicker("/model")} />
         <IconAction label={t("权限")} icon={ShieldCheck} disabled={waiting}
           tip={waiting ? t("权限：先在终端里完成当前确认") : t("权限：打开 Codex 的权限选择")} onPress={() => onPicker("/permissions")} />
+      </div>
+    );
+  }
+  if (agent.kind === "antigravity") {
+    // 模型、强度随账号和模型变，打开它自己的选择；执行模式（默认、自动改文件、只做计划）在终端里按 Shift+Tab 轮换
+    const wait = (what: string) => t("{{what}}：先在终端里完成当前确认", { what });
+    return (
+      <div className="agent-settings">
+        <IconAction label={t("模型")} icon={Box} disabled={waiting}
+          tip={waiting ? wait(t("模型")) : t("模型：打开 Antigravity 的模型列表")} onPress={() => onPicker("/model")} />
+        <IconAction label={t("思考强度")} icon={Brain} disabled={waiting}
+          tip={waiting ? wait(t("思考强度")) : t("思考强度：选当前模型支持的档位")} onPress={() => onPicker("/effort")} />
+        <IconAction label={t("权限")} icon={ShieldCheck} disabled={waiting}
+          tip={waiting ? wait(t("权限")) : t("权限：打开 Antigravity 的审批设置；执行模式在终端里按 Shift+Tab 轮换")} onPress={() => onPicker("/permissions")} />
       </div>
     );
   }
