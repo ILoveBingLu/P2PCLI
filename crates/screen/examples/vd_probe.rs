@@ -19,11 +19,18 @@ fn probe() {
     let id = backend.add_virtual_display(&DisplayMode { width: 1920, height: 1080, hidpi: false }).unwrap();
     let n: u32 = id.parse().unwrap();
     println!("建好 {id}，用了 {} 毫秒", t.elapsed().as_millis());
-    for i in 0..8 {
+    let online = || {
+        let mut ids = [0u32; 16];
+        let mut count = 0u32;
+        unsafe { objc2_core_graphics::CGGetOnlineDisplayList(16, ids.as_mut_ptr(), &mut count) };
+        ids[..count as usize].iter().map(|id| format!("{id}({:#x})", CGDisplayVendorNumber(*id))).collect::<Vec<_>>().join(",")
+    };
+    for i in 0..20 {
         let b = CGDisplayBounds(n);
         println!(
-            "  {:>4} 毫秒：主屏 {}，它在 ({}, {}) {}×{}，系统读得到模式 {}，能选 {} 种",
-            i * 500,
+            "  {:>5} 毫秒：在线 {}，主屏 {}，它在 ({}, {}) {}×{}，系统读得到模式 {}，能选 {} 种",
+            i * 1000,
+            online(),
             CGMainDisplayID(),
             b.origin.x,
             b.origin.y,
@@ -32,7 +39,7 @@ fn probe() {
             CGDisplayCopyDisplayMode(n).is_some(),
             backend.display_modes(&id).0.len()
         );
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(1000));
     }
     let r = backend.set_display_mode(&id, &DisplayMode { width: 1920, height: 1080, hidpi: true });
     println!("换成 1920×1080 HiDPI：{r:?}，屏幕 {}", ids());
