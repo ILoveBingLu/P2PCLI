@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use iroh::endpoint::{Connection, presets};
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr, Watcher};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -276,20 +276,6 @@ impl Node {
 
         }
 
-        if start_accept && !cfg.offline && !cfg.relay_only {
-            let ep = endpoint.clone();
-            tokio::spawn(async move {
-                use futures_util::StreamExt as _;
-                let mut stream = ep.net_report().stream();
-                while stream.next().await.is_some() {
-                    if ep.is_closed() {
-                        break;
-                    }
-                    v6::record_net_report(&ep);
-                }
-            });
-        }
-
         let (push_tx, push_rx) = mpsc::unbounded_channel();
         let rdv = match server {
             Some(s) => Some(RdvClient::prepare(
@@ -325,14 +311,6 @@ impl Node {
 
     pub fn id(&self) -> iroh::EndpointId {
         self.endpoint.id()
-    }
-
-    pub(crate) fn is_offline(&self) -> bool {
-        self.config.offline
-    }
-
-    pub(crate) fn is_relay_only(&self) -> bool {
-        self.config.relay_only
     }
 
     /// 输设备码连
@@ -754,7 +732,6 @@ impl Node {
     pub async fn shutdown(&self) {
         self.stop_rendezvous().await;
         self.host.kick_all();
-        v6::invalidate_nat66_cache(self.id());
         self.endpoint.close().await;
     }
 }
