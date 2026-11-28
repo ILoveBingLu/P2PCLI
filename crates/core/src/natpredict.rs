@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use iroh::{Endpoint, Watcher};
 use serde::Serialize;
 use tokio::net::UdpSocket;
@@ -176,11 +176,25 @@ async fn resolve_v4(server: &str) -> Vec<SocketAddr> {
 
 /// 测本机 IPv4 NAT 开端口的规律和放包规则，大约一两秒
 pub async fn probe() -> Result<PortPattern> {
-    let first = *resolve_v4(STUN_SERVER).await.first().ok_or_else(|| anyhow!("解析不到 {STUN_SERVER}"))?;
-    let filtering = tokio::spawn(probe_filtering(first));
+    // 小米的服务器有好几个 IP，有的会不回：挨个试，都不通再试别的服务器
+    let mut servers = resolve_v4(STUN_SERVER).await;
+    for server in MORE_SERVERS {
+        servers.extend(resolve_v4(server).await.into_iter().take(1));
+    }
     let sock = UdpSocket::bind("0.0.0.0:0").await?;
+    let mut answered = None;
+    for server in &servers {
+        match binding(&sock, *server).await {
+            Ok(r) => {
+                answered = Some((*server, r));
+                break;
+            }
+            Err(e) => debug!(%server, "STUN 服务器没回应：{e:#}"),
+        }
+    }
+    let (first, r1) = answered.ok_or_else(|| anyhow!("STUN 服务器都没回应，可能是路由器或代理拦了 UDP"))?;
+    let filtering = tokio::spawn(probe_filtering(first));
     let local = local_addr_for("0.0.0.0:0", first, sock.local_addr()?.port())?;
-    let r1 = binding(&sock, first).await.context("STUN 服务器没回应，可能是路由器或代理拦了 UDP")?;
     let public_ip = match r1.mapped {
         SocketAddr::V4(a) => *a.ip(),
         SocketAddr::V6(_) => bail!("STUN 回的不是 IPv4"),
