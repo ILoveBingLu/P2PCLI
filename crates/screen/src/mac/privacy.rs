@@ -7,7 +7,7 @@
 
 use std::ffi::c_void;
 use std::ptr::{NonNull, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, CGFloat, CGPoint, CGRect, CGSize, kCFRunLoopCommonModes, kCFRunLoopDefaultMode};
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventMask, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
-    CGShieldingWindowLevel,
+    CGShieldingWindowLevel, CGWarpMouseCursorPosition,
 };
 use objc2_foundation::{NSData, NSString};
 use p2pcli_core::screen::PrivacyStyle;
@@ -285,6 +285,19 @@ fn event_mask() -> CGEventMask {
     .fold(0, |m, t| m | (1u64 << t.0))
 }
 
+/// 指针该在的地方：远程最后一次把它挪到哪（盖上时是当时的位置）。
+/// 系统在事件到拦截之前就已经挪了指针，光丢掉本机的移动事件拦不住指针，要再把它挪回来
+static PIN: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+fn set_pin(p: CGPoint) {
+    PIN[0].store(p.x.to_bits(), Ordering::SeqCst);
+    PIN[1].store(p.y.to_bits(), Ordering::SeqCst);
+}
+
+fn is_move(kind: CGEventType) -> bool {
+    [CGEventType::MouseMoved, CGEventType::LeftMouseDragged, CGEventType::RightMouseDragged, CGEventType::OtherMouseDragged].contains(&kind)
+}
+
 /// 系统嫌回调慢、或者别的原因把拦截关了：马上重新打开
 unsafe extern "C-unwind" fn tap_callback(_proxy: CGEventTapProxy, kind: CGEventType, event: NonNull<CGEvent>, user: *mut c_void) -> *mut CGEvent {
     if kind == CGEventType::TapDisabledByTimeout || kind == CGEventType::TapDisabledByUserInput {
@@ -294,8 +307,18 @@ unsafe extern "C-unwind" fn tap_callback(_proxy: CGEventTapProxy, kind: CGEventT
         }
         return event.as_ptr();
     }
-    let tag = CGEvent::integer_value_field(Some(unsafe { event.as_ref() }), CGEventField::EventSourceUserData);
-    if tag == INPUT_TAG as i64 { event.as_ptr() } else { null_mut() }
+    let ev = unsafe { event.as_ref() };
+    if CGEvent::integer_value_field(Some(ev), CGEventField::EventSourceUserData) == INPUT_TAG as i64 {
+        if is_move(kind) {
+            set_pin(CGEvent::location(Some(ev)));
+        }
+        return event.as_ptr();
+    }
+    if is_move(kind) {
+        let p = CGPoint::new(f64::from_bits(PIN[0].load(Ordering::SeqCst)), f64::from_bits(PIN[1].load(Ordering::SeqCst)));
+        let _ = CGWarpMouseCursorPosition(p);
+    }
+    null_mut()
 }
 
 impl InputBlock {
@@ -318,6 +341,7 @@ impl InputBlock {
                     break;
                 }
             }
+            set_pin(CGEvent::location(CGEvent::new(None).as_deref()));
             let Some(tap) = tap else {
                 let _ = tx.send(Err(anyhow!("拦不住本机的键盘鼠标：P2PCLI 还没有辅助功能权限")));
                 return;

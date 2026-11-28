@@ -63,6 +63,8 @@ fn check(out: &std::path::Path, style: &PrivacyStyle, hold: u64) -> anyhow::Resu
     let before = backend.screenshot(&main.id, 1280)?;
     std::fs::write(out.join("1-盖上前.png"), &before.png)?;
     let p0 = untagged::cursor();
+    // 看本机按键有没有被拦：在事件送到程序前的最后一层听着有没有收到
+    let keys = untagged::KeyProbe::start();
 
     let t = std::time::Instant::now();
     let guard = backend.start_privacy(style, true)?;
@@ -80,12 +82,21 @@ fn check(out: &std::path::Path, style: &PrivacyStyle, hold: u64) -> anyhow::Resu
     }
 
     // 本机键鼠：没带标记的移动被拦住，远程注入的照常
-    let target = (p0.0 + 137.0, p0.1 + 91.0);
+    // 往屏幕里面挪，别挪出边缘（被边缘挡住会误以为拦住了）
+    let target = (p0.0 + if p0.0 > 400.0 { -137.0 } else { 137.0 }, p0.1 + if p0.1 > 300.0 { -91.0 } else { 91.0 });
     untagged::move_to(target);
     std::thread::sleep(Duration::from_millis(300));
     let p1 = untagged::cursor();
     let blocked = (p1.0 - target.0).abs() > 2.0 || (p1.1 - target.1).abs() > 2.0;
     println!("本机鼠标挪到 {target:?}：指针在 {p1:?}，{}", if blocked { "被拦住了" } else { "没拦住" });
+    let keys_blocked = keys.as_ref().map(|k| {
+        let n = k.seen();
+        untagged::press_f13();
+        std::thread::sleep(Duration::from_millis(300));
+        let blocked = k.seen() == n;
+        println!("本机按 F13：{}", if blocked { "被拦住了" } else { "没拦住" });
+        blocked
+    });
     backend.inject(&main.id, &InputEvent::Move { x: 0.25, y: 0.25 })?;
     std::thread::sleep(Duration::from_millis(300));
     let p2 = untagged::cursor();
@@ -106,8 +117,16 @@ fn check(out: &std::path::Path, style: &PrivacyStyle, hold: u64) -> anyhow::Resu
     let p3 = untagged::cursor();
     let free = (p3.0 - target.0).abs() <= 2.0 && (p3.1 - target.1).abs() <= 2.0;
     println!("撤掉后本机鼠标挪到 {target:?}：指针在 {p3:?}，{}", if free { "能动了" } else { "还被拦着" });
+    let keys_free = keys.as_ref().map(|k| {
+        let n = k.seen();
+        untagged::press_f13();
+        std::thread::sleep(Duration::from_millis(300));
+        let free = k.seen() > n;
+        println!("撤掉后本机按 F13：{}", if free { "收到了" } else { "还被拦着（或者听不到按键）" });
+        free
+    });
 
-    let ok = d < 20.0 && blocked && moved && free;
+    let ok = d < 20.0 && blocked && moved && free && keys_blocked.unwrap_or(true) && keys_free.unwrap_or(true);
     println!("结果：{}", if ok { "全部通过" } else { "有问题" });
     if !ok {
         anyhow::bail!("隐私屏有一项不对");
@@ -118,8 +137,77 @@ fn check(out: &std::path::Path, style: &PrivacyStyle, hold: u64) -> anyhow::Resu
 /// 模拟本机的人动鼠标：不带远程注入的标记
 #[cfg(target_os = "macos")]
 mod untagged {
-    use objc2_core_graphics::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton};
-    use objc2_core_foundation::CGPoint;
+    use std::ffi::c_void;
+    use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use objc2_core_foundation::{CFMachPort, CFRunLoop, CGPoint, kCFRunLoopCommonModes, kCFRunLoopDefaultMode};
+    use objc2_core_graphics::{
+        CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType, CGMouseButton,
+    };
+
+    const F13: u16 = 105;
+    static SEEN: AtomicU64 = AtomicU64::new(0);
+
+    unsafe extern "C-unwind" fn listen(_: CGEventTapProxy, kind: CGEventType, event: NonNull<CGEvent>, _: *mut c_void) -> *mut CGEvent {
+        if kind == CGEventType::KeyDown
+            && CGEvent::integer_value_field(Some(unsafe { event.as_ref() }), CGEventField::KeyboardEventKeycode) == F13 as i64
+        {
+            SEEN.fetch_add(1, Ordering::SeqCst);
+        }
+        event.as_ptr()
+    }
+
+    /// 只听不拦，排在隐私屏的拦截后面
+    pub struct KeyProbe;
+
+    impl KeyProbe {
+        pub fn start() -> Option<Self> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let tap = unsafe {
+                    CGEvent::tap_create(
+                        CGEventTapLocation::AnnotatedSessionEventTap,
+                        CGEventTapPlacement::TailAppendEventTap,
+                        CGEventTapOptions::ListenOnly,
+                        1u64 << CGEventType::KeyDown.0,
+                        Some(listen),
+                        std::ptr::null_mut(),
+                    )
+                };
+                let Some(tap) = tap else {
+                    let _ = tx.send(false);
+                    return;
+                };
+                let source = CFMachPort::new_run_loop_source(None, Some(&tap), 0).unwrap();
+                let run_loop = CFRunLoop::current().unwrap();
+                run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
+                CGEvent::tap_enable(&tap, true);
+                let _ = tx.send(true);
+                loop {
+                    CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, 1.0, false);
+                }
+            });
+            if rx.recv().unwrap_or(false) {
+                Some(KeyProbe)
+            } else {
+                println!("听不了按键（没有输入监控权限），不查本机按键");
+                None
+            }
+        }
+
+        pub fn seen(&self) -> u64 {
+            SEEN.load(Ordering::SeqCst)
+        }
+    }
+
+    /// 本机按一下 F13（没什么程序用它）
+    pub fn press_f13() {
+        for down in [true, false] {
+            let ev = CGEvent::new_keyboard_event(None, F13, down);
+            CGEvent::post(CGEventTapLocation::HIDEventTap, ev.as_deref());
+        }
+    }
 
     pub fn cursor() -> (f64, f64) {
         let p = CGEvent::location(CGEvent::new(None).as_deref());
@@ -162,6 +250,21 @@ mod untagged {
         };
         unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
     }
+
+    /// Windows 的按键在上面的指针检查里已经一起验过（同一个钩子），这里不另外查
+    pub struct KeyProbe;
+
+    impl KeyProbe {
+        pub fn start() -> Option<Self> {
+            None
+        }
+
+        pub fn seen(&self) -> u64 {
+            0
+        }
+    }
+
+    pub fn press_f13() {}
 
     /// Windows 上系统截屏也会排除隐私屏窗口，看不到本机实际显示的
     pub fn local_screenshot(_path: &std::path::Path) -> Option<String> {
