@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use iroh::endpoint::{Connection, presets};
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr, Watcher};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -206,13 +206,7 @@ impl Node {
                 lan.set_info(&me);
                 Some(lan)
             }
-            None if cfg.lan && !cfg.offline => match Lan::start(&endpoint, &me, cfg.lan_visible).await {
-                Ok(lan) => Some(lan),
-                Err(e) => {
-                    warn!("局域网发现没启动：{e:#}");
-                    None
-                }
-            },
+            None if cfg.lan && !cfg.offline => Some(Lan::start(&endpoint, &me, cfg.lan_visible).await),
             None => None,
         };
         let host = shared_host.unwrap_or_else(|| {
@@ -276,6 +270,27 @@ impl Node {
 
         }
 
+        if start_accept && !cfg.offline {
+            let ep = endpoint.clone();
+            let lan_weak = lan.as_ref().map(Arc::downgrade);
+            let relay_only = cfg.relay_only;
+            tokio::spawn(async move {
+                use futures_util::StreamExt as _;
+                let mut stream = ep.net_report().stream();
+                while stream.next().await.is_some() {
+                    if ep.is_closed() {
+                        break;
+                    }
+                    if !relay_only {
+                        v6::record_net_report(&ep);
+                    }
+                    if let Some(lan) = lan_weak.as_ref().and_then(|w| w.upgrade()) {
+                        lan.refresh_interfaces().await;
+                    }
+                }
+            });
+        }
+
         let (push_tx, push_rx) = mpsc::unbounded_channel();
         let rdv = match server {
             Some(s) => Some(RdvClient::prepare(
@@ -311,6 +326,14 @@ impl Node {
 
     pub fn id(&self) -> iroh::EndpointId {
         self.endpoint.id()
+    }
+
+    pub(crate) fn is_offline(&self) -> bool {
+        self.config.offline
+    }
+
+    pub(crate) fn is_relay_only(&self) -> bool {
+        self.config.relay_only
     }
 
     /// 输设备码连
@@ -732,6 +755,7 @@ impl Node {
     pub async fn shutdown(&self) {
         self.stop_rendezvous().await;
         self.host.kick_all();
+        v6::invalidate_nat66_cache(self.id());
         self.endpoint.close().await;
     }
 }
