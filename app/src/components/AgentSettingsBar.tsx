@@ -54,11 +54,24 @@ function zcodeModes(): Choice[] {
     { id: "plan", label: t("只做计划"), hint: t("只看不改，先拿方案给你") },
   ];
 }
+/** Antigravity 的执行模式，顺序照 Shift+Tab 轮换的顺序（自动模式有的账号、系统没有，轮换时会跳过） */
+function antigravityModes(): Choice[] {
+  return [
+    { id: "default", label: t("手动确认"), hint: t("改文件、跑命令都先问你") },
+    { id: "accept-edits", label: t("自动改文件"), hint: t("改文件不问，跑命令还问") },
+    { id: "auto", label: t("自动模式"), hint: t("改文件和安全的命令不问；有的账号、系统没有") },
+    { id: "plan", label: t("只做计划"), hint: t("只看不改，先拿方案给你") },
+  ];
+}
+/** Antigravity 的思考强度（有的模型没有 xhigh、max） */
+function antigravityEfforts(): Choice[] {
+  return [effortChoice("low"), effortChoice("medium"), effortChoice("high"), { ...effortChoice("xhigh"), hint: t("xhigh，有的模型没有") }, { ...effortChoice("max"), hint: t("max，有的模型没有") }];
+}
 function modeLabels(): Record<string, string> {
   return { dontAsk: t("不问就拒") };
 }
 
-export const modeChoices = (kind: string) => (kind === "zcode" ? zcodeModes() : claudeModes());
+export const modeChoices = (kind: string) => (kind === "zcode" ? zcodeModes() : kind === "antigravity" ? antigravityModes() : claudeModes());
 
 export const choiceLabel = (choices: Choice[], id: string | null | undefined) =>
   choices.find((c) => c.id === id)?.label ?? (id ? modeLabels()[id] ?? id : null);
@@ -74,6 +87,11 @@ function settingNotes(kind: string): Record<AgentSetting, string> | undefined {
     claude: {
       model: t("也会成为那台电脑上新开 Claude Code 的默认值"),
       effort: t("也会成为那台电脑上新开 Claude Code 的默认值"),
+      mode: t("只改这个会话，按 Shift+Tab 轮换过去"),
+    },
+    antigravity: {
+      model: "",
+      effort: t("按当前模型支持的档位切"),
       mode: t("只改这个会话，按 Shift+Tab 轮换过去"),
     },
     zcode: {
@@ -136,16 +154,35 @@ export function AgentSettingsBar({ agent, switching, onSwitch, onPicker, onPalet
     );
   }
   if (agent.kind === "antigravity") {
-    // 模型、强度随账号和模型变，打开它自己的选择；执行模式（默认、自动改文件、只做计划）在终端里按 Shift+Tab 轮换
-    const wait = (what: string) => t("{{what}}：先在终端里完成当前确认", { what });
+    // 模型随账号变，打开它自己的列表（里面也能调强度）；强度直接用 /effort 档位，执行模式按 Shift+Tab 轮换。
+    // 状态栏还没读到（刚启动、被确认框盖住）时，强度也退回打开它自己的选择
+    const notes = settingNotes(agent.kind)!;
+    const busy = switching != null;
+    const blocked = waiting ? t("{{name}} 在等你确认，先在终端里选", { name: agent.name }) : undefined;
+    const lockedByWork = blocked ?? (agent.state === "working" ? t("等它这一轮干完再切") : undefined);
+    const efforts = antigravityEfforts();
     return (
       <div className="agent-settings">
-        <IconAction label={t("模型")} icon={Box} disabled={waiting}
-          tip={waiting ? wait(t("模型")) : t("模型：打开 Antigravity 的模型列表")} onPress={() => onPicker("/model")} />
-        <IconAction label={t("思考强度")} icon={Brain} disabled={waiting}
-          tip={waiting ? wait(t("思考强度")) : t("思考强度：选当前模型支持的档位")} onPress={() => onPicker("/effort")} />
-        <IconAction label={t("权限")} icon={ShieldCheck} disabled={waiting}
-          tip={waiting ? wait(t("权限")) : t("权限：打开 Antigravity 的审批设置；执行模式在终端里按 Shift+Tab 轮换")} onPress={() => onPicker("/permissions")} />
+        <IconAction label={t("模型")} icon={Box} disabled={waiting || busy}
+          tip={blocked ? t("模型：{{reason}}", { reason: blocked })
+            : settings.model ? t("模型：{{model}}，点开 Antigravity 的模型列表（里面也能调思考强度）", { model: settings.model })
+            : t("模型：打开 Antigravity 的模型列表")}
+          onPress={() => onPicker("/model")} />
+        {settings.effort ? (
+          <Chip icon={Brain} title={t("思考强度")} value={choiceLabel(efforts, settings.effort) ?? settings.effort}
+            choices={efforts} current={settings.effort} note={notes.effort}
+            spinning={switching === "effort"} disabled={busy || !!lockedByWork} reason={lockedByWork}
+            onPick={(id) => onSwitch("effort", id)} />
+        ) : (
+          <IconAction label={t("思考强度")} icon={Brain} disabled={waiting || busy}
+            tip={blocked ? t("思考强度：{{reason}}", { reason: blocked }) : t("思考强度：选当前模型支持的档位")} onPress={() => onPicker("/effort")} />
+        )}
+        {settings.mode && (
+          <Chip icon={ShieldCheck} title={t("执行模式")} value={choiceLabel(antigravityModes(), settings.mode) ?? settings.mode}
+            choices={antigravityModes()} current={settings.mode} note={notes.mode}
+            spinning={switching === "mode"} disabled={busy || waiting} reason={blocked}
+            onPick={(id) => onSwitch("mode", id)} />
+        )}
       </div>
     );
   }

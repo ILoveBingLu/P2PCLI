@@ -95,7 +95,7 @@ pub struct AgentSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// 权限模式，用各家自己的叫法。Claude Code：default、acceptEdits、plan、auto、bypassPermissions、dontAsk；
-    /// ZCode：build、edit、yolo、plan
+    /// ZCode：build、edit、yolo、plan；Antigravity：default、accept-edits、auto、plan
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     /// 能切到的模型。Claude Code 的别名是固定的，写在界面里；ZCode 按那台电脑上的配置来
@@ -563,6 +563,7 @@ impl Settings {
         let settings = match kind {
             "claude" => self.claude(pid, screen),
             "zcode" => self.zcode(screen),
+            "antigravity" => antigravity_footer(screen),
             _ => return None,
         };
         (settings != AgentSettings::default()).then_some(settings)
@@ -785,6 +786,38 @@ fn zcode_catalog(config: &serde_json::Value) -> ZcodeCatalog {
     catalog
 }
 
+/// Antigravity 的执行模式（默认模式时状态栏不写）
+const ANTIGRAVITY_MODES: &[&str] = &["accept-edits", "auto", "plan"];
+const ANTIGRAVITY_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Antigravity 最底下一行右边是“模式 · 模型 · 思考强度”，比如“auto · Gemini 4 Neon · xhigh”；
+/// 默认模式时没有模式那一段，只有“Gemini 4 Neon · xhigh”
+fn antigravity_footer(screen: &str) -> AgentSettings {
+    for line in screen.lines().rev().map(str::trim_end).filter(|l| !l.trim().is_empty()).take(3) {
+        // 左边是“? for shortcuts”“esc to cancel”这些提示，和右边隔着一大段空格
+        let Some(right) = line.rsplit("   ").map(str::trim).find(|p| !p.is_empty()) else { continue };
+        let parts: Vec<&str> = right.split(" · ").map(str::trim).collect();
+        if parts.len() < 2 || parts.iter().any(|p| p.is_empty() || p.chars().count() > 60) {
+            continue;
+        }
+        let (mode, rest) = match ANTIGRAVITY_MODES.contains(&parts[0]) {
+            true => (parts[0], &parts[1..]),
+            false => ("default", &parts[..]),
+        };
+        let effort = rest.get(1).filter(|e| ANTIGRAVITY_EFFORTS.contains(&e.to_lowercase().as_str()));
+        if rest.len() > 2 || (rest.len() == 2 && effort.is_none()) {
+            continue;
+        }
+        return AgentSettings {
+            model: Some(rest[0].to_string()),
+            effort: effort.map(|e| e.to_lowercase()),
+            mode: Some(mode.to_string()),
+            ..Default::default()
+        };
+    }
+    AgentSettings::default()
+}
+
 /// ZCode 最底下的状态栏：“◈ bigmodel/GLM-5.3-Flash ─ ◉ build ─ ⚡ high ─ ctx 99% left”；
 /// 窗口窄的时候后面几项会被挤掉，等你确认时整行被确认框盖住
 fn zcode_footer(screen: &str) -> AgentSettings {
@@ -839,6 +872,28 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 照 Antigravity CLI 1.5.19 真实的屏幕：底下一行右边是模式、模型、强度；确认命令时是编号选项；干活时转圈
+    #[test]
+    fn antigravity_footer_and_states() {
+        let bar = "─".repeat(60);
+        let idle = format!("> /effort\n  ⎿  Exited /effort command\n{bar}\n>\n{bar}\n? for shortcuts                                                    auto · Gemini 4 Neon · xhigh\n");
+        let s = antigravity_footer(&idle);
+        assert_eq!((s.mode.as_deref(), s.model.as_deref(), s.effort.as_deref()), (Some("auto"), Some("Gemini 4 Neon"), Some("xhigh")));
+        assert_eq!(state("", &idle), AgentState::Idle);
+        // 默认模式：没有模式那一段
+        let s = antigravity_footer("? for shortcuts                                                           Gemini 4 Neon · xhigh");
+        assert_eq!((s.mode.as_deref(), s.model.as_deref(), s.effort.as_deref()), (Some("default"), Some("Gemini 4 Neon"), Some("xhigh")));
+        let s = antigravity_footer("? for shortcuts                                               accept-edits · Claude Opus 5.5 · high");
+        assert_eq!((s.mode.as_deref(), s.model.as_deref()), (Some("accept-edits"), Some("Claude Opus 5.5")));
+        // 状态栏没出来（刚启动、被盖住）：什么都不给，不能当成默认模式
+        assert_eq!(antigravity_footer("Do you trust the contents of this project?\n> Yes, I trust this folder\n  No, exit"), AgentSettings::default());
+        let working = format!("> Run the shell command: echo hi\n⣾  Generating...\n{bar}\n>\n{bar}\nesc to cancel                                                  Gemini 4 Neon · xhigh\n");
+        assert_eq!(state("", &working), AgentState::Working);
+        let asking = "Requesting permission for:\n   echo hi\nRun this command?\n> 1. Yes, run command\n  2. Yes, and always allow in this conversation for commands that start with 'echo'\n  3. Yes, and always allow for commands that start with 'echo' (Persist to settings.json)\n  4. No, cancel\n  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\nesc to cancel                                                  Gemini 4 Neon · xhigh\n";
+        assert_eq!(state("", asking), AgentState::Waiting);
+        assert_eq!(antigravity_footer(asking).mode.as_deref(), Some("default"));
+    }
 
     fn cmd(args: &[&str]) -> Vec<String> {
         args.iter().map(|a| a.to_string()).collect()
