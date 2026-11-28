@@ -86,6 +86,12 @@ pub(crate) fn refresh_hz(id: CGDirectDisplayID) -> u32 {
 /// 一块屏幕的像素尺寸（Retina 屏是实际像素，不是点）。
 /// 显示模式读不到时（刚挂上的虚拟显示器有时这样）退回按像素读、再退回按点读
 pub(crate) fn pixel_size(id: CGDirectDisplayID) -> (u32, u32) {
+    // 自己建的虚拟屏：进程里先查过屏幕信息以后，系统不再更新新屏幕的模式（读到的是空的），按抓屏框架给的算
+    if objc2_core_graphics::CGDisplayVendorNumber(id) == super::virtual_display::VENDOR
+        && let Some(size) = screen_pixel_size(id)
+    {
+        return size;
+    }
     let mode = CGDisplayCopyDisplayMode(id);
     let (w, h) = (CGDisplayMode::pixel_width(mode.as_deref()), CGDisplayMode::pixel_height(mode.as_deref()));
     if w > 0 && h > 0 {
@@ -172,6 +178,17 @@ static STREAMS: Mutex<Vec<LiveStream>> = Mutex::new(Vec::new());
 static NEXT_STREAM: AtomicU64 = AtomicU64::new(1);
 
 /// 抓这块屏幕、排除掉隐私屏窗口的过滤
+/// 抓屏框架眼里这块屏幕的像素：范围（点）× 每点几个像素（macOS 14 起才有，老系统是空）
+pub(crate) fn screen_pixel_size(id: CGDirectDisplayID) -> Option<(u32, u32)> {
+    let filter = content_filter(id).ok()?;
+    if !filter.respondsToSelector(objc2::sel!(pointPixelScale)) {
+        return None;
+    }
+    let (rect, scale) = unsafe { (filter.contentRect(), filter.pointPixelScale() as f64) };
+    let size = ((rect.size.width * scale).round() as u32, (rect.size.height * scale).round() as u32);
+    (size.0 > 0 && size.1 > 0).then_some(size)
+}
+
 pub(crate) fn content_filter(id: CGDirectDisplayID) -> Result<Retained<SCContentFilter>> {
     let content = shareable_content()?;
     let display = find_in(&content, id)?;

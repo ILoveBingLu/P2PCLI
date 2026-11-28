@@ -39,14 +39,14 @@ pub fn current(id: CGDirectDisplayID) -> Option<DisplayMode> {
     autoreleasepool(|_| CGDisplayCopyDisplayMode(id).map(|m| describe(&m)))
 }
 
-/// 能选的分辨率：先普通的、再 HiDPI 的，各自从大到小；max_width 以上的不要（虚拟屏的 4K 原生档字太小）
-pub fn list(id: CGDirectDisplayID, max_width: u32) -> (Vec<DisplayMode>, Option<DisplayMode>) {
-    autoreleasepool(|_| list_inner(id, max_width))
+/// 能选的分辨率：先普通的、再 HiDPI 的，各自从大到小
+pub fn list(id: CGDirectDisplayID) -> (Vec<DisplayMode>, Option<DisplayMode>) {
+    autoreleasepool(|_| list_inner(id))
 }
 
-fn list_inner(id: CGDirectDisplayID, max_width: u32) -> (Vec<DisplayMode>, Option<DisplayMode>) {
+fn list_inner(id: CGDirectDisplayID) -> (Vec<DisplayMode>, Option<DisplayMode>) {
     let now = current(id);
-    let mut modes: Vec<DisplayMode> = all(id).iter().map(|m| describe(m)).filter(|m| m.width >= MIN_WIDTH && m.width <= max_width).collect();
+    let mut modes: Vec<DisplayMode> = all(id).iter().map(|m| describe(m)).filter(|m| m.width >= MIN_WIDTH).collect();
     if let Some(now) = now {
         modes.push(now);
     }

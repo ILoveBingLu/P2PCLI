@@ -5,8 +5,10 @@
 //! 用的是 CoreGraphics 里的 CGVirtualDisplay（系统没公开，但 macOS 11 起一直在，DeskPad、BetterDisplay
 //! 这些工具都靠它），不用装驱动、不用签名。没公开就可能在以后的系统里变：类找不到、建不起来时报错。
 //!
-//! 虚拟屏开着 HiDPI：给系统的分辨率里有两倍像素的档（比如 3840×2160），系统就多出“1920×1080（HiDPI）”，
-//! 界面和字一样大、像素是两倍。
+//! 换分辨率不走系统的显示设置（CGConfigureDisplayWithDisplayMode）：进程里先查过屏幕信息以后，系统读不到
+//! 新屏幕的模式；用它换过的虚拟屏丢掉以后也不消失。改成直接给虚拟屏新设置：只给要的那一档像素，
+//! HiDPI 时打开 hiDPI、像素给两倍（3840×2160 的 HiDPI 就是界面 1920×1080、像素两倍，字更细）。
+//! 能选的分辨率也按自己支持的列，不问系统。
 //!
 //! 只在需要时建：看画面时它在，画面都关了 30 秒没人再看就收掉，不在系统里常驻看不见的屏幕。
 
@@ -27,8 +29,6 @@ use tracing::{info, warn};
 /// 虚拟屏能选的大小（按界面算），每种都有普通档和 HiDPI 档（像素两倍，超过 MAX_PIXELS 的没有）
 const SIZES: &[(u32, u32)] = &[(2560, 1440), (1920, 1200), (1920, 1080), (1680, 1050), (1600, 900), (1440, 900), (1366, 768), (1280, 800), (1280, 720)];
 const MAX_PIXELS: (u32, u32) = (3840, 2400);
-/// 列表里最宽到多少（两倍像素的档系统也当普通档列出来，4K 原生字太小，不列）
-pub const MAX_WIDTH: u32 = 2560;
 /// 默认 1080p、不开 HiDPI（码率省，要细可以换）
 pub const DEFAULT_MODE: DisplayMode = DisplayMode { width: 1920, height: 1080, hidpi: false };
 const REFRESH: f64 = 60.0;
@@ -41,9 +41,42 @@ pub const VENDOR: u32 = 0x5032;
 
 /// 一块虚拟屏。丢掉就从系统里消失
 pub struct VirtualDisplay {
-    _display: Retained<AnyObject>,
+    display: Retained<AnyObject>,
     _queue: DispatchRetained<DispatchQueue>,
     pub id: CGDirectDisplayID,
+    mode: Mutex<DisplayMode>,
+}
+
+/// 虚拟屏能选的分辨率：先普通的、再 HiDPI 的，各自从大到小
+pub fn supported_modes() -> Vec<DisplayMode> {
+    let plain = SIZES.iter().map(|&(width, height)| DisplayMode { width, height, hidpi: false });
+    let hidpi = SIZES
+        .iter()
+        .filter(|&&(w, h)| w * 2 <= MAX_PIXELS.0 && h * 2 <= MAX_PIXELS.1)
+        .map(|&(width, height)| DisplayMode { width, height, hidpi: true });
+    plain.chain(hidpi).collect()
+}
+
+/// 这一档的实际像素
+fn pixels(mode: &DisplayMode) -> (u32, u32) {
+    let k = if mode.hidpi { 2 } else { 1 };
+    (mode.width * k, mode.height * k)
+}
+
+/// 只有这一档的设置
+fn settings_for(mode: &DisplayMode) -> Result<Retained<AnyObject>> {
+    let (pw, ph) = pixels(mode);
+    unsafe {
+        let mode_alloc: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
+        let m: Option<Retained<AnyObject>> = msg_send![mode_alloc, initWithWidth: pw, height: ph, refreshRate: REFRESH];
+        let m = m.ok_or_else(|| anyhow!("建不了虚拟屏的分辨率"))?;
+        let settings: Option<Retained<AnyObject>> = msg_send![class(c"CGVirtualDisplaySettings")?, new];
+        let settings = settings.ok_or_else(|| anyhow!("建不了虚拟屏的设置"))?;
+        let _: () = msg_send![&settings, setHiDPI: mode.hidpi as u32];
+        let modes = NSArray::from_retained_slice(&[m]);
+        let _: () = msg_send![&settings, setModes: &*modes];
+        Ok(settings)
+    }
 }
 
 // 只在建和丢的时候碰，CoreGraphics 允许跨线程
@@ -69,7 +102,10 @@ impl VirtualDisplay {
     pub fn create(name: &str, mode: &DisplayMode) -> Result<Self> {
         let main = objc2_core_graphics::CGMainDisplayID();
         // 建的过程里系统会自动释放一些对象，有的引用着这块显示器：不在池子里清掉，丢掉它以后它也不会消失
-        let d = objc2::rc::autoreleasepool(|_| Self::create_inner(name))?;
+        if !supported_modes().contains(mode) {
+            bail!("虚拟屏不支持 {}×{}{}", mode.width, mode.height, if mode.hidpi { "（HiDPI）" } else { "" });
+        }
+        let d = objc2::rc::autoreleasepool(|_| Self::create_inner(name, mode))?;
         // 有真屏幕时，主屏不能被它抢走（菜单栏、程序坞会跑到看不见的屏幕上）
         if main != d.id && objc2_core_graphics::CGMainDisplayID() == d.id && active_displays().contains(&main) {
             match super::modes::keep_main(main, d.id) {
@@ -77,18 +113,34 @@ impl VirtualDisplay {
                 Err(e) => warn!("虚拟屏被当成了主屏，摆不回来：{e:#}"),
             }
         }
-        // 刚挂上时系统还在重新排屏幕，分辨率列表要等一会儿才读得到
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while super::modes::list(d.id, MAX_WIDTH).0.len() < 2 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        if let Err(e) = super::modes::set(d.id, mode) {
-            warn!("虚拟屏换不成 {}×{}：{e:#}", mode.width, mode.height);
-        }
         Ok(d)
     }
 
-    fn create_inner(name: &str) -> Result<Self> {
+    /// 现在的分辨率
+    pub fn mode(&self) -> DisplayMode {
+        *self.mode.lock().unwrap()
+    }
+
+    /// 换分辨率：给虚拟屏新设置，等系统按新的像素画了才返回
+    pub fn set_mode(&self, mode: &DisplayMode) -> Result<()> {
+        if !supported_modes().contains(mode) {
+            bail!("虚拟屏不支持 {}×{}{}", mode.width, mode.height, if mode.hidpi { "（HiDPI）" } else { "" });
+        }
+        objc2::rc::autoreleasepool(|_| -> Result<()> {
+            let settings = settings_for(mode)?;
+            let ok: bool = unsafe { msg_send![&self.display, applySettings: &*settings] };
+            if !ok {
+                bail!("系统没接受虚拟屏的新分辨率");
+            }
+            Ok(())
+        })?;
+        *self.mode.lock().unwrap() = *mode;
+        wait_applied(self.id, mode)?;
+        info!(id = self.id, width = mode.width, height = mode.height, hidpi = mode.hidpi, "虚拟屏换了分辨率");
+        Ok(())
+    }
+
+    fn create_inner(name: &str, mode: &DisplayMode) -> Result<Self> {
         let queue = DispatchQueue::new("cn.p2pcli.virtual-display", None);
         let display: Retained<AnyObject> = unsafe {
             let desc: Option<Retained<AnyObject>> = msg_send![class(c"CGVirtualDisplayDescriptor")?, new];
@@ -108,24 +160,7 @@ impl VirtualDisplay {
             let display: Option<Retained<AnyObject>> = msg_send![alloc, initWithDescriptor: &*desc];
             let display = display.ok_or_else(|| anyhow!("系统没建出虚拟屏"))?;
 
-            // 每种大小给一档原生像素、一档两倍像素（开了 HiDPI，系统把两倍的当 HiDPI 档）
-            let mut modes = Vec::new();
-            for &(w, h) in SIZES {
-                for k in [1, 2] {
-                    let (pw, ph) = (w * k, h * k);
-                    if pw > MAX_PIXELS.0 || ph > MAX_PIXELS.1 {
-                        continue;
-                    }
-                    let mode_alloc: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
-                    let mode: Option<Retained<AnyObject>> = msg_send![mode_alloc, initWithWidth: pw, height: ph, refreshRate: REFRESH];
-                    modes.push(mode.ok_or_else(|| anyhow!("建不了虚拟屏的分辨率"))?);
-                }
-            }
-            let settings: Option<Retained<AnyObject>> = msg_send![class(c"CGVirtualDisplaySettings")?, new];
-            let settings = settings.ok_or_else(|| anyhow!("建不了虚拟屏的设置"))?;
-            let _: () = msg_send![&settings, setHiDPI: 1u32];
-            let modes = NSArray::from_retained_slice(&modes);
-            let _: () = msg_send![&settings, setModes: &*modes];
+            let settings = settings_for(mode)?;
             let ok: bool = msg_send![&display, applySettings: &*settings];
             if !ok {
                 bail!("虚拟屏的分辨率设置不上");
@@ -136,28 +171,43 @@ impl VirtualDisplay {
         if id == 0 {
             bail!("虚拟屏没有编号");
         }
-        // 系统挂上它要一点时间：等它出现在屏幕列表里、读得出分辨率（刚挂上时读到的是 0×0）
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            let size = super::capture::pixel_size(id);
-            if active_displays().contains(&id) && size.0 > 0 && size.1 > 0 {
-                break;
+        // 系统挂上它要一点时间：等它出现在屏幕列表里、按要的大小画
+        if let Err(e) = wait_applied(id, mode) {
+            warn!("{e:#}");
+            if !active_displays().contains(&id) {
+                bail!("虚拟屏建好了，但系统没把它当成屏幕");
             }
-            if Instant::now() > deadline {
-                let mode = objc2_core_graphics::CGDisplayCopyDisplayMode(id);
-                bail!(
-                    "虚拟屏建好了，但系统没把它当成屏幕：在列表里 {}，模式 {:?}，像素 {}×{}，范围 {:?}",
-                    active_displays().contains(&id),
-                    mode.as_deref().map(|m| (objc2_core_graphics::CGDisplayMode::pixel_width(Some(m)), objc2_core_graphics::CGDisplayMode::pixel_height(Some(m)))),
-                    objc2_core_graphics::CGDisplayPixelsWide(id),
-                    objc2_core_graphics::CGDisplayPixelsHigh(id),
-                    objc2_core_graphics::CGDisplayBounds(id),
-                );
-            }
-            std::thread::sleep(Duration::from_millis(50));
         }
-        info!(id, name, "建了一块虚拟屏");
-        Ok(VirtualDisplay { _display: display, _queue: queue, id })
+        info!(id, name, width = mode.width, height = mode.height, hidpi = mode.hidpi, "建了一块虚拟屏");
+        Ok(VirtualDisplay { display, _queue: queue, id, mode: Mutex::new(*mode) })
+    }
+}
+
+/// 等系统按这一档画：在屏幕列表里、范围（点）是界面大小、抓屏框架看到的像素对（老系统看不到像素就只看范围）
+fn wait_applied(id: CGDirectDisplayID, mode: &DisplayMode) -> Result<()> {
+    let want = pixels(mode);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let b = objc2_core_graphics::CGDisplayBounds(id);
+        let points = (b.size.width as u32, b.size.height as u32);
+        if active_displays().contains(&id) && points == (mode.width, mode.height) {
+            match super::capture::screen_pixel_size(id) {
+                Some(p) if p == want => return Ok(()),
+                None => return Ok(()),
+                Some(_) => {}
+            }
+        }
+        if Instant::now() > deadline {
+            bail!(
+                "虚拟屏没换成 {}×{}{}：范围 {:?}，像素 {:?}",
+                mode.width,
+                mode.height,
+                if mode.hidpi { "（HiDPI）" } else { "" },
+                points,
+                super::capture::screen_pixel_size(id)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -254,6 +304,16 @@ impl Virtuals {
         self.slots.lock().unwrap().iter().any(|e| e.display.id == id)
     }
 
+    /// 虚拟屏能选的分辨率和现在的（不是虚拟屏是空）
+    pub fn modes(&self, id: CGDirectDisplayID) -> Option<(Vec<DisplayMode>, Option<DisplayMode>)> {
+        self.hold(id).map(|d| (supported_modes(), Some(d.mode())))
+    }
+
+    /// 换虚拟屏的分辨率（不是虚拟屏是空）
+    pub fn set_mode(&self, id: CGDirectDisplayID, mode: &DisplayMode) -> Option<Result<()>> {
+        self.hold(id).map(|d| d.set_mode(mode))
+    }
+
     /// 虚拟屏的名字（不是虚拟屏是空）
     pub fn name(&self, id: CGDirectDisplayID) -> Option<String> {
         self.slots.lock().unwrap().iter().find(|e| e.display.id == id).map(|e| e.name.clone())
@@ -306,12 +366,11 @@ mod tests {
         let (w, h) = super::super::capture::pixel_size(id);
         println!("虚拟屏 {id}：{w}×{h}");
         assert_eq!((w, h), (DEFAULT_MODE.width, DEFAULT_MODE.height));
-        let (modes, now) = super::super::modes::list(id, MAX_WIDTH);
-        println!("能选的分辨率：{modes:?}，现在 {now:?}");
         let hidpi = DisplayMode { width: 1920, height: 1080, hidpi: true };
-        assert!(modes.contains(&hidpi), "没有 1920×1080 HiDPI");
-        super::super::modes::set(id, &hidpi).expect("换不成 HiDPI");
+        d.set_mode(&hidpi).expect("换不成 HiDPI");
         assert_eq!(super::super::capture::pixel_size(id), (3840, 2160));
+        let b = objc2_core_graphics::CGDisplayBounds(id);
+        assert_eq!((b.size.width, b.size.height), (1920.0, 1080.0), "HiDPI 的界面大小还是 1920×1080");
         let shot = super::super::shot::capture(&id.to_string(), 640).expect("截不到虚拟屏");
         println!("截图 {}×{}，{} 字节", shot.width, shot.height, shot.png.len());
         drop(d);

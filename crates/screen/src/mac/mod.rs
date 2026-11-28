@@ -182,14 +182,12 @@ impl ScreenBackend for MacBackend {
 
     fn display_modes(&self, display: &str) -> (Vec<p2pcli_core::screen::DisplayMode>, Option<p2pcli_core::screen::DisplayMode>) {
         let Ok(id) = display.parse() else { return (Vec::new(), None) };
-        // 虚拟屏两倍像素的档系统也当普通档列出来，字太小，不列
-        let max = if self.virtuals.is_virtual(id) { virtual_display::MAX_WIDTH } else { u32::MAX };
-        modes::list(id, max)
+        self.virtuals.modes(id).unwrap_or_else(|| modes::list(id))
     }
 
     fn set_display_mode(&self, display: &str, mode: &p2pcli_core::screen::DisplayMode) -> Result<()> {
         let id = display.parse().map_err(|_| anyhow::anyhow!("没有这块屏幕"))?;
-        modes::set(id, mode)
+        self.virtuals.set_mode(id, mode).unwrap_or_else(|| modes::set(id, mode))
     }
 
     fn virtual_displays_supported(&self) -> bool {
