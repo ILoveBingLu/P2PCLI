@@ -180,9 +180,9 @@ impl HostDelegate for CliDelegate {
 
     fn approve_screen(&self, req: ScreenRequest) -> BoxFuture<ScreenDecision> {
         let d = match self.screen {
-            ScreenMode::No => ScreenDecision { allow: false, control: false },
-            ScreenMode::View => ScreenDecision { allow: true, control: false },
-            ScreenMode::Control => ScreenDecision { allow: true, control: true },
+            ScreenMode::No => ScreenDecision { allow: false, control: false, privacy: false },
+            ScreenMode::View => ScreenDecision { allow: true, control: false, privacy: false },
+            ScreenMode::Control => ScreenDecision { allow: true, control: true, privacy: false },
         };
         eprintln!("【看画面请求】{}（{}）想要操作={}，决定 {d:?}", req.name, req.platform, req.control);
         Box::pin(async move { d })
