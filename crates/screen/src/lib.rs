@@ -24,6 +24,12 @@ mod mac;
 pub use mac::encode as mac_encode;
 #[cfg(windows)]
 mod win;
+/// 验证用：抓屏框架眼里这块屏幕的像素
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub fn mac_screen_pixel_size(id: u32) -> Option<(u32, u32)> {
+    mac::capture::screen_pixel_size(id)
+}
 /// 验证用：本机的真显示器是不是都被增强隐私屏弄黑了
 #[cfg(target_os = "macos")]
 #[doc(hidden)]

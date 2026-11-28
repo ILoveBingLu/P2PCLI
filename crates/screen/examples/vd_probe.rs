@@ -15,7 +15,22 @@ fn probe(fresh: bool) {
         println!("开始：主屏 {}，屏幕 {}", CGMainDisplayID(), ids());
     }
     let t = Instant::now();
-    let id = backend.add_virtual_display(&DisplayMode { width: 1920, height: 1080, hidpi: false }).unwrap();
+    let hidpi = std::env::var_os("HIDPI").is_some();
+    let id = backend.add_virtual_display(&DisplayMode { width: 1920, height: 1080, hidpi }).unwrap();
+    {
+        // 系统实际选的模式和给的所有模式（新进程才读得到）
+        use objc2_core_graphics::CGDisplayMode;
+        let n: u32 = id.parse().unwrap();
+        let show = |m: &CGDisplayMode| format!("{}×{}点/{}×{}像素", CGDisplayMode::width(Some(m)), CGDisplayMode::height(Some(m)), CGDisplayMode::pixel_width(Some(m)), CGDisplayMode::pixel_height(Some(m)));
+        println!("系统选的：{:?}", CGDisplayCopyDisplayMode(n).map(|m| show(&m)));
+        let key: &objc2_core_foundation::CFString = unsafe { objc2_core_graphics::kCGDisplayShowDuplicateLowResolutionModes };
+        let opts = objc2_core_foundation::CFDictionary::<objc2_core_foundation::CFString, objc2_core_foundation::CFBoolean>::from_slices(&[key], &[objc2_core_foundation::CFBoolean::new(true)]);
+        if let Some(arr) = unsafe { objc2_core_graphics::CGDisplayCopyAllDisplayModes(n, Some(opts.as_opaque())) } {
+            let arr: objc2_core_foundation::CFRetained<objc2_core_foundation::CFArray<CGDisplayMode>> = unsafe { objc2_core_foundation::CFRetained::cast_unchecked(arr) };
+            println!("系统给的：{}", arr.iter().map(|m| show(&m)).collect::<Vec<_>>().join("，"));
+        }
+        println!("抓屏框架看到的像素：{:?}", p2pcli_screen::mac_screen_pixel_size(n));
+    }
     let n: u32 = id.parse().unwrap();
     println!("建好 {id}，用了 {} 毫秒", t.elapsed().as_millis());
     let online = || {
