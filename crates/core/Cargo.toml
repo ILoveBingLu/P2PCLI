@@ -60,3 +60,5 @@ libc = { version = "0.2", optional = true }
 iroh-base = "=1.4.1"
 n0-watcher = "1"
 noq-udp = "=1.4.0"
+# 示例程序（examples/nat_probe.rs）打日志用
+tracing-subscriber.workspace = true

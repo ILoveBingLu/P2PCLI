@@ -147,7 +147,17 @@ async fn reply_comes(sock: &UdpSocket, to: SocketAddr, change: u32) -> bool {
 async fn probe_filtering(server: SocketAddr) -> Option<Filtering> {
     let sock = UdpSocket::bind("0.0.0.0:0").await.ok()?;
     // 先正常问一次，确认服务器在、知道它有没有另一个地址（没有就测不了）
-    binding(&sock, server).await.ok()?.other?;
+    match binding(&sock, server).await {
+        Ok(r) if r.other.is_some() => {}
+        Ok(_) => {
+            debug!(%server, "服务器没给另一个地址，测不了放包规则");
+            return None;
+        }
+        Err(e) => {
+            debug!(%server, "测放包规则时服务器没回应：{e:#}");
+            return None;
+        }
+    }
     if reply_comes(&sock, server, CHANGE_IP | CHANGE_PORT).await {
         return Some(Filtering::Open);
     }

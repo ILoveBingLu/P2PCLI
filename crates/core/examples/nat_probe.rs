@@ -2,6 +2,7 @@
 //! cargo run -p p2pcli-core --example nat_probe
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt().with_env_filter("p2pcli_core=debug").init();
     match p2pcli_core::diag::stun_probe(p2pcli_core::diag::STUN_SERVER).await {
         Ok(s) => println!("类型：{:?}（本机 {}，外网 {}，第二个目标看到 {:?}）", s.nat, s.local, s.mapped, s.mapped_second),
         Err(e) => println!("类型测不出：{e:#}"),
