@@ -12,7 +12,7 @@ use iroh::{EndpointAddr, TransportAddr};
 use p2pcli_core::host::{BoxFuture, Decision, HostDelegate, HostEvent, IncomingRequest, ScreenDecision, ScreenRequest};
 use p2pcli_core::node::{Node, NodeConfig};
 use p2pcli_core::screen::{
-    CaptureOptions, HostMsg, DisplayInfo, EncodedFrame, InputEvent, Quality, ScreenBackend, ScreenCapture, ScreenEvent, ScreenOpen,
+    CaptureOptions, HostMsg, DisplayInfo, DisplayMode, EncodedFrame, InputEvent, Quality, ScreenBackend, ScreenCapture, ScreenEvent, ScreenOpen,
     VideoConfig, ViewerMsg,
 };
 use p2pcli_core::screen_clip::{ClipContent, ClipPlatform, ClipSource, ViewerClip};
@@ -65,7 +65,19 @@ struct Fake {
     /// 能开隐私屏；盖着的时候记着样式和拦不拦本机键鼠（撤掉变回空）
     privacy: bool,
     privacy_on: Arc<Mutex<Option<(p2pcli_core::screen::PrivacyStyle, bool)>>>,
+    /// 能换分辨率、建虚拟屏
+    displays_ctl: bool,
+    /// 主屏换过的分辨率
+    main_mode: Mutex<Option<DisplayMode>>,
+    /// 建了的虚拟屏
+    virtuals: Mutex<Vec<String>>,
+    /// 开过抓屏的屏幕，按先后
+    captured: Mutex<Vec<String>>,
 }
+
+const FHD: DisplayMode = DisplayMode { width: 1920, height: 1080, hidpi: false };
+const HD: DisplayMode = DisplayMode { width: 1280, height: 720, hidpi: false };
+const FHD_HIDPI: DisplayMode = DisplayMode { width: 1920, height: 1080, hidpi: true };
 
 /// 假的隐私屏：丢掉就撤掉
 struct FakePrivacy(Arc<Mutex<Option<(p2pcli_core::screen::PrivacyStyle, bool)>>>);
@@ -138,10 +150,49 @@ struct FakeCapture {
 
 impl ScreenBackend for FakeBackend {
     fn displays(&self) -> Result<Vec<DisplayInfo>> {
-        Ok(vec![
-            DisplayInfo { id: "1".into(), name: "主屏".into(), width: 1920, height: 1080, primary: true, refresh_hz: 0 },
-            DisplayInfo { id: "2".into(), name: "副屏".into(), width: 1280, height: 1024, primary: false, refresh_hz: 0 },
-        ])
+        let mut list = vec![
+            DisplayInfo { id: "1".into(), name: "主屏".into(), width: 1920, height: 1080, primary: true, ..Default::default() },
+            DisplayInfo { id: "2".into(), name: "副屏".into(), width: 1280, height: 1024, primary: false, ..Default::default() },
+        ];
+        for v in self.0.virtuals.lock().unwrap().iter() {
+            list.push(DisplayInfo { id: v.clone(), name: "虚拟屏".into(), width: 3840, height: 2160, is_virtual: true, ..Default::default() });
+        }
+        Ok(list)
+    }
+    fn display_modes(&self, display: &str) -> (Vec<DisplayMode>, Option<DisplayMode>) {
+        if !self.0.displays_ctl {
+            return (Vec::new(), None);
+        }
+        match display {
+            "1" => (vec![FHD, HD], Some(self.0.main_mode.lock().unwrap().unwrap_or(FHD))),
+            v if self.0.virtuals.lock().unwrap().iter().any(|x| x == v) => (vec![FHD, FHD_HIDPI], Some(FHD_HIDPI)),
+            _ => (Vec::new(), None),
+        }
+    }
+    fn set_display_mode(&self, display: &str, mode: &DisplayMode) -> Result<()> {
+        if display != "1" || ![FHD, HD].contains(mode) {
+            anyhow::bail!("没有这个分辨率");
+        }
+        *self.0.main_mode.lock().unwrap() = Some(*mode);
+        Ok(())
+    }
+    fn virtual_displays_supported(&self) -> bool {
+        self.0.displays_ctl
+    }
+    fn add_virtual_display(&self, _mode: &DisplayMode) -> Result<String> {
+        let mut v = self.0.virtuals.lock().unwrap();
+        let id = format!("v{}", v.len() + 1);
+        v.push(id.clone());
+        Ok(id)
+    }
+    fn remove_virtual_display(&self, display: &str) -> Result<()> {
+        let mut v = self.0.virtuals.lock().unwrap();
+        let before = v.len();
+        v.retain(|x| x != display);
+        if v.len() == before {
+            anyhow::bail!("这不是虚拟屏");
+        }
+        Ok(())
     }
     fn check_capture(&self) -> Result<()> {
         Ok(())
@@ -154,6 +205,7 @@ impl ScreenBackend for FakeBackend {
         *self.0.show_cursor.lock().unwrap() = Some(opts.show_cursor);
         *self.0.codec.lock().unwrap() = Some(opts.codec);
         *self.0.color.lock().unwrap() = Some((opts.full_range, opts.wide_gamut, opts.yuv444));
+        self.0.captured.lock().unwrap().push(opts.display.clone());
         Ok(Arc::new(FakeCapture { fake: self.0.clone(), key: Arc::new(true.into()) }))
     }
     fn inject(&self, display: &str, ev: &InputEvent) -> Result<()> {
@@ -932,4 +984,81 @@ async fn privacy_screen_on_and_off() {
         assert!(fake.privacy_on.lock().unwrap().is_none());
         n.shutdown().await;
     }
+}
+
+/// 换分辨率、建删虚拟屏：能操作的观看方才能用，办完回新的屏幕列表；换当前屏幕的分辨率、切到新建的虚拟屏都重开抓屏，
+/// 删正在看的虚拟屏先切回主屏；办不成的回原因
+#[tokio::test]
+async fn display_modes_and_virtual_displays() {
+    use p2pcli_core::screen::{ScreenInput, ScreenOutput};
+    async fn reply(output: &mut ScreenOutput<iroh::endpoint::RecvStream>, input: &mut ScreenInput<iroh::endpoint::SendStream>) -> (Vec<DisplayInfo>, Option<String>) {
+        loop {
+            match timeout(Duration::from_secs(5), output.next()).await.unwrap().unwrap().unwrap() {
+                ScreenEvent::Host(HostMsg::Displays { displays, note }) => return (displays, note),
+                ScreenEvent::Frame { seq, .. } => input.send(&ViewerMsg::Ack { seq }).await.unwrap(),
+                _ => {}
+            }
+        }
+    }
+    async fn switched(output: &mut ScreenOutput<iroh::endpoint::RecvStream>, input: &mut ScreenInput<iroh::endpoint::SendStream>) -> String {
+        loop {
+            match timeout(Duration::from_secs(5), output.next()).await.unwrap().unwrap().unwrap() {
+                ScreenEvent::Host(HostMsg::Switched { display }) => return display,
+                ScreenEvent::Frame { seq, .. } => input.send(&ViewerMsg::Ack { seq }).await.unwrap(),
+                _ => {}
+            }
+        }
+    }
+    let fake = Arc::new(Fake { displays_ctl: true, ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: true, privacy: false }, Some(fake.clone())).await;
+    let (started, mut input, mut output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
+    assert!(started.display_modes && started.virtual_displays);
+    let main = started.displays.iter().find(|d| d.id == "1").unwrap();
+    assert_eq!((main.modes.clone(), main.mode), (vec![FHD, HD], Some(FHD)));
+    assert_eq!(started.display, "1");
+
+    // 换正在看的屏幕的分辨率：抓屏重开
+    let opened = fake.captured.lock().unwrap().len();
+    input.send(&ViewerMsg::SetMode { display: "1".into(), mode: HD }).await.unwrap();
+    let (list, note) = reply(&mut output, &mut input).await;
+    assert_eq!(note, None);
+    assert_eq!(list.iter().find(|d| d.id == "1").unwrap().mode, Some(HD));
+    assert_eq!(fake.captured.lock().unwrap().len(), opened + 1, "换了分辨率要重开抓屏");
+    // 没有的分辨率：回原因
+    input.send(&ViewerMsg::SetMode { display: "1".into(), mode: DisplayMode { width: 800, height: 600, hidpi: false } }).await.unwrap();
+    assert!(reply(&mut output, &mut input).await.1.is_some());
+
+    // 建虚拟屏：列表里有它，切过去看
+    input.send(&ViewerMsg::AddVirtual { mode: FHD_HIDPI }).await.unwrap();
+    let (list, note) = reply(&mut output, &mut input).await;
+    assert_eq!(note, None);
+    let v = list.iter().find(|d| d.is_virtual).expect("列表里要有虚拟屏");
+    assert_eq!(v.mode, Some(FHD_HIDPI));
+    assert_eq!(switched(&mut output, &mut input).await, v.id);
+    assert_eq!(fake.captured.lock().unwrap().last(), Some(&v.id));
+
+    // 删正在看的虚拟屏：先切回主屏
+    input.send(&ViewerMsg::RemoveVirtual { display: v.id.clone() }).await.unwrap();
+    let (list, note) = reply(&mut output, &mut input).await;
+    assert_eq!(note, None);
+    assert!(!list.iter().any(|d| d.is_virtual));
+    assert_eq!(switched(&mut output, &mut input).await, "1");
+    assert!(fake.virtuals.lock().unwrap().is_empty());
+    // 真屏幕删不了
+    input.send(&ViewerMsg::RemoveVirtual { display: "2".into() }).await.unwrap();
+    assert!(reply(&mut output, &mut input).await.1.is_some());
+    n.shutdown().await;
+
+    // 只看：不给换、不给建，列表里也不带分辨率；硬发也不理
+    let fake = Arc::new(Fake { displays_ctl: true, ..Default::default() });
+    let (n, _) = pair(ScreenDecision { allow: true, control: false, privacy: false }, Some(fake.clone())).await;
+    let (started, mut input, _output) = n.remote.open_screen(ScreenOpen { control: true, ..Default::default() }).await.unwrap();
+    assert!(!started.display_modes && !started.virtual_displays);
+    assert!(started.displays.iter().all(|d| d.modes.is_empty()));
+    input.send(&ViewerMsg::AddVirtual { mode: FHD }).await.unwrap();
+    input.send(&ViewerMsg::SetMode { display: "1".into(), mode: HD }).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(fake.virtuals.lock().unwrap().is_empty());
+    assert!(fake.main_mode.lock().unwrap().is_none());
+    n.shutdown().await;
 }

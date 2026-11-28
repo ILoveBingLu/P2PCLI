@@ -164,6 +164,7 @@ pub struct MdnsAddressLookupBuilder {
     service_name: String,
     filter: AddrFilter,
     cadence: Duration,
+    response_rate: f32,
     multicast_interfaces_v4: BTreeSet<Ipv4Addr>,
 }
 
@@ -175,6 +176,7 @@ impl MdnsAddressLookupBuilder {
             service_name: N0_SERVICE_NAME.to_string(),
             filter: AddrFilter::default(),
             cadence: Duration::from_millis(700),
+            response_rate: 2.5,
             multicast_interfaces_v4: BTreeSet::new(),
         }
     }
@@ -221,6 +223,19 @@ impl MdnsAddressLookupBuilder {
         self
     }
 
+    /// Sets the target mDNS response rate factor (`phi`) used by `swarm-discovery`.
+    ///
+    /// Higher values raise the per-query response cutoff so larger local networks
+    /// do not suppress valid peer announcements.
+    ///
+    /// # Panics
+    /// Panics if `response_rate` is not finite and greater than zero.
+    pub fn response_rate(mut self, response_rate: f32) -> Self {
+        assert!(response_rate.is_finite() && response_rate > 0.0);
+        self.response_rate = response_rate;
+        self
+    }
+
     /// Sets a filter to control which addresses are published by this service.
     pub fn addr_filter(mut self, filter: AddrFilter) -> Self {
         self.filter = filter;
@@ -256,6 +271,7 @@ impl MdnsAddressLookupBuilder {
             self.service_name,
             self.filter,
             self.cadence,
+            self.response_rate,
             self.multicast_interfaces_v4,
         )
     }
@@ -317,6 +333,7 @@ impl MdnsAddressLookup {
         service_name: String,
         filter: AddrFilter,
         cadence: Duration,
+        response_rate: f32,
         mut multicast_interfaces_v4: BTreeSet<Ipv4Addr>,
     ) -> Result<Self, AddressLookupBuilderError> {
         debug!("Creating new Mdns service");
@@ -331,6 +348,7 @@ impl MdnsAddressLookup {
             BTreeSet::new(),
             service_name,
             cadence,
+            response_rate,
             multicast_interfaces_v4.iter().copied().collect(),
             &rt,
         )?;
@@ -546,6 +564,7 @@ impl MdnsAddressLookup {
         socketaddrs: BTreeSet<SocketAddr>,
         service_name: String,
         cadence: Duration,
+        response_rate: f32,
         multicast_interfaces_v4: Vec<Ipv4Addr>,
         rt: &tokio::runtime::Handle,
     ) -> Result<DropGuard, AddressLookupBuilderError> {
@@ -568,6 +587,7 @@ impl MdnsAddressLookup {
             .to_ascii_lowercase();
         let mut discoverer = Discoverer::new_interactive(service_name, endpoint_id_str)
             .with_cadence(cadence)
+            .with_response_rate(response_rate)
             .with_callback(callback)
             .with_multicast_interfaces_v4(multicast_interfaces_v4)
             .with_ip_class(IpClass::Auto);

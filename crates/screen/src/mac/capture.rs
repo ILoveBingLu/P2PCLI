@@ -118,7 +118,7 @@ pub fn displays() -> Result<Vec<DisplayInfo>> {
                 external += 1;
                 format!("显示器 {external}")
             };
-            DisplayInfo { id: id.to_string(), name, width, height, primary: id == main, refresh_hz: refresh_hz(id) }
+            DisplayInfo { id: id.to_string(), name, width, height, primary: id == main, refresh_hz: refresh_hz(id), ..Default::default() }
         })
         .collect())
 }

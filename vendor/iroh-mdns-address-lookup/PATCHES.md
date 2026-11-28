@@ -8,7 +8,8 @@ Distributed under the upstream MIT license option; see `LICENSE-MIT`.
 
 Local changes:
 
-- Expose explicit IPv4 multicast interfaces through the builder.
+- Expose explicit IPv4 multicast interfaces and response rate (`phi`) through
+  the builder.
 - Forward runtime interface changes to swarm-discovery without replacing the
   discovery cache, subscriptions, or the iroh endpoint.
 - Require swarm-discovery 0.6.5 or newer in the 0.6 series for its per-interface

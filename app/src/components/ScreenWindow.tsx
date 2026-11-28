@@ -7,11 +7,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, ClipboardCopy, Crosshair, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Send, Shield, ShieldCheck, Shrink, Type, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { Description, Dropdown, Header, Label } from "@heroui/react";
+import { Check, ChevronDown, ClipboardCopy, Crosshair, Expand, Keyboard, LoaderCircle, Monitor, MousePointer2, MousePointerClick, RefreshCw, Send, Shield, ShieldCheck, Shrink, Type, Upload, Volume2, VolumeX, X } from "lucide-react";
 import { PcmPlayer } from "./audioPlayer";
 import {
   api,
   type ScreenDisplay,
+  type ScreenDisplayMode,
   type ScreenInput,
   type PathInfo,
   type RemoteInfo,
@@ -49,6 +51,104 @@ const isMac = navigator.userAgent.includes("Mac");
 // 和主窗口一样：标题栏自己画，给系统原生的窗口按钮留位置
 const nativeMac = isTauri() && /Macintosh/.test(navigator.userAgent);
 const nativeWindows = isTauri() && /Windows/.test(navigator.userAgent);
+
+const modeLabel = (m: ScreenDisplayMode) => `${m.width} × ${m.height}${m.hidpi ? " (HiDPI)" : ""}`;
+const sameMode = (a?: ScreenDisplayMode, b?: ScreenDisplayMode) =>
+  !!a && !!b && a.width === b.width && a.height === b.height && !!a.hidpi === !!b.hidpi;
+/** 新建虚拟屏的两种：HiDPI 更细（像素是两倍、码率高一些），普通的省流量 */
+const VIRTUAL_HIDPI: ScreenDisplayMode = { width: 1920, height: 1080, hidpi: true };
+const VIRTUAL_PLAIN: ScreenDisplayMode = { width: 1920, height: 1080 };
+
+/** 工具栏的屏幕菜单：切屏幕、换当前屏幕的分辨率、建删虚拟屏 */
+function DisplayMenu({ started, display, busy, onSwitch, onMode, onAdd, onRemove }: {
+  started: ScreenStarted;
+  display: string | null;
+  busy: boolean;
+  onSwitch: (d: ScreenDisplay) => void;
+  onMode: (d: ScreenDisplay, mode: ScreenDisplayMode) => void;
+  onAdd: (mode: ScreenDisplayMode) => void;
+  onRemove: (d: ScreenDisplay) => void;
+}) {
+  const displays = started.displays;
+  const cur = displays.find((d) => d.id === display);
+  const modes = (started.display_modes && cur?.modes) || [];
+  // 外接显示器系统不给 HiDPI 档：提示用虚拟屏
+  const noHidpi = !!cur && !cur.virtual && modes.length > 0 && !modes.some((m) => m.hidpi) && started.virtual_displays;
+  const act = (key: string) => {
+    const [kind, arg] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+    if (kind === "d") {
+      const d = displays.find((x) => x.id === arg);
+      if (d) onSwitch(d);
+    } else if (kind === "m" && cur) {
+      const m = modes[Number(arg)];
+      if (m && !sameMode(m, cur.mode)) onMode(cur, m);
+    } else if (kind === "add") onAdd(arg === "hidpi" ? VIRTUAL_HIDPI : VIRTUAL_PLAIN);
+    else if (kind === "remove" && cur) onRemove(cur);
+  };
+  return (
+    <Dropdown>
+      <Dropdown.Trigger className="screen-display-trigger" isDisabled={busy} aria-label={t("屏幕")}>
+        {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Monitor aria-hidden="true" />}
+        <span>{cur?.name ?? t("屏幕")}</span>
+        <ChevronDown aria-hidden="true" />
+      </Dropdown.Trigger>
+      <Dropdown.Popover placement="bottom start" className="screen-display-menu">
+        <Dropdown.Menu aria-label={t("屏幕")} onAction={(key) => act(String(key))}>
+          <Dropdown.Section>
+            <Header>{t("屏幕")}</Header>
+            {displays.map((d) => (
+              <Dropdown.Item key={`d:${d.id}`} id={`d:${d.id}`} textValue={d.name}>
+                <div className="flex min-w-0 flex-col">
+                  <Label>{d.name}</Label>
+                  <Description>{d.mode ? modeLabel(d.mode) : `${d.width} × ${d.height}`}</Description>
+                </div>
+                {d.id === display && <Check className="ml-auto size-4" aria-hidden="true" />}
+              </Dropdown.Item>
+            ))}
+          </Dropdown.Section>
+          {modes.length > 0 ? (
+            <Dropdown.Section>
+              <Header>{t("分辨率")}</Header>
+              {modes.map((m, i) => (
+                <Dropdown.Item key={`m:${i}`} id={`m:${i}`} textValue={modeLabel(m)}>
+                  <Label>{modeLabel(m)}</Label>
+                  {sameMode(m, cur?.mode) && <Check className="ml-auto size-4" aria-hidden="true" />}
+                </Dropdown.Item>
+              ))}
+            </Dropdown.Section>
+          ) : null}
+          {started.virtual_displays ? (
+            <Dropdown.Section>
+              <Header>{t("虚拟屏")}</Header>
+              <Dropdown.Item key="add:hidpi" id="add:hidpi" textValue={t("新建虚拟屏（HiDPI）")}>
+                <div className="flex min-w-0 flex-col">
+                  <Label>{t("新建虚拟屏（HiDPI）")}</Label>
+                  <Description>{t("1920 × 1080，像素是两倍，字更细")}</Description>
+                </div>
+              </Dropdown.Item>
+              <Dropdown.Item key="add:plain" id="add:plain" textValue={t("新建虚拟屏")}>
+                <div className="flex min-w-0 flex-col">
+                  <Label>{t("新建虚拟屏")}</Label>
+                  <Description>{t("1920 × 1080，省流量")}</Description>
+                </div>
+              </Dropdown.Item>
+              {cur?.virtual ? (
+                <Dropdown.Item key="remove:" id="remove:" textValue={t("删除这块虚拟屏")} variant="danger">
+                  <Label>{t("删除这块虚拟屏")}</Label>
+                </Dropdown.Item>
+              ) : null}
+            </Dropdown.Section>
+          ) : null}
+        </Dropdown.Menu>
+        <p className="screen-display-note">
+          {noHidpi
+            ? t("这块显示器系统没给 HiDPI 档。要更细的画面，可以新建一块 HiDPI 虚拟屏。")
+            : t("虚拟屏在对方电脑上看不见，只在远程画面里用；画面都关了 30 秒后自动收掉。")}
+        </p>
+      </Dropdown.Popover>
+    </Dropdown>
+  );
+}
 
 function b64(s: string): Uint8Array {
   const bin = atob(s);
@@ -166,6 +266,7 @@ export default function ScreenWindow() {
   const [privacy, setPrivacy] = useState(false);
   const privacyWant = useRef(false);
   const [privacyBusy, setPrivacyBusy] = useState(false);
+  const [displayBusy, setDisplayBusy] = useState(false);
   const [stats, setStats] = useState<{ fps: number; bitrate: number; target?: number; encoder?: ScreenEncoderInfo; encodeMs?: number } | null>(null);
   const [quality, setQuality] = useState<ScreenQuality>("balanced");
   const [control, setControl] = useState(true);
@@ -543,6 +644,12 @@ export default function ScreenWindow() {
           setPrivacyBusy(false);
           if (ev.msg.note) toast.notice(ev.msg.note);
         }
+        else if (ev.msg.t === "displays") {
+          const displays = ev.msg.displays;
+          setStarted((s) => (s ? { ...s, displays } : s));
+          setDisplayBusy(false);
+          if (ev.msg.note) toast.notice(ev.msg.note);
+        }
         return;
       case "notice":
         // 剪贴板内容走中继传：中继只是兜底，会比较慢
@@ -582,6 +689,7 @@ export default function ScreenWindow() {
         if (cancelled) { void api.screenClose(opened.screen_id); return; }
         screenId.current = opened.screen_id;
         setStarted(opened.started);
+        setDisplayBusy(false);
         setDisplay(opened.started.display);
         // 重连以后对方那边的隐私屏已经撤了：之前开着就再盖上
         setPrivacy(false);
@@ -914,6 +1022,12 @@ export default function ScreenWindow() {
     setDisplay(d.id);
     if (screenId.current != null) send({ t: "switch", display: d.id });
   };
+  // 换分辨率、建删虚拟屏：发出去以后等对方回新的屏幕列表，期间菜单点不了
+  const displayAction = (msg: ScreenViewerMsg) => {
+    if (screenId.current == null) return;
+    setDisplayBusy(true);
+    send(msg);
+  };
   // macOS 的简单全屏系统不认作全屏（isFullscreen 是假），自己记着
   const fullscreenRef = useRef(false);
   fullscreenRef.current = fullscreen;
@@ -1025,7 +1139,14 @@ export default function ScreenWindow() {
               </Section>
             ) : undefined} />
         )}
-        {live && started && started.displays.length > 1 && (
+        {live && started && canControl && (started.display_modes || started.virtual_displays) && (
+          <DisplayMenu started={started} display={display} busy={displayBusy}
+            onSwitch={changeDisplay}
+            onMode={(d, mode) => displayAction({ t: "set_mode", display: d.id, mode })}
+            onAdd={(mode) => displayAction({ t: "add_virtual", mode })}
+            onRemove={(d) => displayAction({ t: "remove_virtual", display: d.id })} />
+        )}
+        {live && started && !(canControl && (started.display_modes || started.virtual_displays)) && started.displays.length > 1 && (
           <div className="screen-segment" role="group" aria-label={t("屏幕")}>
             {started.displays.map((d) => (
               <button key={d.id} type="button" data-active={d.id === display ? "" : undefined} onClick={() => changeDisplay(d)}
