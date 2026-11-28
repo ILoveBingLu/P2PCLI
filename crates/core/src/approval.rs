@@ -130,7 +130,9 @@ fn vertical(lines: &[&str]) -> Option<Parsed> {
             .unwrap_or_else(|| (last + 1..lines.len()).find(|&row| footer(lines[row])).unwrap_or(lines.len()));
         let continuation = &lines[row + 1..end];
         if continuation.iter().any(|line| footer(line) || numbered(line).is_some()) { return None; }
-        let full = std::iter::once(*label).chain(continuation.iter().copied()).collect::<Vec<_>>().join(" ");
+        // 框线（Gemini 把确认框包在 ╭╮╰╯ 里）不算选项的续行
+        let border = |line: &&str| line.chars().all(|c| "─━╌═╭╮╰╯┌┐└┘│┃║ ".contains(c));
+        let full = std::iter::once(*label).chain(continuation.iter().filter(|l| !border(l)).copied()).collect::<Vec<_>>().join(" ");
         if full.len() > 900 { return None; }
         labels.push(full);
     }
