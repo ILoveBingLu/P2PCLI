@@ -10,7 +10,7 @@ use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend
 mod audio;
 pub(crate) mod blackout;
 pub(crate) mod capture;
-pub(crate) mod modes;
+mod modes;
 pub(crate) mod clip;
 mod privacy;
 mod shot;

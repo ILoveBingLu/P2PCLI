@@ -24,13 +24,6 @@ mod mac;
 pub use mac::encode as mac_encode;
 #[cfg(windows)]
 mod win;
-/// 验证用：用系统的显示设置换分辨率
-#[cfg(target_os = "macos")]
-#[doc(hidden)]
-pub fn mac_set_mode_cg(id: u32, mode: &p2pcli_core::screen::DisplayMode) -> anyhow::Result<()> {
-    mac::modes::set(id, mode)
-}
-
 /// 验证用：抓屏框架眼里这块屏幕的像素
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
