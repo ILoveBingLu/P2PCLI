@@ -10,6 +10,7 @@ import { InUseIndicator } from "./InUseIndicator";
 import { LocalDevicePopover } from "./LocalDevicePopover";
 import { PhonePairPopover } from "./PhonePairPopover";
 import { sidebarShortcut } from "./useSidebar";
+import { useAppVersion } from "./useAppVersion";
 import { t } from "@/i18n";
 
 export function Titlebar({
@@ -42,6 +43,7 @@ export function Titlebar({
   /** 断开一个正连着本机的设备 */
   onKick: (session: SessionSummary) => void;
 }) {
+  const version = useAppVersion();
   const nativeMac = isTauri() && /Macintosh/.test(navigator.userAgent);
   const nativeWindows = isTauri() && /Windows/.test(navigator.userAgent);
 
@@ -54,7 +56,7 @@ export function Titlebar({
         <img className="brand-symbol" src={logo} alt="" draggable={false} />
         <div className="flex items-center gap-1.5">
           <strong>P2PCLI</strong>
-          <Badge className="border border-[#b78c3f]/50 bg-[#17130c] text-[#e7c477]">Beta</Badge>
+          {version && <Badge className="border border-[#b78c3f]/50 bg-[#17130c] tabular-nums text-[#e7c477]">v{version}</Badge>}
         </div>
       </div>
       <Button

@@ -95,10 +95,9 @@ export function AboutPanel({ updater }: { updater: ReturnType<typeof useUpdater>
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-semibold tracking-tight">P2PCLI</h2>
-                <Badge className="border border-[#b78c3f]/50 bg-[#17130c] text-[#e7c477]">Beta</Badge>
+                {updater.version && <Badge className="border border-[#b78c3f]/50 bg-[#17130c] tabular-nums text-[#e7c477]">v{updater.version}</Badge>}
               </div>
               <p className="text-sm text-muted-foreground">{t("点对点远程终端")}</p>
-              {updater.version && <p className="text-xs tabular-nums text-muted-foreground">v{updater.version}</p>}
             </div>
           </div>
           <p className="max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
