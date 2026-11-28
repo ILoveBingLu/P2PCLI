@@ -67,8 +67,21 @@ fn active_displays() -> Vec<CGDirectDisplayID> {
 impl VirtualDisplay {
     /// 建一块虚拟屏，换成 mode 这个分辨率
     pub fn create(name: &str, mode: &DisplayMode) -> Result<Self> {
+        let main = objc2_core_graphics::CGMainDisplayID();
         // 建的过程里系统会自动释放一些对象，有的引用着这块显示器：不在池子里清掉，丢掉它以后它也不会消失
         let d = objc2::rc::autoreleasepool(|_| Self::create_inner(name))?;
+        // 有真屏幕时，主屏不能被它抢走（菜单栏、程序坞会跑到看不见的屏幕上）
+        if main != d.id && objc2_core_graphics::CGMainDisplayID() == d.id && active_displays().contains(&main) {
+            match super::modes::keep_main(main, d.id) {
+                Ok(()) => info!(main, "虚拟屏被当成了主屏，摆回原来的主屏"),
+                Err(e) => warn!("虚拟屏被当成了主屏，摆不回来：{e:#}"),
+            }
+        }
+        // 刚挂上时系统还在重新排屏幕，分辨率列表要等一会儿才读得到
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while super::modes::list(d.id, MAX_WIDTH).0.len() < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         if let Err(e) = super::modes::set(d.id, mode) {
             warn!("虚拟屏换不成 {}×{}：{e:#}", mode.width, mode.height);
         }

@@ -1,14 +1,18 @@
 //! 屏幕分辨率：列出系统给这块屏幕的分辨率（含 HiDPI 档），远程换成其中一种。
 //! 改的是这次登录的设置（注销、重启后回到原来的），不写进系统偏好。
+//!
+//! 这些调用会让系统往当前线程的自动释放池里放对象（有的拿着虚拟屏），调用的多是没有池子的线程：
+//! 都包在自己的池子里，用完就放掉，不然丢掉的虚拟屏一直不消失。
 
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFRetained, CFString};
+use objc2::rc::autoreleasepool;
 use objc2_core_graphics::{
-    CGBeginDisplayConfiguration, CGCancelDisplayConfiguration, CGCompleteDisplayConfiguration, CGConfigureDisplayWithDisplayMode,
-    CGConfigureOption, CGDirectDisplayID, CGDisplayConfigRef, CGDisplayCopyAllDisplayModes, CGDisplayCopyDisplayMode, CGDisplayMode,
-    kCGDisplayShowDuplicateLowResolutionModes,
+    CGBeginDisplayConfiguration, CGCancelDisplayConfiguration, CGCompleteDisplayConfiguration, CGConfigureDisplayOrigin,
+    CGConfigureDisplayWithDisplayMode, CGConfigureOption, CGDirectDisplayID, CGDisplayBounds, CGDisplayConfigRef, CGDisplayCopyAllDisplayModes,
+    CGDisplayCopyDisplayMode, CGDisplayMode, kCGDisplayShowDuplicateLowResolutionModes,
 };
 use p2pcli_core::screen::DisplayMode;
 use tracing::info;
@@ -32,11 +36,15 @@ fn all(id: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> {
 
 /// 现在用的分辨率
 pub fn current(id: CGDirectDisplayID) -> Option<DisplayMode> {
-    CGDisplayCopyDisplayMode(id).map(|m| describe(&m))
+    autoreleasepool(|_| CGDisplayCopyDisplayMode(id).map(|m| describe(&m)))
 }
 
 /// 能选的分辨率：先普通的、再 HiDPI 的，各自从大到小；max_width 以上的不要（虚拟屏的 4K 原生档字太小）
 pub fn list(id: CGDirectDisplayID, max_width: u32) -> (Vec<DisplayMode>, Option<DisplayMode>) {
+    autoreleasepool(|_| list_inner(id, max_width))
+}
+
+fn list_inner(id: CGDirectDisplayID, max_width: u32) -> (Vec<DisplayMode>, Option<DisplayMode>) {
     let now = current(id);
     let mut modes: Vec<DisplayMode> = all(id).iter().map(|m| describe(m)).filter(|m| m.width >= MIN_WIDTH && m.width <= max_width).collect();
     if let Some(now) = now {
@@ -49,6 +57,10 @@ pub fn list(id: CGDirectDisplayID, max_width: u32) -> (Vec<DisplayMode>, Option<
 
 /// 换成这个分辨率：同样大小有几种刷新率时，优先和现在一样的，没有就挑最高的。等系统认了新尺寸才返回
 pub fn set(id: CGDirectDisplayID, want: &DisplayMode) -> Result<()> {
+    autoreleasepool(|_| set_inner(id, want))
+}
+
+fn set_inner(id: CGDirectDisplayID, want: &DisplayMode) -> Result<()> {
     if current(id).as_ref() == Some(want) {
         return Ok(());
     }
@@ -85,3 +97,28 @@ pub fn set(id: CGDirectDisplayID, want: &DisplayMode) -> Result<()> {
     info!(id, width = want.width, height = want.height, hidpi = want.hidpi, "换了分辨率");
     Ok(())
 }
+
+/// 让 main 当主屏（菜单栏、程序坞在它上面），side 放在它右边。新建的虚拟屏有时会被系统当成主屏
+/// （系统记着以前只有虚拟屏时的排列），菜单栏跑到看不见的屏幕上，这里摆回来
+pub fn keep_main(main: CGDirectDisplayID, side: CGDirectDisplayID) -> Result<()> {
+    autoreleasepool(|_| {
+        let width = CGDisplayBounds(main).size.width as i32;
+        let mut config: CGDisplayConfigRef = std::ptr::null_mut();
+        let err = unsafe { CGBeginDisplayConfiguration(&mut config) };
+        if err.0 != 0 {
+            bail!("摆不了屏幕位置（{}）", err.0);
+        }
+        // 主屏就是左上角在 (0, 0) 的那块
+        let errs = unsafe { [CGConfigureDisplayOrigin(config, main, 0, 0), CGConfigureDisplayOrigin(config, side, width, 0)] };
+        if let Some(e) = errs.iter().find(|e| e.0 != 0) {
+            unsafe { CGCancelDisplayConfiguration(config) };
+            bail!("摆不了屏幕位置（{}）", e.0);
+        }
+        let err = unsafe { CGCompleteDisplayConfiguration(config, CGConfigureOption::ForSession) };
+        if err.0 != 0 {
+            bail!("摆不了屏幕位置（{}）", err.0);
+        }
+        Ok(())
+    })
+}
+
