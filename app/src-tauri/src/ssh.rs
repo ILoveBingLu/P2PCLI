@@ -198,7 +198,8 @@ fn upsert(data_dir: &Path, ssh_dir: &Path, name: &str, endpoint_id: &str, user: 
 }
 
 /// 打开软件时按现在的格式重写一遍 p2pcli_hosts（已经有这个文件时才写）：升级以后，直接从编辑器的
-/// 最近列表打开的连接也用上新配置，不用先在 P2PCLI 里再点一次「用本机 VS Code 打开」
+/// 最近列表打开的连接也用上新配置，不用先在 P2PCLI 里再点一次「用本机 VS Code 打开」。手机上没有
+#[cfg(desktop)]
 pub(crate) fn refresh(data_dir: &Path) {
     let hosts = load(data_dir);
     let Ok(dir) = ssh_dir() else { return };
