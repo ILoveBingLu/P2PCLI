@@ -295,7 +295,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         match msg {
             WM_NCCREATE => {
                 let create = &*(lparam.0 as *const CREATESTRUCTW);
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+                // 32 位系统上它就是 SetWindowLongW，参数是 i32：让编译器按平台定
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as _);
             }
             WM_PAINT => {
                 let cover = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Cover;
