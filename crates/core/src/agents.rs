@@ -348,9 +348,12 @@ fn waiting(lines: &[String]) -> bool {
     if bottom.iter().any(|l| CONFIRM_HINTS.iter().any(|h| l.contains(h))) {
         return true;
     }
-    // 编号选项 1. 2. …：带选中标记，或者底下有取消提示
-    let options: Vec<(bool, u32)> = tail.iter().filter_map(|l| option(l)).collect();
-    let numbered = options.iter().any(|o| o.1 == 1) && options.iter().any(|o| o.1 == 2);
+    // 编号选项 1. 2. …：带选中标记，或者底下有取消提示。选项得是屏幕最底下那一块（下面最多几行提示），
+    // 不然 AI 回复里的“● 1. …”列表也会被当成在等你选，输入框就被锁住了
+    let rows: Vec<(usize, (bool, u32))> = tail.iter().enumerate().filter_map(|(i, l)| option(l).map(|o| (i, o))).collect();
+    let near_bottom = rows.last().is_some_and(|(i, _)| tail.len() - i <= 6);
+    let options: Vec<(bool, u32)> = rows.into_iter().map(|(_, o)| o).collect();
+    let numbered = near_bottom && options.iter().any(|o| o.1 == 1) && options.iter().any(|o| o.1 == 2);
     if numbered && (options.iter().any(|o| o.0) || bottom.iter().any(|l| l.contains("esc to cancel"))) {
         return true;
     }

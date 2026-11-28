@@ -1459,5 +1459,11 @@
   "xhigh，有的模型没有": "xhigh; some models don't have it",
   "按当前模型支持的档位切": "Switches among the levels the current model supports",
   "模型：{{model}}，点开 Antigravity 的模型列表（里面也能调思考强度）": "Model: {{model}}. Opens Antigravity's model list (reasoning effort can be set there too)",
-  "执行模式": "Execution mode"
+  "执行模式": "Execution mode",
+  "收起确认框": "Hide confirmation",
+  "收起，在终端里自己处理": "Hide and handle it in the terminal",
+  "· 在终端里等你选择": "· waiting for your choice in the terminal",
+  "这个界面的选项 P2PCLI 认不出来，请在终端里用方向键和回车选择。": "P2PCLI can't read the options on this screen. Choose in the terminal with the arrow keys and Enter.",
+  "去终端处理": "Go to terminal",
+  "已提交，等 {{name}} 响应…": "Submitted, waiting for {{name}}…"
 }

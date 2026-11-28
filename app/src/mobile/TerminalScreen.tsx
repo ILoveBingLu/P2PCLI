@@ -45,6 +45,8 @@ export function TerminalScreen({ visible, activeKey, terms, meta, handles, onBac
   const info = active ? meta(active) : null;
   const [panel, setPanel] = useState<"switch" | "more" | null>(null);
   const [composing, setComposing] = useState(false);
+  /** 收起的确认框 id：同一个确认不再弹，下一个新的照样弹 */
+  const [dismissedApproval, setDismissedApproval] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const handle = () => (active ? handles.current.get(active.key) : undefined);
@@ -137,11 +139,12 @@ export function TerminalScreen({ visible, activeKey, terms, meta, handles, onBac
         ))}
       </div>
 
-      {approval && info?.agent && active && (
+      {approval && approval.id !== dismissedApproval && info?.agent && active && (
         <div className="m-approval">
           <AgentApproval key={approval.id} approval={approval} name={info.agent.name}
             onChoose={(approvalId, optionId) => onChoose(active, approvalId, optionId)}
-            onTerminal={() => handle()?.focus()} />
+            onTerminal={() => handle()?.focus()}
+            onDismiss={() => { setDismissedApproval(approval.id); handle()?.focus(); }} />
         </div>
       )}
 

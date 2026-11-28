@@ -1,12 +1,14 @@
-import { useId, useLayoutEffect, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { ArrowUp, ChevronDown, LoaderCircle, Paperclip } from "lucide-react";
 import type { AgentInfo } from "../api";
 import { Button } from "@/components/ui/button";
-import { AgentApproval } from "./AgentApproval";
+import { AgentApproval, AgentWaitingNotice } from "./AgentApproval";
 import { t } from "@/i18n";
 
 const HISTORY_KEY = "p2pcli.composer.history";
 const HISTORY_MAX = 50;
+/** 点过确认以后多久内当成“已提交，等它响应”（和被控端藏起已提交确认框的时间一致） */
+const SUBMITTED_HOLD = 10_000;
 /** 输入框跟着内容长高，最多这么高，再多就在里面滚 */
 const MAX_HEIGHT = 180;
 
@@ -54,8 +56,34 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
   const [history, setHistory] = useState(loadHistory);
   /** 正在翻第几条历史；没在翻是 null */
   const [browsing, setBrowsing] = useState<number | null>(null);
-  const approval = agent.state === "waiting" ? agent.approval : null;
-  const blocked = agent.state === "waiting" ? t("{{name}} 在等你确认，{{value}}", { name: agent.name, value: approval ? t("请在上方选择") : t("先在终端里选") }) : null;
+  const waiting = agent.state === "waiting";
+  const approval = waiting ? agent.approval : null;
+  /** 收起的确认框（它的 id；认不出选项的提示是 "notice"）：下一个新的确认才再弹 */
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  /** 刚在上面点过的确认：被控端会把它藏一会儿等 AI 重画屏幕，这时候别说“先在终端里选” */
+  const [submitted, setSubmitted] = useState<{ id: string; at: number } | null>(null);
+  const justSubmitted = submitted != null && Date.now() - submitted.at < SUBMITTED_HOLD;
+  useEffect(() => {
+    // 不等了、或者来了新的确认：之前的提交和收起都作废
+    if (!waiting) {
+      setSubmitted(null);
+      setDismissed(null);
+    } else if (approval && submitted && approval.id !== submitted.id) {
+      setSubmitted(null);
+    }
+  }, [waiting, approval, submitted]);
+  useEffect(() => {
+    if (!submitted) return;
+    const timer = window.setTimeout(() => setSubmitted(null), Math.max(0, SUBMITTED_HOLD - (Date.now() - submitted.at)));
+    return () => window.clearTimeout(timer);
+  }, [submitted]);
+  const choose = async (approvalId: string, optionId: number) => {
+    await onChoose(approvalId, optionId);
+    setSubmitted({ id: approvalId, at: Date.now() });
+  };
+  const blocked = !waiting ? null
+    : justSubmitted && !approval ? t("已提交，等 {{name}} 响应…", { name: agent.name })
+    : t("{{name}} 在等你确认，{{value}}", { name: agent.name, value: approval && dismissed !== approval.id ? t("请在上方选择") : t("先在终端里选") });
 
   useLayoutEffect(() => {
     const el = inputRef.current;
@@ -117,7 +145,13 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
 
   return (
     <div className="agent-composer-dock" data-expanded={expanded}>
-      {approval && <AgentApproval key={approval.id} approval={approval} name={agent.name} onChoose={onChoose} onTerminal={onTerminal} />}
+      {approval && dismissed !== approval.id && (
+        <AgentApproval key={approval.id} approval={approval} name={agent.name} onChoose={choose} onTerminal={onTerminal}
+          onDismiss={() => { setDismissed(approval.id); onTerminal(); }} />
+      )}
+      {waiting && !approval && !justSubmitted && dismissed !== "notice" && (
+        <AgentWaitingNotice name={agent.name} onTerminal={onTerminal} onDismiss={() => setDismissed("notice")} />
+      )}
       <Button variant="ghost" size="icon-sm" className="agent-composer-toggle"
         aria-label={expanded ? t("收起输入框") : t("展开输入框")}
         aria-expanded={expanded} aria-controls={panelId}
@@ -145,7 +179,7 @@ export function AgentComposer({ agent, draft, expanded, onDraft, onSend, onTermi
               onKeyDown={onKeyDown}
             />
             {/* 已经写了字就看不到占位符，单独说一声为什么发不出去；写好的字留着，确认完再发 */}
-            {blocked && draft.trim() && <span className="agent-composer-hint">{approval ? t("先在上方确认") : t("先在终端里确认")}</span>}
+            {blocked && draft.trim() && <span className="agent-composer-hint">{approval && dismissed !== approval.id ? t("先在上方确认") : t("先在终端里确认")}</span>}
             {tools}
             <Button size="icon-sm" aria-label={t("发送")} title={t("发送（回车）")} isDisabled={!draft.trim() || !!blocked} onPress={submit}>
               <ArrowUp />

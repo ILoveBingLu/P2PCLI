@@ -1,0 +1,8 @@
+> Which files did you change?
+● 1. Updated src/main.rs to add the flag
+  2. Added tests for the parser
+  Do you want me to also update the docs?
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                       auto · Gemini 4 Neon · xhigh

@@ -42,8 +42,9 @@ impl Parsed {
     }
 }
 
-/// 点过的确认框过了这么久还在，就当成新的一轮重新给出来：可能按键没生效，也可能 AI 又问了一个一样的问题
-const CONSUMED_HOLD: Duration = Duration::from_secs(4);
+/// 点过的确认框过了这么久还在，就当成新的一轮重新给出来（按键可能没生效）。AI 同意后先去干活、过一会儿才重画屏幕，
+/// 太短会把已经回答过的框又给出来，再点一次就成了重复确认
+const CONSUMED_HOLD: Duration = Duration::from_secs(10);
 
 struct Entry { signature: String, id: String, consumed: Option<Instant> }
 
@@ -85,7 +86,8 @@ impl Tracker {
 fn clean(line: &str) -> &str { line.trim().trim_matches(['│', '┃', '║']).trim() }
 fn footer(line: &str) -> bool {
     let lower = line.to_lowercase();
-    ["enter to confirm", "enter to select", "esc to cancel", "enter confirm", "esc cancel", "to navigate"]
+    // Antigravity 写的是“↑/↓ Navigate · tab Amend”“enter Select · esc Go Back”
+    ["enter to confirm", "enter to select", "esc to cancel", "enter confirm", "esc cancel", "to navigate", "↑/↓ navigate", "enter select", "esc go back"]
         .iter().any(|hint| lower.contains(hint))
 }
 
@@ -115,8 +117,12 @@ fn vertical(lines: &[&str]) -> Option<Parsed> {
     if tail.len() > 10 || tail.iter().any(|line| matches!(*line, "❯" | "›" | "$" | ">")) { return None; }
     let before = &lines[..rows[0].0];
     let header = before.iter().rev().take(8).copied().collect::<Vec<_>>().join("\n").to_lowercase();
-    // 底下没有“回车确认”这类提示时，上面得明明白白是在问你（Gemini、Qwen 这类有时不写提示）
-    let asking = ["allow execution", "allow ", "apply this", "do you want", "approve", "permission", "proceed?", "would you like"].iter().any(|hint| header.contains(hint));
+    // 底下没有“回车确认”这类提示时，上面得明明白白是在问你（Gemini、Qwen 这类有时不写提示）：
+    // 有这些问法，或者紧挨着选项上面几行里有一句问号结尾的（Gemini 问“Do you trust the files in this folder?”）
+    let asking = ["allow execution", "allow ", "apply this", "do you want", "approve", "permission", "proceed?", "would you like", "do you trust"]
+        .iter()
+        .any(|hint| header.contains(hint))
+        || before.iter().rev().take(6).any(|line| line.trim_end().ends_with(['?', '？']));
     if !tail.iter().any(|line| footer(line)) && !asking { return None; }
     let mut labels = Vec::new();
     for (i, (row, (_, _, label))) in rows.iter().enumerate() {
@@ -299,6 +305,55 @@ pub fn parse(kind: &str, pid: u32, screen: &str) -> Option<Parsed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents;
+
+    fn fixture(name: &str) -> &'static str {
+        match name {
+            "claude-ask-1" => include_str!("testdata/approval/claude-ask-1.txt"),
+            "claude-ask-2" => include_str!("testdata/approval/claude-ask-2.txt"),
+            "claude-start" => include_str!("testdata/approval/claude-start-1.txt"),
+            "claude-idle" => include_str!("testdata/approval/claude-idle-1.txt"),
+            "gemini-start" => include_str!("testdata/approval/gemini-start-1.txt"),
+            "agy-ask" => include_str!("testdata/approval/agy-ask.txt"),
+            "agy-reply-list" => include_str!("testdata/approval/agy-reply-list.txt"),
+            _ => unreachable!(),
+        }
+    }
+
+    /// 照各家真实屏幕（tmux 里抓的，本机路径换掉了）：认得出确认框、选项文字干净、连抓两屏的指纹不变；
+    /// 空闲屏幕（带编号提示、AI 回复里的“● 1.”列表）既不算确认框，也不算在等你选
+    #[test]
+    fn real_screens() {
+        let ask = parse("claude", 9, fixture("claude-ask-1")).expect("Claude Code 跑命令的确认框");
+        assert_eq!(ask.labels.len(), 4);
+        assert_eq!(ask.labels[0], "Yes");
+        assert!(ask.labels[1].starts_with("Yes, and always allow access to /tmp/probe"), "{}", ask.labels[1]);
+        assert_eq!(ask.labels[3], "No");
+        assert_eq!((ask.selected, ask.keys(3).unwrap()), (0, vec!["Down", "Down", "Down", "Enter"]));
+        // 上面那行“⏺”在闪，第二屏不一样，指纹得一样
+        let again = parse("claude", 9, fixture("claude-ask-2")).unwrap();
+        assert_eq!(ask.signature, again.signature);
+        assert_eq!(agents::state("", fixture("claude-ask-1")), agents::AgentState::Waiting);
+
+        let trust = parse("claude", 9, fixture("claude-start")).expect("Claude Code 问信任文件夹");
+        assert_eq!(trust.labels, ["No, exit", "Yes, I trust this folder"]);
+
+        let gemini = parse("gemini", 9, fixture("gemini-start")).expect("Gemini 问信任文件夹（底下没有提示，上面是问号结尾的问题）");
+        assert_eq!(gemini.labels, ["Trust folder (gemini)", "Trust parent folder (cap)", "Don't trust"]);
+        assert_eq!(gemini.selected, 0);
+
+        let agy = parse("antigravity", 9, fixture("agy-ask")).expect("Antigravity 跑命令的确认框");
+        assert_eq!(agy.labels.len(), 4);
+        assert_eq!(agy.labels[3], "No, cancel", "底下的按键提示不能算进选项");
+        assert_eq!(agents::state("", fixture("agy-ask")), agents::AgentState::Waiting);
+
+        for idle in ["claude-idle", "agy-reply-list"] {
+            assert!(parse("claude", 9, fixture(idle)).is_none(), "{idle} 不是确认框");
+            assert_ne!(agents::state("", fixture(idle)), agents::AgentState::Waiting, "{idle} 不是在等你选");
+        }
+        // Gemini 信任文件夹框上面那串“1. Create GEMINI.md …”使用提示没有选中标记，不能抢走真正的选项
+        assert!(gemini.context.contains("Do you trust the files in this folder?"));
+    }
     #[test]
     fn numbered_agents_and_navigation() {
         for (kind, cursor) in [("claude", "❯"), ("codex", "›"), ("gemini", "●")] {
