@@ -270,6 +270,11 @@ impl Node {
 
         }
 
+        // 本机 IPv4 是对称 NAT 时猜外网端口帮打洞（连别人、被别人连都用得上）
+        if !cfg.offline && !cfg.relay_only {
+            crate::natpredict::spawn(endpoint.clone());
+        }
+
         if start_accept && !cfg.offline {
             let ep = endpoint.clone();
             let lan_weak = lan.as_ref().map(Arc::downgrade);

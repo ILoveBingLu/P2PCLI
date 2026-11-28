@@ -70,6 +70,12 @@ pub struct Diagnosis {
     /// NAT 类型的来源：stun（小米）/ relay（iroh 经中继测）/ none
     pub nat_source: &'static str,
     pub stun_error: Option<String>,
+    /// IPv4 NAT 给新目标开外网端口的规律（测不出是空）
+    pub port_allocation: Option<crate::natpredict::PortAllocation>,
+    /// 依次发给几个目标时外网看到的端口
+    pub port_samples: Vec<u16>,
+    /// NAT 让哪些外面的包进来（测不出是空）
+    pub filtering: Option<crate::natpredict::Filtering>,
     pub relay: Option<String>,
     pub relay_connected: bool,
     pub relay_latency_ms: Option<u64>,
@@ -78,7 +84,7 @@ pub struct Diagnosis {
     pub notes: Vec<String>,
 }
 
-fn build_request() -> ([u8; 20], [u8; 12]) {
+pub(crate) fn build_request() -> ([u8; 20], [u8; 12]) {
     let mut tid = [0u8; 12];
     for b in tid.iter_mut() {
         *b = rand::random();
@@ -90,9 +96,9 @@ fn build_request() -> ([u8; 20], [u8; 12]) {
     (msg, tid)
 }
 
-struct Response {
-    mapped: SocketAddr,
-    other: Option<SocketAddr>,
+pub(crate) struct Response {
+    pub mapped: SocketAddr,
+    pub other: Option<SocketAddr>,
 }
 
 fn parse_addr(v: &[u8], xor: bool, tid: &[u8; 12]) -> Option<SocketAddr> {
@@ -125,7 +131,7 @@ fn parse_addr(v: &[u8], xor: bool, tid: &[u8; 12]) -> Option<SocketAddr> {
     Some(SocketAddr::new(ip, port))
 }
 
-fn parse_response(data: &[u8], tid: &[u8; 12]) -> Result<Response> {
+pub(crate) fn parse_response(data: &[u8], tid: &[u8; 12]) -> Result<Response> {
     if data.len() < 20 || u16::from_be_bytes([data[0], data[1]]) != 0x0101 || data[8..20] != tid[..] {
         bail!("不是这次请求的回包");
     }
@@ -152,7 +158,7 @@ fn parse_response(data: &[u8], tid: &[u8; 12]) -> Result<Response> {
 }
 
 /// 发一次 Binding 请求，丢包重试
-async fn binding(sock: &UdpSocket, to: SocketAddr) -> Result<Response> {
+pub(crate) async fn binding(sock: &UdpSocket, to: SocketAddr) -> Result<Response> {
     let (msg, tid) = build_request();
     let mut buf = [0u8; 1024];
     for _ in 0..3 {
@@ -168,7 +174,7 @@ async fn binding(sock: &UdpSocket, to: SocketAddr) -> Result<Response> {
     bail!("{to} 没有回应")
 }
 
-fn local_addr_for(bind_addr: &str, target: SocketAddr, sock_port: u16) -> Result<SocketAddr> {
+pub(crate) fn local_addr_for(bind_addr: &str, target: SocketAddr, sock_port: u16) -> Result<SocketAddr> {
     let probe = std::net::UdpSocket::bind(bind_addr)?;
     probe.connect(target)?;
     Ok(SocketAddr::new(probe.local_addr()?.ip(), sock_port))
@@ -360,7 +366,13 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
         }
     };
 
-    let (stun, _, stun_v6) = tokio::join!(stun_fut, report_fut, stun_v6_fut);
+    let pattern_fut = async {
+        if node.is_offline() || node.is_relay_only() {
+            return None;
+        }
+        timeout(Duration::from_secs(8), crate::natpredict::probe()).await.ok().and_then(|r| r.ok())
+    };
+    let (stun, _, stun_v6, pattern) = tokio::join!(stun_fut, report_fut, stun_v6_fut, pattern_fut);
     let report = node.endpoint.net_report().get();
     // 网卡上没有公网 IPv6 时才看出口：有公网地址时中继看到的就是它
     let iroh_outbound = if ipv6_addrs.is_empty() {
@@ -447,6 +459,28 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
         ),
         NatKind::Unknown => "测不出 IPv4 的 NAT 类型".to_string(),
     });
+    if let Some(p) = &pattern {
+        use crate::natpredict::{Filtering, PortAllocation};
+        match p.allocation {
+            PortAllocation::Sequential { step } => notes.push(format!(
+                "IPv4 外网端口是按顺序开的（每次 {step:+}）：P2PCLI 会猜接下来的端口帮打洞，对方是锥形 NAT 时一般能直连"
+            )),
+            PortAllocation::Random => notes.push(
+                "IPv4 外网端口是随机开的，猜不了：对方是锥形 NAT、并且不限来包端口时可能还能打通，否则走中继".to_string(),
+            ),
+            PortAllocation::Same => {}
+        }
+        if let Some(f) = p.filtering {
+            notes.push(
+                match f {
+                    Filtering::Open => "IPv4 的 NAT 对外面发来的包都放行（完全锥形），最容易打洞",
+                    Filtering::Address => "IPv4 的 NAT 只放进发过包的那个 IP 发来的包（端口不限）",
+                    Filtering::AddressPort => "IPv4 的 NAT 只放进发过包的那个 IP 和端口发来的包（最严的一种）",
+                }
+                .to_string(),
+            );
+        }
+    }
     if let Err(e) = &stun {
         notes.push(format!("STUN 检测没成功：{e}"));
     }
@@ -491,6 +525,9 @@ pub async fn diagnose(node: &Node) -> Diagnosis {
         nat,
         nat_source,
         stun_error: stun.err(),
+        port_allocation: pattern.as_ref().map(|p| p.allocation),
+        port_samples: pattern.as_ref().map(|p| p.ports.clone()).unwrap_or_default(),
+        filtering: pattern.as_ref().and_then(|p| p.filtering),
         relay,
         relay_connected,
         relay_latency_ms,

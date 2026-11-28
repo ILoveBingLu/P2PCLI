@@ -18,6 +18,7 @@ pub mod host;
 pub mod identity;
 pub mod lan;
 pub mod lsp;
+pub mod natpredict;
 pub mod node;
 pub mod path;
 pub mod ports;

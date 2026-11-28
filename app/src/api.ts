@@ -647,6 +647,12 @@ export interface Diagnosis {
   nat: NatKind;
   nat_source: "stun" | "relay" | "none";
   stun_error: string | null;
+  /** IPv4 NAT 给新目标开外网端口的规律（测不出是空） */
+  port_allocation?: { kind: "same" } | { kind: "sequential"; step: number } | { kind: "random" } | null;
+  /** 依次发给几个目标时外网看到的端口 */
+  port_samples?: number[];
+  /** NAT 让哪些外面的包进来 */
+  filtering?: "open" | "address" | "address_port" | null;
   relay: string | null;
   relay_connected: boolean;
   relay_latency_ms: number | null;

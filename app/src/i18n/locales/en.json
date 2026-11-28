@@ -1443,5 +1443,14 @@
   "1920 × 1080，省流量": "1920 × 1080, uses less bandwidth",
   "删除这块虚拟屏": "Remove this virtual display",
   "这块显示器系统没给 HiDPI 档。要更细的画面，可以新建一块 HiDPI 虚拟屏。": "The system offers no HiDPI modes for this display. For a sharper picture, create a HiDPI virtual display.",
-  "虚拟屏在对方电脑上看不见，只在远程画面里用；画面都关了 30 秒后自动收掉。": "Virtual displays can't be seen on the other computer and are only for remote use; they're removed 30 seconds after every screen window closes."
+  "虚拟屏在对方电脑上看不见，只在远程画面里用；画面都关了 30 秒后自动收掉。": "Virtual displays can't be seen on the other computer and are only for remote use; they're removed 30 seconds after every screen window closes.",
+  "端口分配": "Port allocation",
+  "依次发给几个目标时外网看到的端口：{{ports}}": "External ports seen when sending to several targets in turn: {{ports}}",
+  "不变（发给谁都是同一个端口）": "Fixed (same port for every target)",
+  "按顺序（每次 {{step}}），会猜端口帮打洞": "Sequential (step {{step}}); P2PCLI predicts ports to help hole punching",
+  "随机，猜不了": "Random, can't be predicted",
+  "来包限制": "Inbound filtering",
+  "不限（谁发来的都收）": "None (accepts from anyone)",
+  "只收发过包的 IP": "Only from IPs it has sent to",
+  "只收发过包的 IP 和端口": "Only from IPs and ports it has sent to"
 }

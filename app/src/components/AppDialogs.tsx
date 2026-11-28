@@ -488,6 +488,32 @@ export function DiagDialog({ onClose, publicKey }: { onClose: () => void; public
                     }
                   </dd>
                 </div>
+                {d.port_allocation && (
+                  <div>
+                    <dt>{t("端口分配")}</dt>
+                    <dd title={d.port_samples?.length ? t("依次发给几个目标时外网看到的端口：{{ports}}", { ports: d.port_samples.join("、") }) : undefined}>
+                      {d.port_allocation.kind === "same"
+                        ? t("不变（发给谁都是同一个端口）")
+                        : d.port_allocation.kind === "sequential"
+                          ? t("按顺序（每次 {{step}}），会猜端口帮打洞", { step: `${d.port_allocation.step > 0 ? "+" : ""}${d.port_allocation.step}` })
+                          : t("随机，猜不了")}
+                    </dd>
+                  </div>
+                )}
+                {d.filtering && (
+                  <div>
+                    <dt>{t("来包限制")}</dt>
+                    <dd>
+                      {
+                        {
+                          open: t("不限（谁发来的都收）"),
+                          address: t("只收发过包的 IP"),
+                          address_port: t("只收发过包的 IP 和端口"),
+                        }[d.filtering]
+                      }
+                    </dd>
+                  </div>
+                )}
                 <div>
                   <dt>{t("中继连接")}</dt>
                   <dd>
