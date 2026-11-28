@@ -130,8 +130,17 @@ pub fn scaled_bitrate(bps: u32, fps: u32) -> u32 {
     (bps as u64 * fps.max(DEFAULT_REFRESH_HZ) as u64 / DEFAULT_REFRESH_HZ as u64).min(u32::MAX as u64) as u32
 }
 
+/// 屏幕的一种分辨率，按系统界面的大小算：macOS 的 HiDPI 档字和界面一样大，实际像素是两倍，更细
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DisplayMode {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidpi: bool,
+}
+
 /// 被连方的一块屏幕
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DisplayInfo {
     /// 系统里的编号，转成字符串
     pub id: String,
@@ -143,6 +152,15 @@ pub struct DisplayInfo {
     /// 刷新率（Hz），读不到是 0。老版本不带
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub refresh_hz: u32,
+    /// 能换成的分辨率：只在观看方能操作、被连方能换时带
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<DisplayMode>,
+    /// 现在的分辨率（带了 modes 时才有）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<DisplayMode>,
+    /// P2PCLI 建的虚拟屏（本机看不见，远程用）
+    #[serde(default, rename = "virtual", skip_serializing_if = "std::ops::Not::not")]
+    pub is_virtual: bool,
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -317,6 +335,26 @@ pub trait ScreenBackend: Send + Sync + 'static {
     /// 能开隐私屏
     fn privacy_supported(&self) -> bool {
         false
+    }
+    /// 这块屏幕能换成的分辨率和现在用的；不能换时是空的
+    fn display_modes(&self, _display: &str) -> (Vec<DisplayMode>, Option<DisplayMode>) {
+        (Vec::new(), None)
+    }
+    /// 把这块屏幕换成这个分辨率，换好（系统认了新尺寸）才返回。会阻塞
+    fn set_display_mode(&self, _display: &str, _mode: &DisplayMode) -> Result<()> {
+        bail!("这台电脑不支持远程换分辨率")
+    }
+    /// 能建虚拟屏
+    fn virtual_displays_supported(&self) -> bool {
+        false
+    }
+    /// 建一块这个分辨率的虚拟屏，返回它的编号。没人看一阵子以后自己收掉。会阻塞
+    fn add_virtual_display(&self, _mode: &DisplayMode) -> Result<String> {
+        bail!("这台电脑不支持虚拟屏")
+    }
+    /// 删掉一块虚拟屏。会阻塞
+    fn remove_virtual_display(&self, _display: &str) -> Result<()> {
+        bail!("这台电脑不支持虚拟屏")
     }
     /// 隐私屏能开增强模式（本机屏幕整个变黑）
     fn privacy_blackout_supported(&self) -> bool {
@@ -535,6 +573,12 @@ pub struct ScreenStarted {
     /// 观看方可以开隐私屏（被连方主人允许、能操作、本机做得到）。为假时观看方不发 [`ViewerMsg::Privacy`]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub privacy: bool,
+    /// 观看方可以换屏幕的分辨率（能操作、被连方做得到）：displays 里带着能选的分辨率。为假时不发 [`ViewerMsg::SetMode`]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub display_modes: bool,
+    /// 观看方可以建、删虚拟屏（能操作、被连方做得到）。为假时不发 [`ViewerMsg::AddVirtual`]、[`ViewerMsg::RemoveVirtual`]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub virtual_displays: bool,
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -559,6 +603,12 @@ pub enum ViewerMsg {
     TranslateKeys { on: bool },
     /// 打开、关掉隐私屏。只在 [`ScreenStarted::privacy`] 为真时发；被连方回 [`HostMsg::Privacy`]
     Privacy { on: bool },
+    /// 把一块屏幕换成这个分辨率。只在 [`ScreenStarted::display_modes`] 为真时发；被连方回 [`HostMsg::Displays`]
+    SetMode { display: String, mode: DisplayMode },
+    /// 建一块虚拟屏并切过去看。只在 [`ScreenStarted::virtual_displays`] 为真时发；被连方回 [`HostMsg::Displays`]、[`HostMsg::Switched`]
+    AddVirtual { mode: DisplayMode },
+    /// 删掉一块虚拟屏（正在看它就先切回主屏）。被连方回 [`HostMsg::Displays`]
+    RemoveVirtual { display: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -578,6 +628,12 @@ pub enum HostMsg {
     Resumed,
     /// 换了屏幕
     Switched { display: String },
+    /// 屏幕列表变了（换了分辨率、建了或删了虚拟屏）。note 是没办成的原因
+    Displays {
+        displays: Vec<DisplayInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     /// 每秒一次：当前码率、实际帧率，和按两边屏幕定的目标帧率（老版本不带）
     Stats {
         bitrate: u32,
@@ -1073,6 +1129,23 @@ async fn set_privacy(backend: &Arc<dyn ScreenBackend>, style: &PrivacyStyle, on:
 /// 被连方：把画面发给观看方，收它的确认和键鼠事件。返回时画面结束。
 /// `control` 为假时键鼠事件一律丢掉。`stop` 被通知就结束（本机的人点了断开）
 #[allow(clippy::too_many_arguments)]
+/// 发给观看方的屏幕列表：with_modes 时带上每块屏幕能选的分辨率。会阻塞
+fn describe(backend: &dyn ScreenBackend, with_modes: bool) -> Result<Vec<DisplayInfo>> {
+    let mut list = backend.displays()?;
+    if with_modes {
+        for d in &mut list {
+            (d.modes, d.mode) = backend.display_modes(&d.id);
+        }
+    }
+    Ok(list)
+}
+
+/// 在阻塞线程上调后端（换分辨率、建虚拟屏这些要等系统）
+async fn blocking<T: Send + 'static>(backend: &Arc<dyn ScreenBackend>, f: impl FnOnce(&dyn ScreenBackend) -> Result<T> + Send + 'static) -> Result<T> {
+    let backend = backend.clone();
+    tokio::task::spawn_blocking(move || f(backend.as_ref())).await.map_err(|e| anyhow!("{e}"))?
+}
+
 pub async fn serve<S, R>(
     conn: iroh::endpoint::Connection,
     backend: Arc<dyn ScreenBackend>,
@@ -1142,12 +1215,15 @@ where
     };
     rate.set_fps(running.fps);
 
+    // 能操作时带上能选的分辨率
+    let shown = blocking(&backend, move |b| describe(b, control)).await.unwrap_or_else(|_| displays.clone());
+    let display_modes = control && (shown.iter().any(|d| !d.modes.is_empty()) || backend.virtual_displays_supported());
     // 第一条用普通的控制消息格式回，观看方的 open_stream 按普通消息读
     crate::proto::write_msg(
         &mut send,
         &crate::proto::Msg::ScreenStarted {
             started: ScreenStarted {
-                displays: displays.clone(),
+                displays: shown,
                 display: display.clone(),
                 control,
                 control_note,
@@ -1157,6 +1233,8 @@ where
                 translate_keys: control && open.keyboard.is_some(),
                 audio_token: host_audio.as_ref().map_or(0, |a| a.token()),
                 privacy: privacy.is_some(),
+                display_modes,
+                virtual_displays: control && backend.virtual_displays_supported(),
             },
         },
     )
@@ -1436,6 +1514,94 @@ where
                         set_privacy(&backend, style, on, &mut privacy_guard).await
                     };
                     let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Privacy { on: privacy_guard.is_some(), note } })).await;
+                }
+                Some(ViewerMsg::SetMode { display: which, mode }) => {
+                    if !control { continue; }
+                    let target = which.clone();
+                    let note = blocking(&backend, move |b| b.set_display_mode(&target, &mode)).await.err().map(|e| format!("{e:#}"));
+                    if note.is_none() && which == display {
+                        // 尺寸变了：重新开抓屏，观看方按新的解码配置解
+                        drop(std::mem::replace(&mut running, match Running::start(&backend, &display, quality, rate.bitrate, !separate_cursor, format).await {
+                            Ok(r) => r,
+                            Err(e) => break Err(e),
+                        }));
+                        rate.set_fps(running.fps);
+                        last_capture = None;
+                        inflight.clear();
+                        need_key = true;
+                        last_config = None;
+                    }
+                    let displays = blocking(&backend, |b| describe(b, true)).await.unwrap_or_default();
+                    let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Displays { displays, note } })).await;
+                }
+                Some(ViewerMsg::AddVirtual { mode }) => {
+                    if !control { continue; }
+                    let mut switched = false;
+                    let note = match blocking(&backend, move |b| b.add_virtual_display(&mode)).await {
+                        Err(e) => Some(format!("{e:#}")),
+                        // 建好就切过去看；抓不了它就还看原来的
+                        Ok(id) => match Running::start(&backend, &id, quality, rate.bitrate, !separate_cursor, format).await {
+                            Err(e) => Some(format!("虚拟屏建好了，但抓不了它的画面：{e:#}")),
+                            Ok(r) => {
+                                drop(std::mem::replace(&mut running, r));
+                                rate.set_fps(running.fps);
+                                last_capture = None;
+                                inflight.clear();
+                                need_key = true;
+                                last_config = None;
+                                display = id;
+                                *current_display.lock().unwrap() = display.clone();
+                                switched = true;
+                                None
+                            }
+                        },
+                    };
+                    let displays = blocking(&backend, |b| describe(b, true)).await.unwrap_or_default();
+                    let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Displays { displays, note } })).await;
+                    if switched {
+                        let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Switched { display: display.clone() } })).await;
+                    }
+                }
+                Some(ViewerMsg::RemoveVirtual { display: which }) => {
+                    if !control { continue; }
+                    let mut switched = false;
+                    let mut note = None;
+                    if which == display {
+                        // 正在看它：先切到主屏（没有就随便一块真屏幕）
+                        let all = blocking(&backend, |b| b.displays()).await.unwrap_or_default();
+                        let others: Vec<&DisplayInfo> = all.iter().filter(|d| d.id != which).collect();
+                        let fallback = others
+                            .iter()
+                            .find(|d| d.primary && !d.is_virtual)
+                            .or_else(|| others.iter().find(|d| !d.is_virtual))
+                            .or_else(|| others.first())
+                            .map(|d| d.id.clone());
+                        match fallback {
+                            None => note = Some("这是现在唯一的屏幕，删掉就没有画面了".to_string()),
+                            Some(to) => match Running::start(&backend, &to, quality, rate.bitrate, !separate_cursor, format).await {
+                                Err(e) => note = Some(format!("切不到别的屏幕，先不删：{e:#}")),
+                                Ok(r) => {
+                                    drop(std::mem::replace(&mut running, r));
+                                    rate.set_fps(running.fps);
+                                    last_capture = None;
+                                    inflight.clear();
+                                    need_key = true;
+                                    last_config = None;
+                                    display = to;
+                                    *current_display.lock().unwrap() = display.clone();
+                                    switched = true;
+                                }
+                            },
+                        }
+                    }
+                    if note.is_none() {
+                        note = blocking(&backend, move |b| b.remove_virtual_display(&which)).await.err().map(|e| format!("{e:#}"));
+                    }
+                    let displays = blocking(&backend, |b| describe(b, true)).await.unwrap_or_default();
+                    let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Displays { displays, note } })).await;
+                    if switched {
+                        let _ = out_tx.send(json(&Wire::Host { msg: HostMsg::Switched { display: display.clone() } })).await;
+                    }
                 }
                 Some(ViewerMsg::Input { .. } | ViewerMsg::ClipOffer { .. } | ViewerMsg::TranslateKeys { .. }) => {}
                 None => break Ok(()),

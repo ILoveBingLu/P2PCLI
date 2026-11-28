@@ -361,6 +361,19 @@ export interface ScreenDisplay {
   primary: boolean;
   /** 刷新率（Hz），老版本不带 */
   refresh_hz?: number;
+  /** 能换成的分辨率（能操作、对方能换时才有） */
+  modes?: ScreenDisplayMode[];
+  /** 现在的分辨率 */
+  mode?: ScreenDisplayMode;
+  /** P2PCLI 建的虚拟屏 */
+  virtual?: boolean;
+}
+
+/** 屏幕的一种分辨率，按系统界面的大小算；hidpi 是 macOS 的 HiDPI 档（像素两倍，更细） */
+export interface ScreenDisplayMode {
+  width: number;
+  height: number;
+  hidpi?: boolean;
 }
 
 export interface ScreenStarted {
@@ -378,6 +391,10 @@ export interface ScreenStarted {
   audio_token?: number;
   /** 能让对方盖上隐私屏；老版本没有这项 */
   privacy?: boolean;
+  /** 能换分辨率 */
+  display_modes?: boolean;
+  /** 能建、删虚拟屏 */
+  virtual_displays?: boolean;
 }
 
 /** 对方在用的编码器 */
@@ -421,7 +438,12 @@ export type ScreenViewerMsg =
   /** 只在对方 ScreenStarted.translate_keys 为真时发 */
   | { t: "translate_keys"; on: boolean }
   /** 只在对方 ScreenStarted.privacy 为真时发 */
-  | { t: "privacy"; on: boolean };
+  | { t: "privacy"; on: boolean }
+  /** 只在 ScreenStarted.display_modes 为真时发 */
+  | { t: "set_mode"; display: string; mode: ScreenDisplayMode }
+  /** 只在 ScreenStarted.virtual_displays 为真时发 */
+  | { t: "add_virtual"; mode: ScreenDisplayMode }
+  | { t: "remove_virtual"; display: string };
 
 export type ScreenHostMsg =
   | { t: "paused"; reason: "relay" | "connecting" }
@@ -431,7 +453,9 @@ export type ScreenHostMsg =
   | { t: "cursor"; x: number; y: number; visible: boolean }
   | { t: "cursor_shape"; shape: ScreenCursorShape }
   /** 隐私屏现在盖没盖着；note 是没盖成或被撤掉的原因 */
-  | { t: "privacy"; on: boolean; note?: string };
+  | { t: "privacy"; on: boolean; note?: string }
+  /** 屏幕列表变了（换了分辨率、建了或删了虚拟屏）；note 是没办成的原因 */
+  | { t: "displays"; displays: ScreenDisplay[]; note?: string };
 
 /** 对方指针的样子：RGBA（base64），热点按图片像素，scale 是图片像素和屏幕点的比例 */
 export interface ScreenCursorShape {

@@ -21,6 +21,7 @@ pub(crate) mod clip;
 mod cursor;
 mod encode;
 mod input;
+mod modes;
 mod privacy;
 pub(crate) mod shot;
 mod synthetic;
@@ -109,6 +110,7 @@ impl ScreenBackend for WinBackend {
                     primary: m.primary,
                     refresh_hz: refresh_hz(&m),
                     id: m.id,
+                    ..Default::default()
                 }
             })
             .collect())
@@ -159,6 +161,15 @@ impl ScreenBackend for WinBackend {
 
     fn privacy_supported(&self) -> bool {
         true
+    }
+
+    fn display_modes(&self, display: &str) -> (Vec<p2pcli_core::screen::DisplayMode>, Option<p2pcli_core::screen::DisplayMode>) {
+        modes::list(display)
+    }
+
+    fn set_display_mode(&self, display: &str, mode: &p2pcli_core::screen::DisplayMode) -> Result<()> {
+        find_monitor(display)?;
+        modes::set(display, mode)
     }
 
     fn start_privacy(&self, style: &p2pcli_core::screen::PrivacyStyle, block_input: bool) -> Result<Box<dyn std::any::Any + Send>> {

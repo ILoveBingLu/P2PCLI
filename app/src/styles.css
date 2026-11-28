@@ -3071,6 +3071,38 @@ html[data-mobile] [role="dialog"] {
   color: var(--foreground);
 }
 .screen-tool[data-active] { color: var(--accent); }
+/* 屏幕菜单：当前屏幕的名字，点开切屏、换分辨率、建删虚拟屏 */
+.screen-display-trigger {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  max-width: 14rem;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--default);
+}
+.screen-display-trigger:hover,
+.screen-display-trigger[aria-expanded="true"] { color: var(--foreground); }
+.screen-display-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen-display-trigger > svg { width: 14px; height: 14px; flex-shrink: 0; }
+.screen-display-menu {
+  min-width: 15rem;
+  max-height: min(32rem, 75vh);
+  overflow-y: auto;
+}
+.screen-display-note {
+  margin: 0;
+  max-width: 17rem;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
 /* 标题栏的连接按钮：信号格 + 线路和延时，点开是连接详情 */
 .screen-path-button {
   flex: none;

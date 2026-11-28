@@ -10,6 +10,7 @@ use p2pcli_core::screen::{CaptureOptions, DisplayInfo, InputEvent, ScreenBackend
 mod audio;
 pub(crate) mod blackout;
 mod capture;
+mod modes;
 pub(crate) mod clip;
 mod privacy;
 mod shot;
@@ -55,8 +56,8 @@ pub struct MacBackend {
     cursor: cursor::CursorReader,
     /// 上次看的前台程序是不是终端、什么时候看的：一串快捷键里只问一次系统
     terminal: Mutex<Option<(std::time::Instant, bool)>>,
-    /// 无头模式：一块显示器都没有时建的虚拟显示器
-    headless: virtual_display::Headless,
+    /// 虚拟屏：一块显示器都没有时自己建的，和远程建的
+    virtuals: virtual_display::Virtuals,
 }
 
 impl MacBackend {
@@ -65,7 +66,7 @@ impl MacBackend {
             input: Mutex::new(input::Injector::new()),
             cursor: cursor::CursorReader::default(),
             terminal: Mutex::new(None),
-            headless: virtual_display::Headless::default(),
+            virtuals: virtual_display::Virtuals::default(),
         }
     }
 }
@@ -94,15 +95,17 @@ fn frontmost_bundle() -> Option<String> {
 impl ScreenBackend for MacBackend {
     fn displays(&self) -> Result<Vec<DisplayInfo>> {
         let mut list = capture::displays()?;
-        let real = list.iter().filter(|d| !d.id.parse().is_ok_and(|id| self.headless.is_virtual(id))).count();
+        let virtual_id = |d: &DisplayInfo| d.id.parse().ok().filter(|&id| self.virtuals.is_virtual(id));
+        let real = list.iter().filter(|d| virtual_id(d).is_none()).count();
         // 无头模式：一块屏幕都没有时自己建一块虚拟的，远程画面照样能看、能操作
-        if let Some(id) = self.headless.ensure(real) {
-            let id = id.to_string();
-            if !list.iter().any(|d| d.id == id) {
-                list = capture::displays()?;
-            }
-            for d in list.iter_mut().filter(|d| d.id == id) {
-                d.name = "虚拟显示器（没接屏幕时用）".into();
+        if real == 0 || std::env::var_os("P2PCLI_VIRTUAL_DISPLAY").is_some() {
+            self.virtuals.ensure_headless(real);
+            list = capture::displays()?;
+        }
+        for d in list.iter_mut() {
+            if let Some(id) = virtual_id(d) {
+                d.is_virtual = true;
+                d.name = self.virtuals.name(id).unwrap_or_else(|| "虚拟屏".into());
                 d.primary |= real == 0;
             }
         }
@@ -129,7 +132,7 @@ impl ScreenBackend for MacBackend {
 
     fn start(&self, opts: CaptureOptions) -> Result<Arc<dyn ScreenCapture>> {
         // 抓的是虚拟显示器：抓屏期间拿着它，画面关了它才可能被收掉
-        let hold = opts.display.parse().ok().and_then(|id| self.headless.hold(id)).map(|d| Box::new(d) as Box<dyn std::any::Any + Send + Sync>);
+        let hold = opts.display.parse().ok().and_then(|id| self.virtuals.hold(id)).map(|d| Box::new(d) as Box<dyn std::any::Any + Send + Sync>);
         crate::awake::KeepAwake::start_holding(|| Ok(Arc::new(capture::MacCapture::start(opts)?)), hold)
     }
 
@@ -175,6 +178,31 @@ impl ScreenBackend for MacBackend {
 
     fn privacy_supported(&self) -> bool {
         true
+    }
+
+    fn display_modes(&self, display: &str) -> (Vec<p2pcli_core::screen::DisplayMode>, Option<p2pcli_core::screen::DisplayMode>) {
+        let Ok(id) = display.parse() else { return (Vec::new(), None) };
+        // 虚拟屏两倍像素的档系统也当普通档列出来，字太小，不列
+        let max = if self.virtuals.is_virtual(id) { virtual_display::MAX_WIDTH } else { u32::MAX };
+        modes::list(id, max)
+    }
+
+    fn set_display_mode(&self, display: &str, mode: &p2pcli_core::screen::DisplayMode) -> Result<()> {
+        let id = display.parse().map_err(|_| anyhow::anyhow!("没有这块屏幕"))?;
+        modes::set(id, mode)
+    }
+
+    fn virtual_displays_supported(&self) -> bool {
+        true
+    }
+
+    fn add_virtual_display(&self, mode: &p2pcli_core::screen::DisplayMode) -> Result<String> {
+        Ok(self.virtuals.add(mode)?.to_string())
+    }
+
+    fn remove_virtual_display(&self, display: &str) -> Result<()> {
+        let id = display.parse().map_err(|_| anyhow::anyhow!("没有这块屏幕"))?;
+        self.virtuals.remove(id)
     }
 
     fn privacy_blackout_supported(&self) -> bool {
@@ -233,7 +261,7 @@ mod tests {
         drop(cap);
         // 没人看 30 秒以后收掉（每 5 秒查一次）
         std::thread::sleep(std::time::Duration::from_secs(42));
-        assert!(!backend.headless.is_virtual(id), "没人看了虚拟显示器还在");
+        assert!(!backend.virtuals.is_virtual(id), "没人看了虚拟显示器还在");
         unsafe { std::env::remove_var("P2PCLI_VIRTUAL_DISPLAY") };
         let after = capture::displays().unwrap();
         assert!(!after.iter().any(|d| d.id == v.id), "虚拟显示器收掉了还在屏幕列表里");

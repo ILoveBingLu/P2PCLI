@@ -17,8 +17,15 @@ use crate::node::Node;
 use crate::rendezvous::RdvStatus;
 use crate::v6;
 
-/// 小米的 STUN 服务器，国内访问快；它支持 RFC 5780，会告诉我们另一个地址
+/// 小米的 STUN 服务器，国内访问快；它支持 RFC 5780，会告诉我们另一个地址（只有 IPv4）
 pub const STUN_SERVER: &str = "stun.miwifi.com:3478";
+/// 支持 IPv6 的公共 STUN 服务器（并行探测，不依赖单个节点；两台回包端口一致为锥形 NAT66，不一致为对称）
+pub const STUN_V6_SERVERS: &[&str] = &[
+    "stun.cloudflare.com:3478",
+    "stun.l.google.com:19302",
+    "stun.nextcloud.com:3478",
+    "stun.hot-chilli.net:3478",
+];
 const MAGIC_COOKIE: u32 = 0x2112_A442;
 const ATTR_MAPPED: u16 = 0x0001;
 const ATTR_CHANGED: u16 = 0x0005;
@@ -161,6 +168,24 @@ async fn binding(sock: &UdpSocket, to: SocketAddr) -> Result<Response> {
     bail!("{to} 没有回应")
 }
 
+fn local_addr_for(bind_addr: &str, target: SocketAddr, sock_port: u16) -> Result<SocketAddr> {
+    let probe = std::net::UdpSocket::bind(bind_addr)?;
+    probe.connect(target)?;
+    Ok(SocketAddr::new(probe.local_addr()?.ip(), sock_port))
+}
+
+fn classify_nat(local_ip: IpAddr, mapped: SocketAddr, mapped_second: Option<SocketAddr>) -> NatKind {
+    if mapped.ip() == local_ip {
+        NatKind::None
+    } else {
+        match mapped_second {
+            Some(m) if m == mapped => NatKind::Cone,
+            Some(_) => NatKind::Symmetric,
+            None => NatKind::Unknown,
+        }
+    }
+}
+
 /// 用 STUN 测本机 IPv4 的外网地址和 NAT 类型
 pub async fn stun_probe(server: &str) -> Result<StunResult> {
     let targets: Vec<SocketAddr> = tokio::net::lookup_host(server)
@@ -171,9 +196,7 @@ pub async fn stun_probe(server: &str) -> Result<StunResult> {
     let first = *targets.first().ok_or_else(|| anyhow!("{server} 没有 IPv4 地址"))?;
     let sock = UdpSocket::bind("0.0.0.0:0").await?;
     // 找出本机出口 IP：连一下目标看系统选了哪块网卡，不发包
-    let probe = std::net::UdpSocket::bind("0.0.0.0:0")?;
-    probe.connect(first)?;
-    let local = SocketAddr::new(probe.local_addr()?.ip(), sock.local_addr()?.port());
+    let local = local_addr_for("0.0.0.0:0", first, sock.local_addr()?.port())?;
 
     let r1 = binding(&sock, first)
         .await
@@ -187,15 +210,7 @@ pub async fn stun_probe(server: &str) -> Result<StunResult> {
         Some(s) => binding(&sock, s).await.ok().map(|r| r.mapped),
         None => None,
     };
-    let nat = if r1.mapped.ip() == local.ip() {
-        NatKind::None
-    } else {
-        match mapped_second {
-            Some(m) if m == r1.mapped => NatKind::Cone,
-            Some(_) => NatKind::Symmetric,
-            None => NatKind::Unknown,
-        }
-    };
+    let nat = classify_nat(local.ip(), r1.mapped, mapped_second);
     Ok(StunResult {
         local,
         mapped: r1.mapped,
@@ -204,23 +219,177 @@ pub async fn stun_probe(server: &str) -> Result<StunResult> {
     })
 }
 
+/// 同一只 IPv6 UDP socket 并行向多个目标发 STUN Binding，拿到前两个不同服务器 IP 的映射结果
+async fn probe_v6_targets(targets: &[SocketAddr]) -> Result<StunResult> {
+    let first = *targets.first().ok_or_else(|| anyhow!("没有可用的 IPv6 STUN 服务器地址"))?;
+    let sock = UdpSocket::bind("[::]:0").await?;
+    let local = local_addr_for("[::]:0", first, sock.local_addr()?.port())?;
+
+    let mut pending: Vec<(SocketAddr, [u8; 20], [u8; 12])> = targets
+        .iter()
+        .take(4)
+        .map(|&to| {
+            let (msg, tid) = build_request();
+            (to, msg, tid)
+        })
+        .collect();
+    let mut results: Vec<(SocketAddr, Response)> = Vec::new();
+    let mut buf = [0u8; 1024];
+
+    for round in 0..2 {
+        for (to, msg, _) in &pending {
+            let _ = sock.send_to(msg, *to).await;
+        }
+        let round_ms = if round == 0 { 900 } else { 1100 };
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(round_ms);
+        while !pending.is_empty()
+            && let Ok(r) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await
+        {
+            let Ok((n, _)) = r else { continue };
+            let mut matched = None;
+            for (idx, (to, _, tid)) in pending.iter().enumerate() {
+                if let Ok(resp) = parse_response(&buf[..n], tid) {
+                    matched = Some((idx, *to, resp));
+                    break;
+                }
+            }
+            if let Some((idx, to, resp)) = matched {
+                pending.remove(idx);
+                let other = resp.other;
+                if !results.iter().any(|(done, _)| *done == to) {
+                    results.push((to, resp));
+                }
+                if results.len() >= 2 {
+                    break;
+                }
+                if let Some(other) = other
+                    && other != to
+                    && !results.iter().any(|(done, _)| *done == other)
+                    && !pending.iter().any(|(p, ..)| *p == other)
+                {
+                    let (msg, tid) = build_request();
+                    let _ = sock.send_to(&msg, other).await;
+                    pending.push((other, msg, tid));
+                }
+            }
+        }
+        if results.len() >= 2 || pending.is_empty() {
+            break;
+        }
+    }
+
+    let Some((_, r1)) = results.first() else {
+        bail!("IPv6 STUN 服务器没有回应");
+    };
+    let mapped_second = results.get(1).map(|(_, r2)| r2.mapped);
+    let nat = classify_nat(local.ip(), r1.mapped, mapped_second);
+    Ok(StunResult {
+        local,
+        mapped: r1.mapped,
+        mapped_second,
+        nat,
+    })
+}
+
+/// 并行解析一批 IPv6 STUN 域名并测出外网 IPv6 出口和 NAT66 类型
+pub async fn stun_probe_v6(servers: &[&str]) -> Result<StunResult> {
+    let lookups = futures_util::future::join_all(
+        servers
+            .iter()
+            .map(|&s| timeout(Duration::from_secs(2), tokio::net::lookup_host(s))),
+    )
+    .await;
+    let mut targets: Vec<SocketAddr> = Vec::new();
+    for res in lookups {
+        let Ok(Ok(addrs)) = res else { continue };
+        for addr in addrs {
+            if let SocketAddr::V6(v6) = addr
+                && v6.ip().to_ipv4_mapped().is_none()
+                && !targets.iter().any(|t| t.ip() == addr.ip())
+            {
+                targets.push(addr);
+                break;
+            }
+        }
+    }
+    if targets.is_empty() {
+        bail!("解析不到 IPv6 STUN 服务器地址");
+    }
+    probe_v6_targets(&targets).await
+}
+
 /// 完整诊断，大约几秒
 pub async fn diagnose(node: &Node) -> Diagnosis {
-    let stun = match timeout(Duration::from_secs(8), stun_probe(STUN_SERVER)).await {
-        // 只给最外层的原因，界面上好读
-        Ok(r) => r.map_err(|e| e.to_string()),
-        Err(_) => Err("小米 STUN 服务器 8 秒没回应".to_string()),
-    };
-    let report = node.endpoint.net_report().get();
     let interfaces = v6::interface_addrs();
     let ipv6_addrs: Vec<String> = interfaces.iter().filter(|(_, ip)| v6::is_global(ip)).map(|(_, ip)| ip.to_string()).collect();
     let ipv6_lan: Vec<String> = interfaces.iter().filter(|(_, ip)| v6::is_ula(ip)).map(|(name, ip)| format!("{ip}（{name}）")).collect();
+
+    let need_report = node.endpoint.net_report().get().is_none()
+        && !node.is_offline()
+        && !node.is_relay_only()
+        && !node.endpoint.is_closed();
+    let want_v6_stun = ipv6_addrs.is_empty()
+        && !node.is_offline()
+        && !node.is_relay_only()
+        && (!ipv6_lan.is_empty()
+            || node.endpoint.net_report().get().is_some_and(|r| r.global_v6.is_some()));
+
+    let stun_fut = async {
+        match timeout(Duration::from_secs(8), stun_probe(STUN_SERVER)).await {
+            // 只给最外层的原因，界面上好读
+            Ok(r) => r.map_err(|e| e.to_string()),
+            Err(_) => Err("小米 STUN 服务器 8 秒没回应".to_string()),
+        }
+    };
+    let report_fut = async {
+        if need_report {
+            let mut w = node.endpoint.net_report();
+            let _ = timeout(Duration::from_secs(3), w.initialized()).await;
+        }
+    };
+    let stun_v6_fut = async {
+        if want_v6_stun {
+            Some(
+                timeout(Duration::from_secs(4), stun_probe_v6(STUN_V6_SERVERS))
+                    .await
+                    .map_err(|_| anyhow!("IPv6 STUN 检测超时"))
+                    .and_then(|r| r),
+            )
+        } else {
+            None
+        }
+    };
+
+    let (stun, _, stun_v6) = tokio::join!(stun_fut, report_fut, stun_v6_fut);
+    let report = node.endpoint.net_report().get();
     // 网卡上没有公网 IPv6 时才看出口：有公网地址时中继看到的就是它
-    let ipv6_outbound = if ipv6_addrs.is_empty() { v6::nat66_outbound(&node.endpoint).map(|a| a.ip().to_string()) } else { None };
+    let iroh_outbound = if ipv6_addrs.is_empty() {
+        v6::nat66_outbound(&node.endpoint).map(|a| a.ip().to_string())
+    } else {
+        None
+    };
     // 有出口但映射随目标变（对称）：也告诉用户，只是打不通
-    let ipv6_symmetric = ipv6_addrs.is_empty()
-        && ipv6_outbound.is_none()
+    let iroh_symmetric = ipv6_addrs.is_empty()
+        && iroh_outbound.is_none()
         && report.as_ref().is_some_and(|r| r.global_v6.is_some() && r.mapping_varies_by_dest_ipv6 == Some(true));
+
+    let (ipv6_outbound, ipv6_symmetric) = if !ipv6_addrs.is_empty() {
+        (None, false)
+    } else if let Some(Ok(s)) = &stun_v6
+        && matches!(s.mapped, SocketAddr::V6(v6) if v6::is_global(v6.ip()))
+        && s.nat != NatKind::None
+    {
+        if s.nat == NatKind::Symmetric {
+            v6::invalidate_nat66_cache(node.id());
+            (None, true)
+        } else if s.nat == NatKind::Unknown && iroh_symmetric {
+            (None, true)
+        } else {
+            (Some(s.mapped.ip().to_string()), false)
+        }
+    } else {
+        (iroh_outbound, iroh_symmetric)
+    };
 
     let (nat, nat_source, ipv4_public) = match &stun {
         Ok(s) => (s.nat, "stun", Some(s.mapped.ip().to_string())),
@@ -367,5 +536,106 @@ mod tests {
         // 别的请求的回包不认
         let (_, other_tid) = build_request();
         assert!(parse_response(&msg, &other_tid).is_err());
+    }
+
+    fn build_stun_v6_response(tid: &[u8; 12], mapped: SocketAddr, other: Option<SocketAddr>) -> Vec<u8> {
+        let mut body = Vec::new();
+        let SocketAddr::V6(m6) = mapped else { unreachable!() };
+        let port = m6.port() ^ (MAGIC_COOKIE >> 16) as u16;
+        let mut key = MAGIC_COOKIE.to_be_bytes().to_vec();
+        key.extend_from_slice(tid);
+        let xip: Vec<u8> = m6.ip().octets().iter().zip(&key).map(|(a, k)| a ^ k).collect();
+        body.extend_from_slice(&ATTR_XOR_MAPPED.to_be_bytes());
+        body.extend_from_slice(&20u16.to_be_bytes());
+        body.extend_from_slice(&[0, 2]);
+        body.extend_from_slice(&port.to_be_bytes());
+        body.extend_from_slice(&xip);
+        if let Some(SocketAddr::V6(o6)) = other {
+            body.extend_from_slice(&ATTR_OTHER.to_be_bytes());
+            body.extend_from_slice(&20u16.to_be_bytes());
+            body.extend_from_slice(&[0, 2]);
+            body.extend_from_slice(&o6.port().to_be_bytes());
+            body.extend_from_slice(&o6.ip().octets());
+        }
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&0x0101u16.to_be_bytes());
+        msg.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        msg.extend_from_slice(&MAGIC_COOKIE.to_be_bytes());
+        msg.extend_from_slice(tid);
+        msg.extend_from_slice(&body);
+        msg
+    }
+
+    #[test]
+    fn parses_ipv6_xor_and_other_address() {
+        let (_, tid) = build_request();
+        let mapped: SocketAddr = "[240e:3b4:1::5]:45678".parse().unwrap();
+        let other: SocketAddr = "[2001:db8::2]:3479".parse().unwrap();
+        let msg = build_stun_v6_response(&tid, mapped, Some(other));
+        let r = parse_response(&msg, &tid).unwrap();
+        assert_eq!(r.mapped, mapped);
+        assert_eq!(r.other, Some(other));
+    }
+
+    #[tokio::test]
+    async fn probe_v6_targets_detects_cone_and_symmetric() {
+        let Ok(s1) = UdpSocket::bind("[::1]:0").await else {
+            eprintln!("本机不支持绑定 IPv6 回环，跳过");
+            return;
+        };
+        let Ok(s2) = UdpSocket::bind("[::1]:0").await else {
+            eprintln!("本机不支持绑定 IPv6 回环，跳过");
+            return;
+        };
+        let a1 = s1.local_addr().unwrap();
+        let a2 = s2.local_addr().unwrap();
+
+        let spawn_mock = |sock: UdpSocket, mapped: SocketAddr, other: Option<SocketAddr>| {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 512];
+                for _ in 0..4 {
+                    let Ok(Ok((n, peer))) = timeout(Duration::from_secs(2), sock.recv_from(&mut buf)).await else {
+                        break;
+                    };
+                    if n >= 20 {
+                        let tid: [u8; 12] = buf[8..20].try_into().unwrap();
+                        let resp = build_stun_v6_response(&tid, mapped, other);
+                        let _ = sock.send_to(&resp, peer).await;
+                    }
+                }
+            })
+        };
+
+        // 1. 两个服务器返回相同的映射地址 -> 锥形 NAT66
+        let cone_addr: SocketAddr = "[240e:1::9]:40000".parse().unwrap();
+        let t1 = spawn_mock(s1, cone_addr, None);
+        let t2 = spawn_mock(s2, cone_addr, None);
+        let r_cone = probe_v6_targets(&[a1, a2]).await.unwrap();
+        assert_eq!(r_cone.mapped, cone_addr);
+        assert_eq!(r_cone.nat, NatKind::Cone);
+        let _ = tokio::join!(t1, t2);
+
+        // 2. 两个服务器返回不同端口 -> 对称 NAT66
+        let s1_b = UdpSocket::bind("[::1]:0").await.unwrap();
+        let s2_b = UdpSocket::bind("[::1]:0").await.unwrap();
+        let b1 = s1_b.local_addr().unwrap();
+        let b2 = s2_b.local_addr().unwrap();
+        let t1 = spawn_mock(s1_b, "[240e:1::9]:40001".parse().unwrap(), None);
+        let t2 = spawn_mock(s2_b, "[240e:1::9]:40002".parse().unwrap(), None);
+        let r_sym = probe_v6_targets(&[b1, b2]).await.unwrap();
+        assert_eq!(r_sym.nat, NatKind::Symmetric);
+        let _ = tokio::join!(t1, t2);
+
+        // 3. 只连一个服务器但回包带 OTHER-ADDRESS -> 继续探测第二个地址判定锥形 NAT66
+        let s1_c = UdpSocket::bind("[::1]:0").await.unwrap();
+        let s2_c = UdpSocket::bind("[::1]:0").await.unwrap();
+        let c1 = s1_c.local_addr().unwrap();
+        let c2 = s2_c.local_addr().unwrap();
+        let t1 = spawn_mock(s1_c, cone_addr, Some(c2));
+        let t2 = spawn_mock(s2_c, cone_addr, None);
+        let r_other = probe_v6_targets(&[c1]).await.unwrap();
+        assert_eq!(r_other.nat, NatKind::Cone);
+        assert_eq!(r_other.mapped_second, Some(cone_addr));
+        let _ = tokio::join!(t1, t2);
     }
 }
