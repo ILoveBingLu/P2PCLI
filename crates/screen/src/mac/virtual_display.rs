@@ -30,8 +30,8 @@ use tracing::{info, warn};
 /// 虚拟屏能选的大小（按界面算），每种都有普通档和 HiDPI 档（像素两倍，超过 MAX_PIXELS 的没有）
 const SIZES: &[(u32, u32)] = &[(2560, 1440), (1920, 1200), (1920, 1080), (1680, 1050), (1600, 900), (1440, 900), (1366, 768), (1280, 800), (1280, 720)];
 const MAX_PIXELS: (u32, u32) = (3840, 2400);
-/// 默认 1080p、不开 HiDPI（码率省，要细可以换）
-pub const DEFAULT_MODE: DisplayMode = DisplayMode { width: 1920, height: 1080, hidpi: false };
+/// 默认 1920×1080 HiDPI：系统给虚拟屏的默认就是它（建的时候不用换档），字也细；嫌流量大可以换普通档
+pub const DEFAULT_MODE: DisplayMode = DisplayMode { width: 1920, height: 1080, hidpi: true };
 const REFRESH: f64 = 60.0;
 /// 远程最多建几块
 const MAX_ADDED: usize = 4;
