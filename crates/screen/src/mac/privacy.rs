@@ -16,7 +16,7 @@ use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSFont, NSImage, NSImageScaling, NSImageView, NSScreen, NSTextAlignment,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBitmapImageRep, NSDeviceRGBColorSpace, NSColor, NSFont, NSImage, NSImageScaling, NSImageView, NSScreen, NSTextAlignment,
     NSShadow, NSTextField, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, CGFloat, CGPoint, CGRect, CGSize, kCFRunLoopCommonModes, kCFRunLoopDefaultMode};
@@ -24,7 +24,7 @@ use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventMask, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
     CGShieldingWindowLevel, CGWarpMouseCursorPosition,
 };
-use objc2_foundation::{NSData, NSString};
+use objc2_foundation::NSString;
 use p2pcli_core::screen::PrivacyStyle;
 use tracing::{debug, info, warn};
 
@@ -94,11 +94,33 @@ fn label(text: &str, size: CGFloat, weight: CGFloat, mono: bool, wrap_width: Opt
     l
 }
 
-/// 背景图编成 BMP 交给 NSImage（不压缩，编、解都快）
+/// 背景图的像素直接填进 NSBitmapImageRep 交给 NSImage（不经过编码、解码）
 fn ns_image(img: &image::RgbaImage) -> Option<Retained<NSImage>> {
-    let mut bmp = Vec::new();
-    image::DynamicImage::ImageRgba8(img.clone()).write_to(&mut std::io::Cursor::new(&mut bmp), image::ImageFormat::Bmp).ok()?;
-    NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bmp))
+    let (w, h) = img.dimensions();
+    let rep = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            null_mut(),
+            w as isize,
+            h as isize,
+            8,
+            4,
+            true,
+            false,
+            NSDeviceRGBColorSpace,
+            (w * 4) as isize,
+            32,
+        )
+    }?;
+    let dst = rep.bitmapData();
+    if dst.is_null() {
+        return None;
+    }
+    let src = img.as_raw();
+    unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) };
+    let image = NSImage::initWithSize(NSImage::alloc(), CGSize::new(w as CGFloat, h as CGFloat));
+    image.addRepresentation(&rep);
+    Some(image)
 }
 
 /// 给一块屏幕建遮挡窗口（先透明，排除进抓屏以后再显示出来）
@@ -138,7 +160,10 @@ fn build_cover(screen: &NSScreen, style: &PrivacyStyle, mtm: MainThreadMarker) -
     let px = ((w * scale) as u32, (h * scale) as u32);
     match background(style, px.0, px.1) {
         Ok(Some(img)) => {
-            if let Some(image) = ns_image(&img) {
+            if let Some(image) = ns_image(&img).or_else(|| {
+                warn!("隐私屏背景交不给系统，用黑底");
+                None
+            }) {
                 let view = NSImageView::imageViewWithImage(&image, mtm);
                 view.setImageScaling(NSImageScaling::ScaleAxesIndependently);
                 view.setFrame(bounds);
