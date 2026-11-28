@@ -82,7 +82,9 @@ fn set_inner(id: CGDirectDisplayID, want: &DisplayMode) -> Result<()> {
         unsafe { CGCancelDisplayConfiguration(config) };
         bail!("改不了分辨率（{}）", err.0);
     }
-    let err = unsafe { CGCompleteDisplayConfiguration(config, CGConfigureOption::ForSession) };
+    // 排查：VD_APPONLY=1 时只对本进程有效
+    let option = if std::env::var_os("VD_APPONLY").is_some() { CGConfigureOption::ForAppOnly } else { CGConfigureOption::ForSession };
+    let err = unsafe { CGCompleteDisplayConfiguration(config, option) };
     if err.0 != 0 {
         bail!("改不了分辨率（{}）", err.0);
     }

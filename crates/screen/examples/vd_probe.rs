@@ -30,9 +30,10 @@ fn probe(fresh: bool) {
             println!("系统给的：{}", arr.iter().map(|m| show(&m)).collect::<Vec<_>>().join("，"));
         }
         println!("抓屏框架看到的像素：{:?}", p2pcli_screen::mac_screen_pixel_size(n));
-        if hidpi {
-            let r = p2pcli_screen::mac_set_mode_cg(n, &DisplayMode { width: 1920, height: 1080, hidpi: true });
-            println!("用系统接口换 1920×1080 HiDPI：{r:?}，系统选的：{:?}，抓屏框架看到的像素：{:?}", CGDisplayCopyDisplayMode(n).map(|m| show(&m)), p2pcli_screen::mac_screen_pixel_size(n));
+        // 用系统接口来回换：普通 1600×900 → HiDPI 1920×1080
+        for m in [DisplayMode { width: 1600, height: 900, hidpi: false }, DisplayMode { width: 1920, height: 1080, hidpi: true }] {
+            let r = p2pcli_screen::mac_set_mode_cg(n, &m);
+            println!("用系统接口换 {m:?}：{r:?}，系统选的：{:?}，抓屏框架看到的像素：{:?}", CGDisplayCopyDisplayMode(n).map(|m| show(&m)), p2pcli_screen::mac_screen_pixel_size(n));
         }
     }
     let n: u32 = id.parse().unwrap();
@@ -43,7 +44,7 @@ fn probe(fresh: bool) {
         unsafe { objc2_core_graphics::CGGetOnlineDisplayList(16, ids.as_mut_ptr(), &mut count) };
         ids[..count as usize].iter().map(|id| format!("{id}({:#x})", CGDisplayVendorNumber(*id))).collect::<Vec<_>>().join(",")
     };
-    for i in 0..6 {
+    for i in 0..2 {
         let b = CGDisplayBounds(n);
         println!(
             "  {:>5} 毫秒：在线 {}，主屏 {}，它在 ({}, {}) {}×{}，系统读得到模式 {}，能选 {} 种",
@@ -96,7 +97,7 @@ fn main() {
             use objc2::runtime::{AnyClass, AnyObject};
             let class = AnyClass::get(c"NSApplication").unwrap();
             let app: *mut AnyObject = unsafe { objc2::msg_send![class, sharedApplication] };
-            let _: () = unsafe { objc2::msg_send![app, setActivationPolicy: 1isize] };
+            let _: bool = unsafe { objc2::msg_send![app, setActivationPolicy: 1isize] };
             let _: () = unsafe { objc2::msg_send![app, run] };
         }
         if arg == "runloop" || arg == "nsapp" {
